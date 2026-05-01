@@ -249,6 +249,12 @@ body {
   background: var(--call-bg-hover);
 }
 
+.call-site--interface.call-site--resolvable {
+  /* Mark interface dispatches with a dotted bottom border so it's clear
+     this expansion involves a choice of implementation. */
+  border-bottom-style: dotted;
+}
+
 .call-site.loading {
   opacity: 0.6;
 }
@@ -261,8 +267,46 @@ body {
   padding: 0.1rem 0;
 }
 
-.call-site.expanded > .frame {
+.call-site.expanded > .expanded {
   margin: 0.4rem 0 0.4rem 1.2rem;
+}
+
+.expanded {
+  display: block;
+}
+
+/* Impl switcher (interface dispatch) */
+.impl-switcher {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.3rem;
+  padding: 0.3rem 0.55rem;
+  background: var(--call-bg);
+  border: 1px solid var(--call-border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: default;
+}
+
+.impl-switcher-label {
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.impl-switcher select {
+  font: inherit;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
+}
+
+.impl-switcher-count {
+  color: var(--muted);
+  margin-left: auto;
 }
 
 .call-error {

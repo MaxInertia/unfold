@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -91,7 +92,7 @@ func TestFrameForCall(t *testing.T) {
 	if newCall == nil {
 		t.Fatal("indexer.New call not found in main")
 	}
-	callee, err := idx.FrameForCall(newCall.ID)
+	callee, err := idx.FrameForCall(newCall.ID, 0)
 	if err != nil {
 		t.Fatalf("FrameForCall: %v", err)
 	}
@@ -100,6 +101,86 @@ func TestFrameForCall(t *testing.T) {
 	}
 	if !strings.Contains(string(callee.ID), "indexer.New") {
 		t.Errorf("callee target id %q doesn't include indexer.New", callee.ID)
+	}
+}
+
+// TestInterfaceCandidates loads a small fixture with one interface
+// (Greeter) and two concrete impls (English, French), then verifies
+// that the call to g.Greet inside RunGreeter is classified as
+// interface and exposes both candidates.
+func TestInterfaceCandidates(t *testing.T) {
+	dir, err := filepath.Abs("testdata/diapp")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	idx := New()
+	if err := idx.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	runID, err := idx.LookupSymbol("RunGreeter")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	frame, err := idx.Frame(runID)
+	if err != nil {
+		t.Fatalf("Frame: %v", err)
+	}
+
+	var greetCall *CallSite
+	for i := range frame.Calls {
+		if frame.Calls[i].DisplayName == "g.Greet" {
+			greetCall = &frame.Calls[i]
+			break
+		}
+	}
+	if greetCall == nil {
+		t.Fatalf("g.Greet call not found in RunGreeter; calls=%v", callSummary(frame.Calls))
+	}
+	if greetCall.Kind != KindInterface {
+		t.Errorf("g.Greet kind: got %s, want interface", greetCall.Kind)
+	}
+	if len(greetCall.Candidates) != 2 {
+		t.Errorf("expected 2 candidates (English, French), got %d: %+v", len(greetCall.Candidates), greetCall.Candidates)
+	}
+	labels := []string{}
+	for _, c := range greetCall.Candidates {
+		labels = append(labels, c.Label)
+	}
+	want := []string{"English", "French"}
+	for _, w := range want {
+		found := false
+		for _, l := range labels {
+			if strings.Contains(l, w) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("candidate label list missing %q: %v", w, labels)
+		}
+	}
+
+	// FrameForCall with choice 0 and 1 should return different bodies.
+	first, err := idx.FrameForCall(greetCall.ID, 0)
+	if err != nil {
+		t.Fatalf("FrameForCall(choice=0): %v", err)
+	}
+	second, err := idx.FrameForCall(greetCall.ID, 1)
+	if err != nil {
+		t.Fatalf("FrameForCall(choice=1): %v", err)
+	}
+	if first.ID == second.ID {
+		t.Errorf("expected different targets for choice 0 vs 1; both=%s", first.ID)
+	}
+
+	// Out-of-range choice clamps to 0.
+	clamped, err := idx.FrameForCall(greetCall.ID, 99)
+	if err != nil {
+		t.Fatalf("FrameForCall(choice=99): %v", err)
+	}
+	if clamped.ID != first.ID {
+		t.Errorf("choice=99 should clamp to 0; got %s, want %s", clamped.ID, first.ID)
 	}
 }
 

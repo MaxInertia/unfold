@@ -64,9 +64,10 @@ func (s *Server) handleSymbol(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, frame)
 }
 
-// GET /api/body?targetId=<id>  OR  /api/body?callId=<id>
+// GET /api/body?targetId=<id>  OR  /api/body?callId=<id>[&choice=<int>]
 //
-// Phase 1: callId expansion is only supported for direct calls.
+// `choice` selects which candidate to expand for an interface call;
+// it's ignored for direct calls. Defaults to 0 (the first candidate).
 func (s *Server) handleBody(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	targetID := q.Get("targetId")
@@ -82,9 +83,14 @@ func (s *Server) handleBody(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, frame)
 	case callID != "":
-		frame, err := s.idx.FrameForCall(indexer.CallID(callID))
+		choice := 0
+		if v := q.Get("choice"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				choice = n
+			}
+		}
+		frame, err := s.idx.FrameForCall(indexer.CallID(callID), choice)
 		if err != nil {
-			// Distinguish "kind not supported" (422) from "unknown id" (404).
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}

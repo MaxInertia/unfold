@@ -154,30 +154,46 @@ Cold latency target: < 50ms once index is warm. Index build for a ~50k-LOC modul
 
 ## Phased delivery
 
-**Phase 1 — viewer MVP** (1–2 weeks of focused work)
+**Phase 1 — viewer MVP** ✅
 - Repo scaffold (`unfold/`): `cmd/cli/`, `internal/indexer/`, `internal/server/`, `web/`.
-- Indexer: load packages, build call-site index, build implementer index, body lookup.
-- HTTP server with the four core endpoints (`/symbol`, `/file`, `/body`, `/search`).
+- Indexer: load packages, build call-site index, body lookup.
+- HTTP server with the core endpoints (`/symbol`, `/body`, `/search`, `/health`).
 - Frontend: Shiki highlighting, nested-card render, click-to-expand for *direct* calls only.
 - CLI: boot + open browser.
-- Smoke test on 2–3 real Go projects (one small, one mid, one DI-heavy).
+- Smoke test on real Go projects (gorilla/mux, the unfold module itself).
 
-**Phase 2 — interface dispatch & impl switching**
+**Phase 2 — interface dispatch & impl switching** ✅
+- Implementer index built at Load time via `types.Implements`.
 - Surface candidates in `/body` response.
-- Frontend impl-switcher dropdown.
-- Persist impl choice per call in URL hash.
+- Frontend impl-switcher dropdown — clicking an interface call expands
+  to candidate 0 by default; the dropdown swaps to any other candidate.
+- Persist impl choice per call in URL hash. *(deferred — see Phase 3.5)*
 
-**Phase 3 — annotations**
+**Phase 3 — line folding (frontend-only)**
+- Allow the user to select a contiguous range of lines in any frame body
+  and collapse it to a single placeholder ("[N lines folded]"); click to
+  unfold. Pure UI: no indexer changes.
+- Use case: when an execution path crosses many functions, fold parts
+  of the bodies that are off-topic for the current investigation so the
+  relevant lines stay close together.
+- State lives in component state keyed by frame ID + line range.
+- Persist fold state in the URL hash so views are shareable.
+
+**Phase 3.5 — view persistence**
+- Move expansion state, impl choices, and fold ranges into URL hash so
+  reload preserves the view and URLs are shareable.
+
+**Phase 4 — annotations**
 - Reuse plannotator's annotation model (read their `review-editor` package — they've solved this).
 - Selection → comment → packaged feedback export.
 - Decide later: feed back into agent loop (plannotator-style hook) vs plain JSON dump.
 
-**Phase 4 — TypeScript support**
+**Phase 5 — TypeScript support**
 - Second indexer behind an interface (`Indexer` trait): `LoadProject`, `ResolveCall`, `GetBody`, `FindImplementers`.
 - TS implementation via `ts-morph` (full-fat TS compiler API) or tsserver protocol.
 - Frontend stays the same — it only consumes `Frame`s.
 
-**Phase 5 — IDE plugin**
+**Phase 6 — IDE plugin**
 - JetBrains plugin that opens the browser viewer pre-pointed at the symbol under the caret. Cheap and reuses everything.
 
 ## Known unknowns / decisions to revisit

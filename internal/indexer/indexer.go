@@ -1,10 +1,11 @@
-// Package indexer loads Go packages and builds the call-site index that
-// powers unfold's interactive code expansion.
+// Package indexer loads Go packages and builds the call-site and
+// implementer indexes that power unfold's interactive code expansion.
 //
-// Phase 1: direct calls only. Calls that go through an interface are
-// recorded with kind="interface" but their candidate implementations are
-// not enumerated yet — that arrives in Phase 2. Calls through a function
-// value (e.g. f := obj.Foo; f()) are recorded as kind="indirect".
+// Phase 2: direct and interface calls are resolved. Interface calls
+// carry a list of concrete-type implementations; the API picks one as
+// the default expansion target and lets the caller switch via choice.
+// Calls through a function value or a builtin (len, make, ...) are
+// recorded as kind="indirect" and remain unexpandable.
 package indexer
 
 import (
@@ -60,8 +61,21 @@ type CallSite struct {
 	Kind        CallKind `json:"kind"`
 
 	// TargetID is set for direct calls (the resolved target). Empty for
-	// interface (until Phase 2) and indirect calls.
+	// interface and indirect calls.
 	TargetID TargetID `json:"targetId,omitempty"`
+
+	// Candidates lists possible expansion targets for interface calls.
+	// Empty for direct (TargetID is the only target) and indirect calls.
+	// The first candidate is the default chosen by /api/body when no
+	// choice query param is supplied.
+	Candidates []Candidate `json:"candidates,omitempty"`
+}
+
+// Candidate is one concrete implementation of an interface method, used
+// to populate the impl-switcher dropdown.
+type Candidate struct {
+	TargetID TargetID `json:"targetId"`
+	Label    string   `json:"label"` // e.g. "*foo.RealService.Process"
 }
 
 // SearchResult is one hit returned from Indexer.Search.
@@ -83,8 +97,13 @@ type Indexer struct {
 	funcs map[TargetID]*funcInfo
 
 	// callsByID lets the server resolve a CallID to its parent function and
-	// (for direct calls) target.
+	// pick a candidate target for interface calls.
 	callsByID map[CallID]*callInfo
+
+	// interfaceImpls maps a named-interface key (pkgpath.TypeName) to
+	// the list of concrete types in the loaded set that implement it.
+	// Built once during Load.
+	interfaceImpls map[string][]types.Type
 
 	// fileBytes caches the raw source of files whose functions we've
 	// produced frames for, so we don't re-read on every /body request.
@@ -104,7 +123,8 @@ type callInfo struct {
 	id          CallID
 	parent      TargetID
 	kind        CallKind
-	target      TargetID // direct target (empty otherwise)
+	target      TargetID    // direct target (empty otherwise)
+	candidates  []Candidate // interface candidates (in stable order)
 	displayName string
 	pos, end    token.Pos
 }
@@ -112,9 +132,10 @@ type callInfo struct {
 // New returns a fresh, empty indexer.
 func New() *Indexer {
 	return &Indexer{
-		funcs:     make(map[TargetID]*funcInfo),
-		callsByID: make(map[CallID]*callInfo),
-		fileBytes: make(map[string][]byte),
+		funcs:          make(map[TargetID]*funcInfo),
+		callsByID:      make(map[CallID]*callInfo),
+		interfaceImpls: make(map[string][]types.Type),
+		fileBytes:      make(map[string][]byte),
 	}
 }
 
@@ -149,6 +170,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.fset = pkgs[0].Fset
 	i.funcs = make(map[TargetID]*funcInfo)
 	i.callsByID = make(map[CallID]*callInfo)
+	i.interfaceImpls = buildInterfaceImpls(pkgs)
 
 	// Pass 1: register every FuncDecl as a target.
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
@@ -241,7 +263,7 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 			recv := sel.Recv()
 			if isInterface(recv) {
 				ci.kind = KindInterface
-				// Phase 1: don't enumerate candidates.
+				ci.candidates = i.candidatesFor(recv, fnObj.Name())
 				return ci
 			}
 			ci.kind = KindDirect
@@ -268,6 +290,117 @@ func isInterface(t types.Type) bool {
 	}
 	_, ok := t.Underlying().(*types.Interface)
 	return ok
+}
+
+// buildInterfaceImpls walks every named type in the loaded package set
+// and, for every named interface, records the concrete types (or pointer
+// types) that satisfy it. Anonymous interfaces and the empty interface
+// are skipped — anonymous because they have no stable lookup key, empty
+// because every type would qualify.
+func buildInterfaceImpls(pkgs []*packages.Package) map[string][]types.Type {
+	var (
+		concretes []*types.Named
+		ifaces    []*types.Named
+	)
+	seen := make(map[*types.Named]bool)
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		if pkg.Types == nil {
+			return
+		}
+		scope := pkg.Types.Scope()
+		for _, name := range scope.Names() {
+			obj, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok {
+				continue
+			}
+			n, ok := obj.Type().(*types.Named)
+			if !ok || seen[n] {
+				continue
+			}
+			seen[n] = true
+			if _, isIface := n.Underlying().(*types.Interface); isIface {
+				ifaces = append(ifaces, n)
+			} else {
+				concretes = append(concretes, n)
+			}
+		}
+	})
+
+	impls := make(map[string][]types.Type)
+	for _, iface := range ifaces {
+		ifaceT, _ := iface.Underlying().(*types.Interface)
+		if ifaceT == nil || ifaceT.NumMethods() == 0 {
+			continue
+		}
+		key := interfaceKey(iface)
+		if key == "" {
+			continue
+		}
+		for _, n := range concretes {
+			switch {
+			case types.Implements(n, ifaceT):
+				impls[key] = append(impls[key], n)
+			case types.Implements(types.NewPointer(n), ifaceT):
+				impls[key] = append(impls[key], types.NewPointer(n))
+			}
+		}
+		// Stable order so candidate indexes are deterministic.
+		sort.Slice(impls[key], func(a, b int) bool {
+			return types.TypeString(impls[key][a], nil) < types.TypeString(impls[key][b], nil)
+		})
+	}
+	return impls
+}
+
+// interfaceKey returns a stable string key for a named interface type.
+func interfaceKey(n *types.Named) string {
+	obj := n.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return ""
+	}
+	return obj.Pkg().Path() + "." + obj.Name()
+}
+
+// candidatesFor enumerates concrete-method candidates for a call through
+// the given interface receiver and method name.
+func (i *Indexer) candidatesFor(recv types.Type, methodName string) []Candidate {
+	named, ok := recv.(*types.Named)
+	if !ok {
+		// Anonymous interface — leave candidates empty; the frontend will
+		// render a non-expandable interface call.
+		return nil
+	}
+	key := interfaceKey(named)
+	if key == "" {
+		return nil
+	}
+	implTypes := i.interfaceImpls[key]
+	if len(implTypes) == 0 {
+		return nil
+	}
+
+	out := make([]Candidate, 0, len(implTypes))
+	for _, t := range implTypes {
+		ms := types.NewMethodSet(t)
+		for j := 0; j < ms.Len(); j++ {
+			fn, _ := ms.At(j).Obj().(*types.Func)
+			if fn == nil || fn.Name() != methodName {
+				continue
+			}
+			// Only surface methods we actually have FuncDecl source for —
+			// i.e. they're in the loaded package set.
+			id := TargetID(fn.FullName())
+			if _, known := i.funcs[id]; !known {
+				continue
+			}
+			out = append(out, Candidate{
+				TargetID: id,
+				Label:    types.TypeString(t, types.RelativeTo(named.Obj().Pkg())) + "." + fn.Name(),
+			})
+			break
+		}
+	}
+	return out
 }
 
 func formatSelector(s *ast.SelectorExpr) string {
@@ -311,6 +444,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 			DisplayName: c.displayName,
 			Kind:        c.kind,
 			TargetID:    c.target,
+			Candidates:  c.candidates,
 		})
 	}
 
@@ -325,21 +459,41 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 	}, nil
 }
 
-// FrameForCall returns a Frame for the resolved target of the given call.
-// For direct calls this is unambiguous; for interface/indirect calls it
-// returns an error in Phase 1.
-func (i *Indexer) FrameForCall(id CallID) (*Frame, error) {
+// FrameForCall returns a Frame for the chosen target of the given call.
+//
+// For direct calls, choice is ignored.
+// For interface calls, choice indexes into the call's Candidates list
+// (clamped to a valid range; choice<0 or out-of-range becomes 0).
+// Indirect calls (function values, builtins like make/len) are not
+// expandable — FrameForCall returns an error in that case.
+//
+// Returns ErrNoCandidates if an interface call has zero known candidates.
+func (i *Indexer) FrameForCall(id CallID, choice int) (*Frame, error) {
 	i.mu.RLock()
 	c, ok := i.callsByID[id]
 	i.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown call %q", id)
 	}
-	if c.kind != KindDirect {
-		return nil, fmt.Errorf("call %q is %s; expansion not supported in Phase 1", id, c.kind)
+	switch c.kind {
+	case KindDirect:
+		return i.Frame(c.target)
+	case KindInterface:
+		if len(c.candidates) == 0 {
+			return nil, ErrNoCandidates
+		}
+		if choice < 0 || choice >= len(c.candidates) {
+			choice = 0
+		}
+		return i.Frame(c.candidates[choice].TargetID)
+	default:
+		return nil, fmt.Errorf("call %q is %s; not expandable", id, c.kind)
 	}
-	return i.Frame(c.target)
 }
+
+// ErrNoCandidates is returned by FrameForCall when an interface call has
+// no known concrete implementations in the loaded package set.
+var ErrNoCandidates = fmt.Errorf("no candidate implementations found for interface call")
 
 // LookupSymbol resolves a symbol name (qualified or unqualified) to a
 // target. If multiple match, the first lexicographic FullName wins.

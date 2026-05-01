@@ -25,17 +25,22 @@ export interface HighlightOptions {
 export async function highlightCode(opts: HighlightOptions): Promise<string> {
   const hl = await getHighlighter();
   const lang = supportedLang(opts.language);
-  const decorations = opts.calls.map((c) => ({
-    start: c.spanStart,
-    end: c.spanEnd,
-    properties: {
-      "data-call-id": c.id,
-      "data-call-kind": c.kind,
-      "data-call-target": c.targetId ?? "",
-      "data-display": c.displayName,
-      class: `call-site call-site--${c.kind}${c.targetId ? " call-site--resolvable" : ""}`,
-    },
-  }));
+  const decorations = opts.calls.map((c) => {
+    const expandable =
+      (c.kind === "direct" && !!c.targetId) ||
+      (c.kind === "interface" && (c.candidates?.length ?? 0) > 0);
+    return {
+      start: c.spanStart,
+      end: c.spanEnd,
+      properties: {
+        "data-call-id": c.id,
+        "data-call-kind": c.kind,
+        "data-call-target": c.targetId ?? "",
+        "data-display": c.displayName,
+        class: `call-site call-site--${c.kind}${expandable ? " call-site--resolvable" : ""}`,
+      },
+    };
+  });
   return hl.codeToHtml(opts.source, {
     lang,
     themes: { light: "github-light", dark: "github-dark" },
