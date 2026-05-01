@@ -196,6 +196,53 @@ Cold latency target: < 50ms once index is warm. Index build for a ~50k-LOC modul
 **Phase 6 — IDE plugin**
 - JetBrains plugin that opens the browser viewer pre-pointed at the symbol under the caret. Cheap and reuses everything.
 
+**Phase 7 — fan-out viewing (per-pattern resolver framework)**
+
+When one site fans out to many handlers — observable subscribers, event-emitter listeners, HTTP route handlers, channel readers — the user wants to see all of them, the same way Phase 2 lets them see all interface implementations of a method.
+
+**Semantic distinction from Phase 2.** Interface dispatch is "of N possible impls, *one* runs at runtime — pick which one to view." Fan-out is "*all* N receivers run." So while a dropdown works for "view one at a time," the natural fan-out UX is closer to a list of expanded children, possibly with the option to expand all simultaneously (stacked, with a header per receiver).
+
+**Architecture: per-pattern resolver framework.** Each fan-out pattern lives behind a small `Resolver` interface:
+
+```go
+type Resolver interface {
+    // Recognize returns true when the call expression matches this
+    // resolver's pattern (e.g. "this is a *EventEmitter.emit call").
+    Recognize(call *ast.CallExpr, info *types.Info) bool
+
+    // Resolve returns the receiver functions reachable from this fan-out
+    // point. Each Receiver corresponds to a concrete handler we can
+    // produce a Frame for.
+    Resolve(call *ast.CallExpr, info *types.Info, idx *Indexer) []Receiver
+}
+
+type Receiver struct {
+    TargetID TargetID
+    Label    string
+    // Optional: provenance info (e.g. "registered at foo.go:42").
+    Provenance string
+}
+```
+
+Resolvers are added incrementally — each one earns its keep on its own merits, with documented limits. Initial candidates in priority order:
+
+1. **Go channels** — track a `chan T` variable through assignments and find all `<-ch` reads in the loaded set. Native, statically tractable. Most reliable starting point.
+2. **`net/http.ServeMux`** — index `mux.HandleFunc(pattern, handler)` registrations and connect a `ServeHTTP` dispatch back to the matching handlers.
+3. **Generic event emitters / RxJS subjects (TS)** — find all `.subscribe(cb)` / `.on('event', cb)` calls on the same logical observable. Will be heuristic and library-specific.
+4. **gRPC service registration**, **CLI command registration**, etc. — registered statically; tractable.
+
+Anything that goes through reflection, eval, plugin loaders, or runtime-only registration is out of scope.
+
+**Open questions to answer at the start of Phase 7:**
+
+1. Which patterns are most useful to support first? (Likely answered by the user's actual reading habits — Go channels look like the highest-value first target on the Go side; RxJS/Angular subjects on the TS side once Phase 5 lands.)
+2. UX: when fan-out has N receivers, do we render them as (a) a dropdown picker, identical to Phase 2; (b) a collapsed list, click to expand each; (c) all expanded simultaneously, stacked? Likely (b) with an "expand all" affordance.
+3. How are resolvers configured? Always-on per language, or opt-in via flag? Consider startup time impact — each resolver may need its own pre-pass over the package set.
+4. How should the frontend display *which kind* of fan-out a given call is? A badge ("channel", "subscribers", "routes") in the impl-switcher area, presumably.
+5. When a resolver is heuristic (e.g. RxJS subject tracking), how do we surface confidence? Maybe a "tentative" marker on uncertain receivers.
+6. Manual hint mechanism: should we support a `// unfold:subscribers Foo, Bar` annotation comment for cases the resolver can't figure out? Lower priority — ship pattern resolvers first and revisit.
+7. Cycles / fan-in: if multiple emit sites lead to the same handler, can the user navigate "back" from a handler to its emitters? Probably out of scope until we have actual usage feedback.
+
 ## Known unknowns / decisions to revisit
 
 - **Generics**: `func Foo[T any](x T) {...}` — at a call site the type-parameter is instantiated. For body display we show the generic source, not the instantiation. Probably fine for v1.
