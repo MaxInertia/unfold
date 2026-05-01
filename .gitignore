@@ -1,0 +1,19 @@
+# Build outputs
+/unfold
+/unfold-*
+/dist/
+/web/dist/
+/web/node_modules/
+
+# Embedded frontend build artifacts (placeholder index.html is checked in)
+/internal/server/static/dist/*
+!/internal/server/static/dist/index.html
+
+# TS incremental build cache
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
