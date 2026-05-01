@@ -219,6 +219,15 @@ body {
   font: inherit;
 }
 
+/* Shiki paints a background on the <pre> and on each token span. For
+   unfold we want the code area to blend into the frame card, so strip
+   shiki's per-token backgrounds — but spare call-site spans, which
+   carry their own background to indicate they're clickable. */
+.frame-source pre.shiki,
+.frame-source pre.shiki span:not(.call-site) {
+  background-color: transparent !important;
+}
+
 .frame-source code {
   background: transparent;
   border: 0;
@@ -319,11 +328,11 @@ body {
   margin: 0.3rem 0 0.3rem 1.2rem;
 }
 
-/* Shiki dark/light mode swap */
+/* Shiki dark/light mode color swap. Background overrides above keep
+   the code area transparent in both modes; this only flips text color. */
 @media (prefers-color-scheme: dark) {
   .frame-source .shiki,
   .frame-source .shiki span {
     color: var(--shiki-dark, inherit) !important;
-    background-color: var(--shiki-dark-bg, transparent) !important;
   }
 }
