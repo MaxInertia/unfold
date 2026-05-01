@@ -193,14 +193,16 @@ export function Frame({ frame, onClose }: FrameProps) {
       </header>
       <div className="frame-body">
         {hast ? (
-          renderHast({
-            hast,
-            source: frame.source,
-            calls: frame.calls,
-            renderCallSpan,
-            renderLineExtras: (idx) =>
-              renderLineExtras(idx, lineSources[idx] ?? ""),
-          })
+          <div className="frame-source">
+            {renderHast({
+              hast,
+              source: frame.source,
+              calls: frame.calls,
+              renderCallSpan,
+              renderLineExtras: (idx) =>
+                renderLineExtras(idx, lineSources[idx] ?? ""),
+            })}
+          </div>
         ) : (
           <div className="frame-loading">loading…</div>
         )}
