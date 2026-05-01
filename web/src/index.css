@@ -326,6 +326,150 @@ body {
   font-size: 0.75rem;
 }
 
+.frame-selectbar-comment {
+  background: var(--card-bg);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.15rem 0.55rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.frame-selectbar-comment:hover {
+  background: var(--call-bg-hover);
+}
+
+/* Composer (new comment) and annotation card (saved comment). */
+.frame-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.55rem 0.8rem;
+  background: rgba(127, 127, 127, 0.06);
+  border-bottom: 1px solid var(--card-border);
+}
+
+.frame-composer textarea,
+.annotation textarea {
+  width: 100%;
+  min-height: 4rem;
+  resize: vertical;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.frame-composer-actions,
+.annotation-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.frame-composer-save,
+.annotation-save {
+  background: var(--accent);
+  color: white;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.2rem 0.7rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.frame-composer-cancel,
+.annotation-cancel {
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.2rem 0.7rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.annotation {
+  margin: 0.4rem 0;
+  padding: 0.5rem 0.7rem;
+  background: rgba(255, 196, 0, 0.07);
+  border-left: 3px solid #f5a623;
+  border-radius: 0 4px 4px 0;
+  font-size: 0.82rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .annotation {
+    background: rgba(255, 196, 0, 0.08);
+  }
+}
+
+.annotation-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.3rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.annotation-range {
+  font-weight: 600;
+}
+
+.annotation-edit,
+.annotation-delete {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+}
+
+.annotation-edit:hover {
+  color: var(--accent);
+  background: var(--call-bg);
+}
+
+.annotation-delete:hover {
+  color: var(--error);
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.annotation-body {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Export-feedback button in the app header. */
+.app-export {
+  margin-left: auto;
+  background: var(--card-bg);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 0.25rem 0.7rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.app-export:hover {
+  background: var(--call-bg-hover);
+}
+
 /* Shiki paints a background on the <pre> and on each token span. For
    unfold we want the code area to blend into the frame card, so strip
    shiki's per-token backgrounds — but spare call-site spans, which

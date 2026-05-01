@@ -4,7 +4,7 @@ import { fetchBodyByCall } from "./api";
 import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
 import type { CallID, CallSite, Frame as FrameT } from "./types";
-import { useFrameSlice, useViewStore, type FramePath } from "./viewState";
+import { useFrameSlice, useViewStore, type Annotation, type FramePath } from "./viewState";
 
 export interface FoldRange {
   start: number;
@@ -27,6 +27,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   const [loading, setLoading] = useState<Set<CallID>>(new Set());
   const [errors, setErrors] = useState<Map<CallID, string>>(new Map());
   const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
+  const [composerDraft, setComposerDraft] = useState<string | null>(null);
 
   // Fetch any expanded children we don't have loaded yet, and prune any
   // we've loaded but the slice no longer expands.
@@ -168,6 +169,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     const hi = Math.max(selection.anchor, selection.head);
     store.setFolds(path, mergeRange(slice.folds, [lo, hi]));
     setSelection(null);
+    setComposerDraft(null);
   }
 
   function unfoldRange(start: number) {
@@ -175,6 +177,41 @@ export function Frame({ frame, path, onClose }: FrameProps) {
       path,
       slice.folds.filter(([s]) => s !== start),
     );
+  }
+
+  function startComment() {
+    setComposerDraft("");
+  }
+
+  function commitComment() {
+    if (!selection || composerDraft === null) return;
+    const text = composerDraft.trim();
+    if (!text) {
+      setComposerDraft(null);
+      return;
+    }
+    const lo = Math.min(selection.anchor, selection.head);
+    const hi = Math.max(selection.anchor, selection.head);
+    store.addAnnotation(path, {
+      id: makeAnnotationId(),
+      start: lo,
+      end: hi,
+      comment: text,
+    });
+    setSelection(null);
+    setComposerDraft(null);
+  }
+
+  function cancelComment() {
+    setComposerDraft(null);
+  }
+
+  function removeAnnotation(id: string) {
+    store.removeAnnotation(path, id);
+  }
+
+  function editAnnotation(id: string, comment: string) {
+    store.updateAnnotation(path, id, comment);
   }
 
   const lineAction = useMemo<(idx: number) => LineAction>(() => {
@@ -219,37 +256,53 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   function renderLineExtras(lineIdx: number, lineSource: string): ReactNode {
     const extras: ReactNode[] = [];
     const calls = lineCallsCache.get(lineIdx);
-    if (!calls) return null;
-    for (const call of calls) {
-      const want = slice.expansions[call.id];
-      const child = loadedChildren.get(call.id);
-      if (want && child) {
-        const childPath: FramePath = [...path, { callId: call.id, choice: want.choice }];
-        extras.push(
-          <InlineChild
-            key={`x:${call.id}:${want.choice}`}
-            call={call}
-            childFrame={child}
-            choice={want.choice}
-            childPath={childPath}
-            indent={leadingIndent(lineSource)}
-            onChoose={(c) => chooseImpl(call, c)}
-            onClose={() => closeChild(call.id)}
-          />,
-        );
+    if (calls) {
+      for (const call of calls) {
+        const want = slice.expansions[call.id];
+        const child = loadedChildren.get(call.id);
+        if (want && child) {
+          const childPath: FramePath = [...path, { callId: call.id, choice: want.choice }];
+          extras.push(
+            <InlineChild
+              key={`x:${call.id}:${want.choice}`}
+              call={call}
+              childFrame={child}
+              choice={want.choice}
+              childPath={childPath}
+              indent={leadingIndent(lineSource)}
+              onChoose={(c) => chooseImpl(call, c)}
+              onClose={() => closeChild(call.id)}
+            />,
+          );
+        }
+        const err = errors.get(call.id);
+        if (err) {
+          extras.push(
+            <div
+              key={`e:${call.id}`}
+              className="call-error"
+              style={{ marginLeft: leadingIndent(lineSource) }}
+            >
+              expand failed: {err}
+            </div>,
+          );
+        }
       }
-      const err = errors.get(call.id);
-      if (err) {
-        extras.push(
-          <div
-            key={`e:${call.id}`}
-            className="call-error"
-            style={{ marginLeft: leadingIndent(lineSource) }}
-          >
-            expand failed: {err}
-          </div>,
-        );
-      }
+    }
+    // Annotations whose end line is `lineIdx` render right below it.
+    for (const ann of slice.annotations) {
+      if (ann.end !== lineIdx) continue;
+      extras.push(
+        <AnnotationCard
+          key={`ann:${ann.id}`}
+          annotation={ann}
+          firstLineNum={frame.startLine + ann.start}
+          lastLineNum={frame.startLine + ann.end}
+          indent={leadingIndent(lineSource)}
+          onEdit={(c) => editAnnotation(ann.id, c)}
+          onDelete={() => removeAnnotation(ann.id)}
+        />,
+      );
     }
     return extras.length ? <Fragment key={`extras:${lineIdx}`}>{extras}</Fragment> : null;
   }
@@ -315,14 +368,42 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           <button type="button" onClick={foldSelection} className="frame-selectbar-fold">
             fold
           </button>
+          <button type="button" onClick={startComment} className="frame-selectbar-comment">
+            comment
+          </button>
           <button
             type="button"
-            onClick={() => setSelection(null)}
+            onClick={() => {
+              setSelection(null);
+              setComposerDraft(null);
+            }}
             className="frame-selectbar-cancel"
           >
             cancel
           </button>
           <span className="frame-selectbar-hint">shift-click to extend · esc to cancel</span>
+        </div>
+      )}
+      {composerDraft !== null && (
+        <div className="frame-composer">
+          <textarea
+            autoFocus
+            placeholder="leave a comment about the selected lines…"
+            value={composerDraft}
+            onChange={(e) => setComposerDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") cancelComment();
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) commitComment();
+            }}
+          />
+          <div className="frame-composer-actions">
+            <button type="button" onClick={commitComment} className="frame-composer-save">
+              save (⌘↵)
+            </button>
+            <button type="button" onClick={cancelComment} className="frame-composer-cancel">
+              cancel
+            </button>
+          </div>
         </div>
       )}
       <div className="frame-body">
@@ -389,6 +470,90 @@ function InlineChild({
       <Frame frame={childFrame} path={childPath} onClose={onClose} />
     </div>
   );
+}
+
+interface AnnotationCardProps {
+  annotation: Annotation;
+  firstLineNum: number;
+  lastLineNum: number;
+  indent: string;
+  onEdit: (comment: string) => void;
+  onDelete: () => void;
+}
+
+function AnnotationCard({
+  annotation,
+  firstLineNum,
+  lastLineNum,
+  indent,
+  onEdit,
+  onDelete,
+}: AnnotationCardProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(annotation.comment);
+
+  function save() {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    onEdit(trimmed);
+    setEditing(false);
+  }
+
+  function cancel() {
+    setDraft(annotation.comment);
+    setEditing(false);
+  }
+
+  const range =
+    firstLineNum === lastLineNum
+      ? `line ${firstLineNum}`
+      : `lines ${firstLineNum}–${lastLineNum}`;
+
+  return (
+    <aside className="annotation" style={{ marginLeft: indent }}>
+      <header className="annotation-header">
+        <span className="annotation-range">comment on {range}</span>
+        {!editing && (
+          <>
+            <button type="button" className="annotation-edit" onClick={() => setEditing(true)}>
+              edit
+            </button>
+            <button type="button" className="annotation-delete" onClick={onDelete}>
+              delete
+            </button>
+          </>
+        )}
+      </header>
+      {editing ? (
+        <>
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") cancel();
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save();
+            }}
+          />
+          <div className="annotation-actions">
+            <button type="button" onClick={save} className="annotation-save">
+              save (⌘↵)
+            </button>
+            <button type="button" onClick={cancel} className="annotation-cancel">
+              cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="annotation-body">{annotation.comment}</div>
+      )}
+    </aside>
+  );
+}
+
+function makeAnnotationId(): string {
+  // Short, URL-safe, unique-enough id. Not cryptographic.
+  return Math.random().toString(36).slice(2, 10);
 }
 
 function mergeRange(current: [number, number][], add: [number, number]): [number, number][] {

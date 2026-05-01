@@ -204,10 +204,22 @@ Cold latency target: < 50ms once index is warm. Index build for a ~50k-LOC modul
   on every change so the back stack isn't polluted; `hashchange` listener
   restores state on browser back/forward and on reload.
 
-**Phase 4 — annotations**
-- Reuse plannotator's annotation model (read their `review-editor` package — they've solved this).
-- Selection → comment → packaged feedback export.
-- Decide later: feed back into agent loop (plannotator-style hook) vs plain JSON dump.
+**Phase 4 — annotations** ✅
+- Reuse the line-selection model from Phase 3: select a range via the
+  gutter, click "comment" in the select-bar, type a note in a small
+  composer.
+- Annotations render as inline yellow-bordered cards below the last
+  line of the range. Each card supports edit / delete.
+- Annotations live in the same per-frame slice as folds and
+  expansions, so they persist in the URL hash and are shareable.
+- An "export feedback (N)" button appears in the app header when at
+  least one annotation exists. It copies a JSON payload to the
+  clipboard (with frame path + line range + comment, plus the root
+  symbol and a timestamp); falls back to a downloadable JSON blob
+  if the clipboard API is blocked.
+- Plannotator-style agent-loop integration is *not* yet wired —
+  export-to-clipboard is the v1 surface. Wiring it into a plugin hook
+  comes next.
 
 **Phase 5 — TypeScript support**
 - Second indexer behind an interface (`Indexer` trait): `LoadProject`, `ResolveCall`, `GetBody`, `FindImplementers`.
