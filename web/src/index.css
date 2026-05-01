@@ -264,43 +264,19 @@ body {
   outline: 1px solid var(--call-border);
 }
 
-/* Stacked expanded children — sit beneath the frame body, indented to
-   suggest the call-stack depth. (The earlier inline-portal approach
-   conflicted with React's dangerouslySetInnerHTML reconciliation; see
-   PLAN.md Phase 3 follow-up for the HAST-based path back to inline.) */
-.frame-children {
-  margin: 0.4rem 0.8rem 0.6rem 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
+/* Inline child frames — emitted directly after the line that contains
+   the expanded call site, indented to roughly match the call's column. */
+.inline-child {
+  display: block;
+  margin: 0.35rem 0 0.55rem 0;
   border-left: 2px solid var(--call-border);
-  padding-left: 0.7rem;
+  padding-left: 0.6rem;
 }
 
-.frame-child {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.frame-child-anchor {
-  font-size: 0.78rem;
-  color: var(--muted);
-  display: flex;
-  gap: 0.4rem;
-  align-items: baseline;
-}
-
-.frame-child-anchor-arrow {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.frame-child-anchor-from code {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  color: var(--accent);
+.frame-error {
+  color: var(--error);
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85em;
 }
 
 /* Impl switcher (interface dispatch) */

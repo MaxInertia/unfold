@@ -1,6 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import type { Root as HastRoot } from "hast";
 import { fetchBodyByCall } from "./api";
-import { highlightCode } from "./highlight";
+import { highlightToHast } from "./highlight";
+import { renderHast } from "./hastRender";
 import type { CallID, CallSite, Frame as FrameT } from "./types";
 
 interface FrameProps {
@@ -10,42 +12,44 @@ interface FrameProps {
 
 interface ExpandedChild {
   frame: FrameT;
-  choice: number; // selected candidate index, only meaningful for interface kind
+  choice: number; // candidate index, only meaningful for interface kind
 }
 
 export function Frame({ frame, onClose }: FrameProps) {
-  const [html, setHtml] = useState<string | null>(null);
+  const [hast, setHast] = useState<HastRoot | null>(null);
   const [expanded, setExpanded] = useState<Map<CallID, ExpandedChild>>(new Map());
   const [loading, setLoading] = useState<Set<CallID>>(new Set());
   const [errors, setErrors] = useState<Map<CallID, string>>(new Map());
-  const containerRef = useRef<HTMLDivElement>(null);
 
   // Highlight source whenever the frame changes.
   useEffect(() => {
     let alive = true;
-    setHtml(null);
-    highlightCode({ source: frame.source, language: frame.language, calls: frame.calls })
-      .then((h) => alive && setHtml(h))
-      .catch((e) => alive && setHtml(`<pre>highlight error: ${escapeHTML(String(e))}</pre>`));
+    setHast(null);
+    highlightToHast({ source: frame.source, language: frame.language, calls: frame.calls })
+      .then((h) => alive && setHast(h))
+      .catch((e) => {
+        if (!alive) return;
+        // If highlighting fails, fall back to a plain-text root so the
+        // rest of the UI still works.
+        const fallback: HastRoot = {
+          type: "root",
+          children: [
+            { type: "element", tagName: "pre", properties: { className: ["shiki", "shiki-fallback"] }, children: [
+              { type: "element", tagName: "code", properties: {}, children: [
+                { type: "text", value: frame.source },
+              ]},
+            ]},
+            { type: "element", tagName: "div", properties: { className: ["frame-error"] }, children: [
+              { type: "text", value: `highlight failed: ${String(e)}` },
+            ]},
+          ],
+        };
+        setHast(fallback);
+      });
     return () => {
       alive = false;
     };
   }, [frame]);
-
-  // Toggle expanded/loading classes by walking the DOM after each
-  // render — references stay current even when shiki's HTML is
-  // re-injected, since we don't cache element references in state.
-  useLayoutEffect(() => {
-    if (!containerRef.current) return;
-    containerRef.current
-      .querySelectorAll<HTMLElement>("[data-call-id]")
-      .forEach((el) => {
-        const id = el.getAttribute("data-call-id") as CallID | null;
-        if (!id) return;
-        el.classList.toggle("expanded", expanded.has(id));
-        el.classList.toggle("loading", loading.has(id));
-      });
-  }, [html, expanded, loading]);
 
   function expandCall(call: CallSite, choice: number) {
     setLoading((s) => new Set(s).add(call.id));
@@ -73,38 +77,106 @@ export function Frame({ frame, onClose }: FrameProps) {
       });
   }
 
-  function onClickBody(e: React.MouseEvent) {
-    const el = (e.target as HTMLElement).closest("[data-call-id]") as HTMLElement | null;
-    if (!el) return;
-    const callId = el.getAttribute("data-call-id") as CallID;
-    const kind = el.getAttribute("data-call-kind");
+  function toggleCall(call: CallSite) {
+    if (call.kind === "indirect") return;
+    if (call.kind === "interface" && (call.candidates?.length ?? 0) === 0) return;
+    if (call.kind === "direct" && !call.targetId) return;
 
-    e.stopPropagation();
-
-    const call = frame.calls.find((c) => c.id === callId);
-    if (!call) return;
-
-    // Indirect calls aren't expandable.
-    if (kind === "indirect") return;
-
-    // Interface calls require known candidates.
-    if (kind === "interface" && (call.candidates?.length ?? 0) === 0) return;
-
-    if (expanded.has(callId)) {
+    if (expanded.has(call.id)) {
       setExpanded((m) => {
         const n = new Map(m);
-        n.delete(callId);
+        n.delete(call.id);
         return n;
       });
       return;
     }
-    if (loading.has(callId)) return;
+    if (loading.has(call.id)) return;
     expandCall(call, 0);
   }
 
   function chooseImpl(call: CallSite, choice: number) {
     expandCall(call, choice);
   }
+
+  function closeChild(cid: CallID) {
+    setExpanded((m) => {
+      const n = new Map(m);
+      n.delete(cid);
+      return n;
+    });
+  }
+
+  // Renderer hooks for hastRender.
+  function renderCallSpan(
+    call: CallSite,
+    children: ReactNode,
+    domProps: Record<string, unknown>,
+  ): ReactNode {
+    const isLoading = loading.has(call.id);
+    const isExpanded = expanded.has(call.id);
+    const cls = [
+      domProps.className as string | undefined,
+      isExpanded ? "expanded" : "",
+      isLoading ? "loading" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return (
+      <span
+        {...domProps}
+        className={cls}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleCall(call);
+        }}
+      >
+        {children}
+      </span>
+    );
+  }
+
+  function renderLineExtras(lineIdx: number, lineSource: string): ReactNode {
+    // Intentionally a slot per line — multiple expanded calls on one
+    // line stack in source order.
+    const extras: ReactNode[] = [];
+    // Find calls whose start offset falls on this line, in spanStart
+    // order so siblings render predictably.
+    const calls = lineCallsCache.get(lineIdx);
+    if (!calls) return null;
+    for (const call of calls) {
+      const child = expanded.get(call.id);
+      if (child) {
+        extras.push(
+          <InlineChild
+            key={`x:${call.id}:${child.choice}`}
+            call={call}
+            child={child}
+            indent={leadingIndent(lineSource)}
+            onChoose={(c) => chooseImpl(call, c)}
+            onClose={() => closeChild(call.id)}
+          />,
+        );
+      }
+      const err = errors.get(call.id);
+      if (err) {
+        extras.push(
+          <div
+            key={`e:${call.id}`}
+            className="call-error"
+            style={{ marginLeft: leadingIndent(lineSource) }}
+          >
+            expand failed: {err}
+          </div>,
+        );
+      }
+    }
+    return extras.length ? <Fragment key={`extras:${lineIdx}`}>{extras}</Fragment> : null;
+  }
+
+  // Pre-compute calls-per-line and the source of each line so
+  // renderLineExtras can place children with the correct indent.
+  const lineCallsCache = useMemo(() => buildLineCalls(frame), [frame]);
+  const lineSources = useMemo(() => frame.source.split("\n"), [frame]);
 
   return (
     <div className="frame">
@@ -119,79 +191,37 @@ export function Frame({ frame, onClose }: FrameProps) {
           </button>
         )}
       </header>
-      <div className="frame-body" ref={containerRef} onClick={onClickBody}>
-        {html ? (
-          <div className="frame-source" dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="frame-body">
+        {hast ? (
+          renderHast({
+            hast,
+            source: frame.source,
+            calls: frame.calls,
+            renderCallSpan,
+            renderLineExtras: (idx) =>
+              renderLineExtras(idx, lineSources[idx] ?? ""),
+          })
         ) : (
           <div className="frame-loading">loading…</div>
         )}
       </div>
-      {/* Expanded children stack below the frame source, one per call.
-          (Inline-at-call-site rendering wants HAST→React conversion of
-          shiki output rather than dangerouslySetInnerHTML; that's a
-          follow-up.) */}
-      {(expanded.size > 0 || errors.size > 0) && (
-        <div className="frame-children">
-          {Array.from(expanded.entries()).map(([cid, child]) => {
-            const call = frame.calls.find((c) => c.id === cid);
-            if (!call) return null;
-            return (
-              <div className="frame-child" key={`${cid}:${child.choice}`}>
-                <div className="frame-child-anchor">
-                  <span className="frame-child-anchor-arrow">↳</span>
-                  <span className="frame-child-anchor-from">
-                    expanded from{" "}
-                    <code>{call.displayName}</code>
-                  </span>
-                </div>
-                <ExpandedFrame
-                  call={call}
-                  child={child}
-                  onChoose={(c) => chooseImpl(call, c)}
-                  onClose={() =>
-                    setExpanded((m) => {
-                      const n = new Map(m);
-                      n.delete(cid);
-                      return n;
-                    })
-                  }
-                />
-              </div>
-            );
-          })}
-          {Array.from(errors.entries()).map(([cid, msg]) => {
-            const call = frame.calls.find((c) => c.id === cid);
-            return (
-              <div className="frame-child frame-child--error" key={`err:${cid}`}>
-                <div className="frame-child-anchor">
-                  <span className="frame-child-anchor-arrow">↳</span>
-                  <span className="frame-child-anchor-from">
-                    expand failed for <code>{call?.displayName ?? cid}</code>
-                  </span>
-                </div>
-                <div className="call-error">{msg}</div>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
 
-interface ExpandedFrameProps {
+interface InlineChildProps {
   call: CallSite;
   child: ExpandedChild;
+  indent: string;
   onChoose: (choice: number) => void;
   onClose: () => void;
 }
 
-function ExpandedFrame({ call, child, onChoose, onClose }: ExpandedFrameProps) {
+function InlineChild({ call, child, indent, onChoose, onClose }: InlineChildProps) {
   const candidates = call.candidates ?? [];
   const showSwitcher = call.kind === "interface" && candidates.length > 1;
-
   return (
-    <div className="expanded">
+    <div className="inline-child" style={{ marginLeft: indent }}>
       {showSwitcher && (
         <div className="impl-switcher" onClick={(e) => e.stopPropagation()}>
           <span className="impl-switcher-label">impl:</span>
@@ -215,6 +245,37 @@ function ExpandedFrame({ call, child, onChoose, onClose }: ExpandedFrameProps) {
   );
 }
 
+function buildLineCalls(frame: FrameT): Map<number, CallSite[]> {
+  const map = new Map<number, CallSite[]>();
+  for (const c of frame.calls) {
+    const idx = lineForOffset(frame.source, c.spanStart);
+    const list = map.get(idx) ?? [];
+    list.push(c);
+    map.set(idx, list);
+  }
+  for (const list of map.values()) list.sort((a, b) => a.spanStart - b.spanStart);
+  return map;
+}
+
+function lineForOffset(source: string, offset: number): number {
+  let line = 0;
+  const stop = Math.min(offset, source.length);
+  for (let i = 0; i < stop; i++) if (source.charCodeAt(i) === 10) line++;
+  return line;
+}
+
+function leadingIndent(line: string): string {
+  // Returns just the whitespace prefix (tabs become tab-character; CSS
+  // margin-left of "<tab>..." won't render — translate to em-equivalent.)
+  let i = 0;
+  while (i < line.length && (line[i] === "\t" || line[i] === " ")) i++;
+  const ws = line.slice(0, i);
+  // Approximate: tab = 4 chars, space = 1 char, of em-width.
+  let chars = 0;
+  for (const c of ws) chars += c === "\t" ? 4 : 1;
+  return `${chars}ch`;
+}
+
 function prettyName(id: string): string {
   const parts = id.split("/");
   if (parts.length <= 2) return id;
@@ -228,11 +289,3 @@ function shortPath(p: string): string {
   if (slash2 < 0) return p.slice(idx + 1);
   return p.slice(slash2 + 1);
 }
-
-function escapeHTML(s: string): string {
-  return s.replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string,
-  );
-}
-
-
