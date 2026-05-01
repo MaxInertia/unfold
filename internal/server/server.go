@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"strconv"
 
 	"github.com/MaxInertia/unfold/internal/indexer"
 )
@@ -33,7 +34,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/symbol", s.handleSymbol)
-	mux.HandleFunc("/api/file", s.handleFile)
 	mux.HandleFunc("/api/body", s.handleBody)
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))
@@ -44,10 +44,69 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "target": s.target})
 }
 
-func (s *Server) handleSymbol(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w) }
-func (s *Server) handleFile(w http.ResponseWriter, r *http.Request)   { writeNotImplemented(w) }
-func (s *Server) handleBody(w http.ResponseWriter, r *http.Request)   { writeNotImplemented(w) }
-func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w) }
+// GET /api/symbol?name=<qualified-or-bare-name>
+func (s *Server) handleSymbol(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "missing required query param: name")
+		return
+	}
+	id, err := s.idx.LookupSymbol(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	frame, err := s.idx.Frame(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, frame)
+}
+
+// GET /api/body?targetId=<id>  OR  /api/body?callId=<id>
+//
+// Phase 1: callId expansion is only supported for direct calls.
+func (s *Server) handleBody(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	targetID := q.Get("targetId")
+	callID := q.Get("callId")
+	switch {
+	case targetID != "" && callID != "":
+		writeError(w, http.StatusBadRequest, "specify exactly one of targetId or callId")
+	case targetID != "":
+		frame, err := s.idx.Frame(indexer.TargetID(targetID))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, frame)
+	case callID != "":
+		frame, err := s.idx.FrameForCall(indexer.CallID(callID))
+		if err != nil {
+			// Distinguish "kind not supported" (422) from "unknown id" (404).
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, frame)
+	default:
+		writeError(w, http.StatusBadRequest, "missing query param: targetId or callId")
+	}
+}
+
+// GET /api/search?q=<substr>&limit=<int>
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results": s.idx.Search(q, limit),
+	})
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -55,6 +114,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func writeNotImplemented(w http.ResponseWriter) {
-	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "not implemented"})
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }

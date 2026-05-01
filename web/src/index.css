@@ -1,6 +1,6 @@
 :root {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  line-height: 1.5;
+  line-height: 1.55;
   color-scheme: light dark;
 
   --bg: #fafaf9;
@@ -10,6 +10,13 @@
   --error: #dc2626;
   --card-bg: #ffffff;
   --card-border: #e5e7eb;
+  --call-bg: rgba(37, 99, 235, 0.08);
+  --call-bg-hover: rgba(37, 99, 235, 0.18);
+  --call-border: rgba(37, 99, 235, 0.4);
+  --call-bg-disabled: rgba(0, 0, 0, 0.04);
+  --call-border-disabled: rgba(0, 0, 0, 0.15);
+  --shiki-default: #24292f;
+  --shiki-default-bg: transparent;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -21,10 +28,17 @@
     --error: #f87171;
     --card-bg: #161b22;
     --card-border: #30363d;
+    --call-bg: rgba(88, 166, 255, 0.1);
+    --call-bg-hover: rgba(88, 166, 255, 0.22);
+    --call-border: rgba(88, 166, 255, 0.5);
+    --call-bg-disabled: rgba(255, 255, 255, 0.04);
+    --call-border-disabled: rgba(255, 255, 255, 0.12);
   }
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 body {
   margin: 0;
@@ -32,22 +46,236 @@ body {
   color: var(--fg);
 }
 
-main {
-  max-width: 980px;
+.app {
+  max-width: 1100px;
   margin: 0 auto;
-  padding: 2rem 1.5rem;
+  padding: 1.5rem 1rem 4rem;
 }
 
-h1 { margin: 0 0 0.25rem; font-weight: 600; }
-h1 + p { color: var(--muted); margin-top: 0; }
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
 
-code {
+.app-header h1 {
+  margin: 0;
+  font-weight: 600;
+  font-size: 1.6rem;
+}
+
+.app-target {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.app-target code {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 4px;
-  padding: 0.05rem 0.35rem;
-  font-size: 0.95em;
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
 }
 
-.status { margin-top: 2rem; }
-.error { color: var(--error); }
+.app-hint {
+  color: var(--muted);
+  margin-top: 1.5rem;
+}
+
+.app-error {
+  color: var(--error);
+  background: var(--card-bg);
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  margin: 1rem 0;
+}
+
+.app-loading {
+  color: var(--muted);
+  margin: 1rem 0;
+}
+
+/* Symbol picker */
+.picker {
+  margin-bottom: 1.5rem;
+  position: relative;
+}
+
+.picker input {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.picker input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.picker-busy {
+  position: absolute;
+  right: 0.8rem;
+  top: 0.55rem;
+  color: var(--muted);
+}
+
+.picker-results {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.picker-results li + li {
+  border-top: 1px solid var(--card-border);
+}
+
+.picker-pick {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 0.45rem 0.7rem;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.picker-pick:hover {
+  background: var(--call-bg);
+}
+
+.picker-loc {
+  color: var(--muted);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+/* Frame */
+.frame {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  margin-top: 0.6rem;
+  overflow: hidden;
+  font-size: 0.92rem;
+}
+
+.frame-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  padding: 0.45rem 0.8rem;
+  background: rgba(127, 127, 127, 0.06);
+  border-bottom: 1px solid var(--card-border);
+  font-size: 0.85rem;
+}
+
+.frame-title {
+  font-weight: 600;
+}
+
+.frame-loc {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-left: auto;
+}
+
+.frame-close {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.3rem;
+}
+
+.frame-close:hover {
+  color: var(--fg);
+}
+
+.frame-body {
+  padding: 0.4rem 0.8rem;
+  overflow-x: auto;
+}
+
+.frame-source pre,
+.frame-source pre.shiki {
+  background: transparent !important;
+  margin: 0;
+  font: inherit;
+}
+
+.frame-source code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+}
+
+.frame-loading {
+  color: var(--muted);
+  padding: 0.4rem 0;
+}
+
+/* Call-site decorations */
+.call-site {
+  border-radius: 3px;
+  background: var(--call-bg-disabled);
+  border-bottom: 1px dashed var(--call-border-disabled);
+  padding: 0 1px;
+}
+
+.call-site--resolvable {
+  background: var(--call-bg);
+  border-bottom: 1px solid var(--call-border);
+  cursor: pointer;
+}
+
+.call-site--resolvable:hover {
+  background: var(--call-bg-hover);
+}
+
+.call-site.loading {
+  opacity: 0.6;
+}
+
+/* When a call site has an expanded child frame in it, it switches from
+   inline to block so the child Frame card sits below the call expression
+   on its own indented line. */
+.call-site.expanded {
+  display: block;
+  padding: 0.1rem 0;
+}
+
+.call-site.expanded > .frame {
+  margin: 0.4rem 0 0.4rem 1.2rem;
+}
+
+.call-error {
+  color: var(--error);
+  font-size: 0.85em;
+  margin: 0.3rem 0 0.3rem 1.2rem;
+}
+
+/* Shiki dark/light mode swap */
+@media (prefers-color-scheme: dark) {
+  .frame-source .shiki,
+  .frame-source .shiki span {
+    color: var(--shiki-dark, inherit) !important;
+    background-color: var(--shiki-dark-bg, transparent) !important;
+  }
+}

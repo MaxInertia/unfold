@@ -22,6 +22,7 @@ func main() {
 	var (
 		addr   = flag.String("addr", "127.0.0.1:0", "address to bind (default: random free port on localhost)")
 		noOpen = flag.Bool("no-open", false, "don't open the browser")
+		dir    = flag.String("dir", "", "module directory to load packages from (default: cwd)")
 	)
 	flag.Parse()
 
@@ -31,7 +32,7 @@ func main() {
 	}
 
 	idx := indexer.New()
-	if err := idx.Load(target); err != nil {
+	if err := idx.Load(*dir, target); err != nil {
 		log.Fatalf("indexer load failed: %v", err)
 	}
 
