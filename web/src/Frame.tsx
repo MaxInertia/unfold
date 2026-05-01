@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { fetchBodyByCall } from "./api";
 import { highlightCode } from "./highlight";
 import type { CallID, CallSite, Frame as FrameT } from "./types";
@@ -16,7 +15,6 @@ interface ExpandedChild {
 
 export function Frame({ frame, onClose }: FrameProps) {
   const [html, setHtml] = useState<string | null>(null);
-  const [callElements, setCallElements] = useState<Map<CallID, HTMLElement>>(new Map());
   const [expanded, setExpanded] = useState<Map<CallID, ExpandedChild>>(new Map());
   const [loading, setLoading] = useState<Set<CallID>>(new Set());
   const [errors, setErrors] = useState<Map<CallID, string>>(new Map());
@@ -34,29 +32,20 @@ export function Frame({ frame, onClose }: FrameProps) {
     };
   }, [frame]);
 
-  // After the HTML is in the DOM, look up the per-call span elements so
-  // we can render portals into them.
+  // Toggle expanded/loading classes by walking the DOM after each
+  // render — references stay current even when shiki's HTML is
+  // re-injected, since we don't cache element references in state.
   useLayoutEffect(() => {
-    if (!html || !containerRef.current) {
-      setCallElements(new Map());
-      return;
-    }
-    const map = new Map<CallID, HTMLElement>();
-    for (const c of frame.calls) {
-      const sel = `[data-call-id="${cssEscape(c.id)}"]`;
-      const el = containerRef.current.querySelector(sel) as HTMLElement | null;
-      if (el) map.set(c.id, el);
-    }
-    setCallElements(map);
-  }, [html, frame.calls]);
-
-  // Toggle expanded/loading classes on call-site spans.
-  useEffect(() => {
-    callElements.forEach((el, cid) => {
-      el.classList.toggle("expanded", expanded.has(cid));
-      el.classList.toggle("loading", loading.has(cid));
-    });
-  }, [callElements, expanded, loading]);
+    if (!containerRef.current) return;
+    containerRef.current
+      .querySelectorAll<HTMLElement>("[data-call-id]")
+      .forEach((el) => {
+        const id = el.getAttribute("data-call-id") as CallID | null;
+        if (!id) return;
+        el.classList.toggle("expanded", expanded.has(id));
+        el.classList.toggle("loading", loading.has(id));
+      });
+  }, [html, expanded, loading]);
 
   function expandCall(call: CallSite, choice: number) {
     setLoading((s) => new Set(s).add(call.id));
@@ -137,35 +126,55 @@ export function Frame({ frame, onClose }: FrameProps) {
           <div className="frame-loading">loading…</div>
         )}
       </div>
-      {/* Portals: render each expanded child Frame inside its call-site span. */}
-      {Array.from(expanded.entries()).map(([cid, child]) => {
-        const target = callElements.get(cid);
-        if (!target) return null;
-        const call = frame.calls.find((c) => c.id === cid);
-        if (!call) return null;
-        return createPortal(
-          <ExpandedFrame
-            key={`${cid}:${child.choice}`}
-            call={call}
-            child={child}
-            onChoose={(c) => chooseImpl(call, c)}
-            onClose={() =>
-              setExpanded((m) => {
-                const n = new Map(m);
-                n.delete(cid);
-                return n;
-              })
-            }
-          />,
-          target,
-        );
-      })}
-      {/* Inline errors per call. */}
-      {Array.from(errors.entries()).map(([cid, msg]) => {
-        const target = callElements.get(cid);
-        if (!target) return null;
-        return createPortal(<div className="call-error">expand failed: {msg}</div>, target);
-      })}
+      {/* Expanded children stack below the frame source, one per call.
+          (Inline-at-call-site rendering wants HAST→React conversion of
+          shiki output rather than dangerouslySetInnerHTML; that's a
+          follow-up.) */}
+      {(expanded.size > 0 || errors.size > 0) && (
+        <div className="frame-children">
+          {Array.from(expanded.entries()).map(([cid, child]) => {
+            const call = frame.calls.find((c) => c.id === cid);
+            if (!call) return null;
+            return (
+              <div className="frame-child" key={`${cid}:${child.choice}`}>
+                <div className="frame-child-anchor">
+                  <span className="frame-child-anchor-arrow">↳</span>
+                  <span className="frame-child-anchor-from">
+                    expanded from{" "}
+                    <code>{call.displayName}</code>
+                  </span>
+                </div>
+                <ExpandedFrame
+                  call={call}
+                  child={child}
+                  onChoose={(c) => chooseImpl(call, c)}
+                  onClose={() =>
+                    setExpanded((m) => {
+                      const n = new Map(m);
+                      n.delete(cid);
+                      return n;
+                    })
+                  }
+                />
+              </div>
+            );
+          })}
+          {Array.from(errors.entries()).map(([cid, msg]) => {
+            const call = frame.calls.find((c) => c.id === cid);
+            return (
+              <div className="frame-child frame-child--error" key={`err:${cid}`}>
+                <div className="frame-child-anchor">
+                  <span className="frame-child-anchor-arrow">↳</span>
+                  <span className="frame-child-anchor-from">
+                    expand failed for <code>{call?.displayName ?? cid}</code>
+                  </span>
+                </div>
+                <div className="call-error">{msg}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -226,7 +235,4 @@ function escapeHTML(s: string): string {
   );
 }
 
-function cssEscape(s: string): string {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(s);
-  return s.replace(/([!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~])/g, "\\$1");
-}
+

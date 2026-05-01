@@ -224,14 +224,25 @@ func (i *Indexer) Load(dir, pattern string) error {
 }
 
 func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
+	// Span only the function-name token, not the whole call expression.
+	// This avoids overlapping decorations for nested calls (Shiki rejects
+	// overlap). For example fmt.Sprintf("...", listener.Addr().String())
+	// yields three disjoint spans on "Sprintf", "Addr", and "String".
+	//
+	// We skip immediately-invoked function literals — there's no name to
+	// click on, and their body is inline anyway.
+	spanPos, spanEnd, ok := nameSpan(ce.Fun)
+	if !ok {
+		return nil
+	}
 	pos := i.fset.Position(ce.Pos())
 	id := CallID(fmt.Sprintf("%s:%d", pos.Filename, pos.Offset))
 
 	ci := &callInfo{
 		id:     id,
 		parent: parent.id,
-		pos:    ce.Pos(),
-		end:    ce.End(),
+		pos:    spanPos,
+		end:    spanEnd,
 		kind:   KindIndirect, // overwritten below if resolvable
 	}
 
@@ -409,6 +420,34 @@ func formatSelector(s *ast.SelectorExpr) string {
 		return x.Name + "." + s.Sel.Name
 	default:
 		return s.Sel.Name
+	}
+}
+
+// nameSpan returns the byte range of the function-name token in a call's
+// Fun expression. For x.Method() it's the range of "Method"; for plain
+// identifiers and qualified names it's the identifier itself. Returns
+// false for function literals invoked immediately, which have no name
+// to click on.
+func nameSpan(fun ast.Expr) (token.Pos, token.Pos, bool) {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		return f.Pos(), f.End(), true
+	case *ast.SelectorExpr:
+		return f.Sel.Pos(), f.Sel.End(), true
+	case *ast.IndexExpr:
+		// Generic instantiation: Foo[T](args). Span the indexed name.
+		return nameSpan(f.X)
+	case *ast.IndexListExpr:
+		return nameSpan(f.X)
+	case *ast.ParenExpr:
+		return nameSpan(f.X)
+	case *ast.FuncLit:
+		// IIFE — no name token, skip.
+		return 0, 0, false
+	default:
+		// Type conversions, less common forms — fall back to the full Fun.
+		// These rarely nest inside other calls in a way that overlaps.
+		return f.Pos(), f.End(), true
 	}
 }
 

@@ -259,20 +259,48 @@ body {
   opacity: 0.6;
 }
 
-/* When a call site has an expanded child frame in it, it switches from
-   inline to block so the child Frame card sits below the call expression
-   on its own indented line. */
 .call-site.expanded {
-  display: block;
-  padding: 0.1rem 0;
+  background: var(--call-bg-hover);
+  outline: 1px solid var(--call-border);
 }
 
-.call-site.expanded > .expanded {
-  margin: 0.4rem 0 0.4rem 1.2rem;
+/* Stacked expanded children — sit beneath the frame body, indented to
+   suggest the call-stack depth. (The earlier inline-portal approach
+   conflicted with React's dangerouslySetInnerHTML reconciliation; see
+   PLAN.md Phase 3 follow-up for the HAST-based path back to inline.) */
+.frame-children {
+  margin: 0.4rem 0.8rem 0.6rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-left: 2px solid var(--call-border);
+  padding-left: 0.7rem;
 }
 
-.expanded {
-  display: block;
+.frame-child {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.frame-child-anchor {
+  font-size: 0.78rem;
+  color: var(--muted);
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.frame-child-anchor-arrow {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.frame-child-anchor-from code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
 }
 
 /* Impl switcher (interface dispatch) */

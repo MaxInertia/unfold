@@ -38,15 +38,36 @@ func TestLoadSelf(t *testing.T) {
 		t.Errorf("main has %d call sites; expected at least 5", len(frame.Calls))
 	}
 
-	// Verify span offsets land on the actual call expression text.
-	for _, c := range frame.Calls {
+	// Span offsets must be in range and must not overlap any other span
+	// in the same frame (Shiki's decorations API rejects overlapping
+	// ranges). The span text should be a function-name token — i.e. the
+	// last segment of the call's display name.
+	for i, c := range frame.Calls {
 		if c.SpanStart < 0 || c.SpanEnd > len(frame.Source) || c.SpanStart >= c.SpanEnd {
 			t.Errorf("bad span for %q: [%d,%d) (source len %d)", c.DisplayName, c.SpanStart, c.SpanEnd, len(frame.Source))
 			continue
 		}
 		got := frame.Source[c.SpanStart:c.SpanEnd]
-		if !strings.HasSuffix(got, ")") {
-			t.Errorf("call span for %q does not end in ')': %q", c.DisplayName, got)
+		// Name-only span means the span text equals either the full display
+		// name (for plain identifiers) or the trailing segment after the
+		// final "." (for selector calls like fmt.Println).
+		dot := strings.LastIndex(c.DisplayName, ".")
+		want := c.DisplayName
+		if dot >= 0 {
+			want = c.DisplayName[dot+1:]
+		}
+		if got != want {
+			t.Errorf("span for %q: got %q, want %q", c.DisplayName, got, want)
+		}
+		for j, other := range frame.Calls {
+			if i == j {
+				continue
+			}
+			if c.SpanStart < other.SpanEnd && other.SpanStart < c.SpanEnd {
+				t.Errorf("overlap: %q [%d,%d) overlaps %q [%d,%d)",
+					c.DisplayName, c.SpanStart, c.SpanEnd,
+					other.DisplayName, other.SpanStart, other.SpanEnd)
+			}
 		}
 	}
 

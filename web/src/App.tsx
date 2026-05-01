@@ -66,9 +66,11 @@ export function App() {
       )}
       {!rootFrame && !loading && !error && (
         <p className="app-hint">
-          Search for a function above and select one to start. The viewer expands direct
-          call sites inline. Interface and indirect calls are visible but not expandable
-          yet (Phase 2).
+          Search for a function above and select one to start. Click any
+          underlined call site to expand its body below; interface calls
+          surface a dropdown to pick which implementation to view.
+          Indirect calls (builtins, function values) are highlighted but
+          not expandable.
         </p>
       )}
     </div>

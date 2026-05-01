@@ -169,6 +169,23 @@ Cold latency target: < 50ms once index is warm. Index build for a ~50k-LOC modul
   to candidate 0 by default; the dropdown swaps to any other candidate.
 - Persist impl choice per call in URL hash. *(deferred — see Phase 3.5)*
 
+**Phase 2 follow-up — inline-at-call-site child rendering**
+- Current Phase 2 ships expanded children stacked *below* the frame
+  source, with each child labelled by the call's display name. The
+  inline-at-call-site design (portal a child `<Frame>` into the call's
+  shiki span) didn't survive contact with `dangerouslySetInnerHTML`:
+  React's reconciliation didn't reliably keep portal contents in the
+  DOM when the parent re-rendered, even though the host span was
+  preserved between renders.
+- The fix is to stop using `dangerouslySetInnerHTML` for shiki output
+  entirely. Use `codeToHast` + `hast-util-to-jsx-runtime` so each call
+  site becomes a real React element. Then a child `<Frame>` can be
+  rendered inline as a normal React child of the call-site span — no
+  portals, no dangerous-HTML/portal interaction.
+- Until that lands, the stacked-below layout is functionally
+  equivalent and keeps the indentation/visual depth via a left-hand
+  border on `.frame-children`.
+
 **Phase 3 — line folding (frontend-only)**
 - Allow the user to select a contiguous range of lines in any frame body
   and collapse it to a single placeholder ("[N lines folded]"); click to
