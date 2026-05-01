@@ -2,41 +2,43 @@ import { useEffect, useState } from "react";
 import { Frame } from "./Frame";
 import { fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
+import { ViewStoreProvider, useViewStore } from "./viewState";
 
 export function App() {
+  return (
+    <ViewStoreProvider>
+      <AppShell />
+    </ViewStoreProvider>
+  );
+}
+
+function AppShell() {
+  const store = useViewStore();
+  const symbol = store.symbol;
   const [target, setTarget] = useState<string | null>(null);
   const [rootFrame, setRootFrame] = useState<FrameT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Load symbol on mount or when the URL hash changes (?symbol=...).
   useEffect(() => {
-    function load() {
-      const params = new URLSearchParams(location.hash.slice(1));
-      const sym = params.get("symbol");
-      if (!sym) {
-        setRootFrame(null);
-        setError(null);
-        return;
-      }
-      setLoading(true);
+    if (!symbol) {
+      setRootFrame(null);
       setError(null);
-      fetchSymbol(sym)
-        .then((f) => {
-          setRootFrame(f);
-          setLoading(false);
-        })
-        .catch((e: Error) => {
-          setError(e.message);
-          setLoading(false);
-        });
+      return;
     }
-    load();
-    window.addEventListener("hashchange", load);
-    return () => window.removeEventListener("hashchange", load);
-  }, []);
+    setLoading(true);
+    setError(null);
+    fetchSymbol(symbol)
+      .then((f) => {
+        setRootFrame(f);
+        setLoading(false);
+      })
+      .catch((e: Error) => {
+        setError(e.message);
+        setLoading(false);
+      });
+  }, [symbol]);
 
-  // Read /api/health on mount to show the indexer target.
   useEffect(() => {
     fetch("/api/health")
       .then((r) => r.json())
@@ -44,33 +46,28 @@ export function App() {
       .catch(() => {});
   }, []);
 
-  function pickSymbol(name: string) {
-    const params = new URLSearchParams();
-    params.set("symbol", name);
-    location.hash = params.toString();
-  }
-
   return (
     <div className="app">
       <header className="app-header">
         <h1>unfold</h1>
         {target && <span className="app-target">target: <code>{target}</code></span>}
       </header>
-      <SymbolPicker onPick={pickSymbol} />
+      <SymbolPicker onPick={(s) => store.setSymbol(s)} />
       {error && <div className="app-error">{error}</div>}
       {loading && <div className="app-loading">loading…</div>}
       {rootFrame && (
         <div className="app-root-frame">
-          <Frame frame={rootFrame} />
+          <Frame frame={rootFrame} path={[]} />
         </div>
       )}
       {!rootFrame && !loading && !error && (
         <p className="app-hint">
           Search for a function above and select one to start. Click any
-          underlined call site to expand its body below; interface calls
-          surface a dropdown to pick which implementation to view.
-          Indirect calls (builtins, function values) are highlighted but
-          not expandable.
+          underlined call site to expand its body inline; interface calls
+          surface a dropdown to pick which implementation to view. Click a
+          line number to start a selection, shift-click another to extend,
+          then "fold" to collapse the range. URL hash carries your view —
+          reload preserves it, and the link is shareable.
         </p>
       )}
     </div>

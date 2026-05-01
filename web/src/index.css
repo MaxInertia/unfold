@@ -219,6 +219,113 @@ body {
   font: inherit;
 }
 
+.frame-source pre.shiki code {
+  display: block;
+}
+
+.line-row {
+  display: flex;
+  align-items: baseline;
+  white-space: pre;
+}
+
+.line-row > .line {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.line-num {
+  flex: 0 0 auto;
+  width: 3.2em;
+  text-align: right;
+  padding: 0 0.7em 0 0.2em;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.55;
+}
+
+.line-num:hover {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.line-num--selected {
+  color: var(--accent);
+  opacity: 1;
+  background: var(--call-bg);
+}
+
+.fold-placeholder {
+  display: block;
+  width: 100%;
+  margin: 0.15rem 0;
+  padding: 0.18rem 0.5rem 0.18rem 4em;
+  background: rgba(127, 127, 127, 0.08);
+  border: 1px dashed var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  font: inherit;
+  font-style: italic;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fold-placeholder:hover {
+  background: rgba(127, 127, 127, 0.16);
+  color: var(--fg);
+  border-color: var(--call-border);
+}
+
+.frame-selectbar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.35rem 0.8rem;
+  border-bottom: 1px solid var(--card-border);
+  background: var(--call-bg);
+  font-size: 0.82rem;
+}
+
+.frame-selectbar-info {
+  font-weight: 600;
+}
+
+.frame-selectbar-fold,
+.frame-selectbar-cancel {
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.15rem 0.55rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.frame-selectbar-fold {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.frame-selectbar-fold:hover {
+  background: var(--call-bg-hover);
+}
+
+.frame-selectbar-cancel:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.frame-selectbar-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 /* Shiki paints a background on the <pre> and on each token span. For
    unfold we want the code area to blend into the frame card, so strip
    shiki's per-token backgrounds — but spare call-site spans, which

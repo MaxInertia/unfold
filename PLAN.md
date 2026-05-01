@@ -182,19 +182,27 @@ Cold latency target: < 50ms once index is warm. Index build for a ~50k-LOC modul
   the line. Indentation matches the leading whitespace of the
   source line so the child sits visually under its call.
 
-**Phase 3 — line folding (frontend-only)**
-- Allow the user to select a contiguous range of lines in any frame body
-  and collapse it to a single placeholder ("[N lines folded]"); click to
-  unfold. Pure UI: no indexer changes.
-- Use case: when an execution path crosses many functions, fold parts
-  of the bodies that are off-topic for the current investigation so the
-  relevant lines stay close together.
-- State lives in component state keyed by frame ID + line range.
-- Persist fold state in the URL hash so views are shareable.
+**Phase 3 — line folding (frontend-only)** ✅
+- A line-number gutter on the left edge of each frame body. Clicking a
+  line number starts a selection; shift-clicking another extends it.
+  A select-bar above the frame lets the user fold the selection or
+  cancel; Esc also cancels.
+- Folded line ranges render as a single clickable placeholder
+  ("··· N lines hidden (file-line-start–file-line-end)"). Clicking the
+  placeholder unfolds.
+- No indexer changes — the frontend's HAST walker checks fold state
+  per line and emits placeholders or skips lines accordingly.
 
-**Phase 3.5 — view persistence**
-- Move expansion state, impl choices, and fold ranges into URL hash so
-  reload preserves the view and URLs are shareable.
+**Phase 3.5 — view persistence** ✅
+- Single ViewStore in App holds the expansion+fold tree, keyed by
+  path through the call graph. Each Frame consumes its slice via
+  context and a path prop; updates go through the store.
+- Loaded child Frame data is component-local — only intent
+  (which calls are expanded with what choice) and fold ranges are
+  persisted to the URL hash.
+- URL hash carries `#symbol=<name>&v=<base64-json>`. `history.replaceState`
+  on every change so the back stack isn't polluted; `hashchange` listener
+  restores state on browser back/forward and on reload.
 
 **Phase 4 — annotations**
 - Reuse plannotator's annotation model (read their `review-editor` package — they've solved this).
