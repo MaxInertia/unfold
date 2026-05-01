@@ -23,8 +23,10 @@ export function fetchBodyByTarget(id: TargetID): Promise<Frame> {
   return getJSON<Frame>(`/api/body?targetId=${encodeURIComponent(id)}`);
 }
 
-export function fetchBodyByCall(id: CallID): Promise<Frame> {
-  return getJSON<Frame>(`/api/body?callId=${encodeURIComponent(id)}`);
+export function fetchBodyByCall(id: CallID, choice = 0): Promise<Frame> {
+  const params = new URLSearchParams({ callId: id });
+  if (choice > 0) params.set("choice", String(choice));
+  return getJSON<Frame>(`/api/body?${params.toString()}`);
 }
 
 export async function search(q: string, limit = 25): Promise<SearchResult[]> {

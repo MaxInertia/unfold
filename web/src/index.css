@@ -219,6 +219,15 @@ body {
   font: inherit;
 }
 
+/* Shiki paints a background on the <pre> and on each token span. For
+   unfold we want the code area to blend into the frame card, so strip
+   shiki's per-token backgrounds — but spare call-site spans, which
+   carry their own background to indicate they're clickable. */
+.frame-source pre.shiki,
+.frame-source pre.shiki span:not(.call-site) {
+  background-color: transparent !important;
+}
+
 .frame-source code {
   background: transparent;
   border: 0;
@@ -249,20 +258,68 @@ body {
   background: var(--call-bg-hover);
 }
 
+.call-site--interface.call-site--resolvable {
+  /* Mark interface dispatches with a dotted bottom border so it's clear
+     this expansion involves a choice of implementation. */
+  border-bottom-style: dotted;
+}
+
 .call-site.loading {
   opacity: 0.6;
 }
 
-/* When a call site has an expanded child frame in it, it switches from
-   inline to block so the child Frame card sits below the call expression
-   on its own indented line. */
 .call-site.expanded {
-  display: block;
-  padding: 0.1rem 0;
+  background: var(--call-bg-hover);
+  outline: 1px solid var(--call-border);
 }
 
-.call-site.expanded > .frame {
-  margin: 0.4rem 0 0.4rem 1.2rem;
+/* Inline child frames — emitted directly after the line that contains
+   the expanded call site, indented to roughly match the call's column. */
+.inline-child {
+  display: block;
+  margin: 0.35rem 0 0.55rem 0;
+  border-left: 2px solid var(--call-border);
+  padding-left: 0.6rem;
+}
+
+.frame-error {
+  color: var(--error);
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85em;
+}
+
+/* Impl switcher (interface dispatch) */
+.impl-switcher {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.3rem;
+  padding: 0.3rem 0.55rem;
+  background: var(--call-bg);
+  border: 1px solid var(--call-border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: default;
+}
+
+.impl-switcher-label {
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.impl-switcher select {
+  font: inherit;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
+}
+
+.impl-switcher-count {
+  color: var(--muted);
+  margin-left: auto;
 }
 
 .call-error {
@@ -271,11 +328,11 @@ body {
   margin: 0.3rem 0 0.3rem 1.2rem;
 }
 
-/* Shiki dark/light mode swap */
+/* Shiki dark/light mode color swap. Background overrides above keep
+   the code area transparent in both modes; this only flips text color. */
 @media (prefers-color-scheme: dark) {
   .frame-source .shiki,
   .frame-source .shiki span {
     color: var(--shiki-dark, inherit) !important;
-    background-color: var(--shiki-dark-bg, transparent) !important;
   }
 }

@@ -154,31 +154,107 @@ Cold latency target: < 50ms once index is warm. Index build for a ~50k-LOC modul
 
 ## Phased delivery
 
-**Phase 1 — viewer MVP** (1–2 weeks of focused work)
+**Phase 1 — viewer MVP** ✅
 - Repo scaffold (`unfold/`): `cmd/cli/`, `internal/indexer/`, `internal/server/`, `web/`.
-- Indexer: load packages, build call-site index, build implementer index, body lookup.
-- HTTP server with the four core endpoints (`/symbol`, `/file`, `/body`, `/search`).
+- Indexer: load packages, build call-site index, body lookup.
+- HTTP server with the core endpoints (`/symbol`, `/body`, `/search`, `/health`).
 - Frontend: Shiki highlighting, nested-card render, click-to-expand for *direct* calls only.
 - CLI: boot + open browser.
-- Smoke test on 2–3 real Go projects (one small, one mid, one DI-heavy).
+- Smoke test on real Go projects (gorilla/mux, the unfold module itself).
 
-**Phase 2 — interface dispatch & impl switching**
+**Phase 2 — interface dispatch & impl switching** ✅
+- Implementer index built at Load time via `types.Implements`.
 - Surface candidates in `/body` response.
-- Frontend impl-switcher dropdown.
-- Persist impl choice per call in URL hash.
+- Frontend impl-switcher dropdown — clicking an interface call expands
+  to candidate 0 by default; the dropdown swaps to any other candidate.
+- Persist impl choice per call in URL hash. *(deferred — see Phase 3.5)*
 
-**Phase 3 — annotations**
+**Phase 2 follow-up — inline-at-call-site child rendering** ✅
+- Earlier attempt portaled the expanded child Frame into its
+  call-site span. That didn't work: React's reconciliation didn't
+  reliably mount portal contents into the DOM when the host span
+  sat inside a `dangerouslySetInnerHTML` region.
+- Resolved by replacing `dangerouslySetInnerHTML` with a HAST-based
+  pipeline. `highlight.ts` calls shiki's `codeToHast` and a custom
+  walker (`hastRender.tsx`) turns the tree into React elements:
+  call-site spans become real components with `onClick`, and line
+  spans are wrapped so any expanded children render directly after
+  the line. Indentation matches the leading whitespace of the
+  source line so the child sits visually under its call.
+
+**Phase 3 — line folding (frontend-only)**
+- Allow the user to select a contiguous range of lines in any frame body
+  and collapse it to a single placeholder ("[N lines folded]"); click to
+  unfold. Pure UI: no indexer changes.
+- Use case: when an execution path crosses many functions, fold parts
+  of the bodies that are off-topic for the current investigation so the
+  relevant lines stay close together.
+- State lives in component state keyed by frame ID + line range.
+- Persist fold state in the URL hash so views are shareable.
+
+**Phase 3.5 — view persistence**
+- Move expansion state, impl choices, and fold ranges into URL hash so
+  reload preserves the view and URLs are shareable.
+
+**Phase 4 — annotations**
 - Reuse plannotator's annotation model (read their `review-editor` package — they've solved this).
 - Selection → comment → packaged feedback export.
 - Decide later: feed back into agent loop (plannotator-style hook) vs plain JSON dump.
 
-**Phase 4 — TypeScript support**
+**Phase 5 — TypeScript support**
 - Second indexer behind an interface (`Indexer` trait): `LoadProject`, `ResolveCall`, `GetBody`, `FindImplementers`.
 - TS implementation via `ts-morph` (full-fat TS compiler API) or tsserver protocol.
 - Frontend stays the same — it only consumes `Frame`s.
 
-**Phase 5 — IDE plugin**
+**Phase 6 — IDE plugin**
 - JetBrains plugin that opens the browser viewer pre-pointed at the symbol under the caret. Cheap and reuses everything.
+
+**Phase 7 — fan-out viewing (per-pattern resolver framework)**
+
+When one site fans out to many handlers — observable subscribers, event-emitter listeners, HTTP route handlers, channel readers — the user wants to see all of them, the same way Phase 2 lets them see all interface implementations of a method.
+
+**Semantic distinction from Phase 2.** Interface dispatch is "of N possible impls, *one* runs at runtime — pick which one to view." Fan-out is "*all* N receivers run." So while a dropdown works for "view one at a time," the natural fan-out UX is closer to a list of expanded children, possibly with the option to expand all simultaneously (stacked, with a header per receiver).
+
+**Architecture: per-pattern resolver framework.** Each fan-out pattern lives behind a small `Resolver` interface:
+
+```go
+type Resolver interface {
+    // Recognize returns true when the call expression matches this
+    // resolver's pattern (e.g. "this is a *EventEmitter.emit call").
+    Recognize(call *ast.CallExpr, info *types.Info) bool
+
+    // Resolve returns the receiver functions reachable from this fan-out
+    // point. Each Receiver corresponds to a concrete handler we can
+    // produce a Frame for.
+    Resolve(call *ast.CallExpr, info *types.Info, idx *Indexer) []Receiver
+}
+
+type Receiver struct {
+    TargetID TargetID
+    Label    string
+    // Optional: provenance info (e.g. "registered at foo.go:42").
+    Provenance string
+}
+```
+
+Resolvers are added incrementally — each one earns its keep on its own merits, with documented limits. Initial candidates in priority order:
+
+1. **Go channels** — track a `chan T` variable through assignments and find all `<-ch` reads in the loaded set. Native, statically tractable. Most reliable starting point.
+2. **`net/http.ServeMux`** — index `mux.HandleFunc(pattern, handler)` registrations and connect a `ServeHTTP` dispatch back to the matching handlers.
+3. **Generic event emitters / RxJS subjects (TS)** — find all `.subscribe(cb)` / `.on('event', cb)` calls on the same logical observable. Will be heuristic and library-specific.
+4. **gRPC service registration**, **CLI command registration**, etc. — registered statically; tractable.
+
+Anything that goes through reflection, eval, plugin loaders, or runtime-only registration is out of scope.
+
+**Open questions to answer at the start of Phase 7:**
+
+1. Which patterns are most useful to support first? (Likely answered by the user's actual reading habits — Go channels look like the highest-value first target on the Go side; RxJS/Angular subjects on the TS side once Phase 5 lands.)
+2. UX: when fan-out has N receivers, do we render them as (a) a dropdown picker, identical to Phase 2; (b) a collapsed list, click to expand each; (c) all expanded simultaneously, stacked? Likely (b) with an "expand all" affordance.
+3. How are resolvers configured? Always-on per language, or opt-in via flag? Consider startup time impact — each resolver may need its own pre-pass over the package set.
+4. How should the frontend display *which kind* of fan-out a given call is? A badge ("channel", "subscribers", "routes") in the impl-switcher area, presumably.
+5. When a resolver is heuristic (e.g. RxJS subject tracking), how do we surface confidence? Maybe a "tentative" marker on uncertain receivers.
+6. Manual hint mechanism: should we support a `// unfold:subscribers Foo, Bar` annotation comment for cases the resolver can't figure out? Lower priority — ship pattern resolvers first and revisit.
+7. Cycles / fan-in: if multiple emit sites lead to the same handler, can the user navigate "back" from a handler to its emitters? Probably out of scope until we have actual usage feedback.
 
 ## Known unknowns / decisions to revisit
 

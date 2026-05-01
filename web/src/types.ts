@@ -11,6 +11,12 @@ export interface CallSite {
   displayName: string;
   kind: CallKind;
   targetId?: TargetID; // present for direct calls
+  candidates?: Candidate[]; // present for interface calls with known impls
+}
+
+export interface Candidate {
+  targetId: TargetID;
+  label: string;
 }
 
 export interface Frame {
