@@ -11,12 +11,21 @@ import {
 import type { CallID } from "./types";
 
 // A FrameSlice describes the *intent* for one frame in the view tree:
-// which lines are folded, and which call sites are currently expanded
-// (each with its impl choice). The actual loaded child frames are not
+// which lines are folded, which call sites are currently expanded
+// (each with its impl choice), and any annotations the user has
+// attached to line ranges. The actual loaded child frames are not
 // stored here — components fetch them on demand based on this intent.
 export interface FrameSlice {
   folds: [number, number][]; // [start, end] inclusive line indices
   expansions: Record<CallID, FrameSlice & { choice: number }>;
+  annotations: Annotation[];
+}
+
+export interface Annotation {
+  id: string;
+  start: number; // inclusive line index within the frame
+  end: number;
+  comment: string;
 }
 
 export type FramePath = { callId: CallID; choice: number }[];
@@ -24,6 +33,7 @@ export type FramePath = { callId: CallID; choice: number }[];
 export const emptySlice: FrameSlice = Object.freeze({
   folds: [],
   expansions: {},
+  annotations: [],
 });
 
 interface ViewStoreCtx {
@@ -32,6 +42,9 @@ interface ViewStoreCtx {
   expand: (path: FramePath, callId: CallID, choice: number) => void;
   setChoice: (path: FramePath, callId: CallID, choice: number) => void;
   collapse: (path: FramePath, callId: CallID) => void;
+  addAnnotation: (path: FramePath, ann: Annotation) => void;
+  removeAnnotation: (path: FramePath, id: string) => void;
+  updateAnnotation: (path: FramePath, id: string, comment: string) => void;
   // Subscribe so consumers re-render when their slice changes.
   subscribe: (listener: () => void) => () => void;
   // Currently-selected root symbol (also tracked in the URL hash).
@@ -89,7 +102,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
         ...s,
         expansions: {
           ...s.expansions,
-          [callId]: { folds: [], expansions: {}, choice },
+          [callId]: { folds: [], expansions: {}, annotations: [], choice },
         },
       }));
     },
@@ -107,10 +120,37 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
           ...s,
           expansions: {
             ...s.expansions,
-            [callId]: { folds: [], expansions: {}, choice },
+            [callId]: { folds: [], expansions: {}, annotations: [], choice },
           },
         };
       });
+    },
+    [updatePath],
+  );
+
+  const addAnnotation = useCallback(
+    (path: FramePath, ann: Annotation) => {
+      updatePath(path, (s) => ({ ...s, annotations: [...s.annotations, ann] }));
+    },
+    [updatePath],
+  );
+
+  const removeAnnotation = useCallback(
+    (path: FramePath, id: string) => {
+      updatePath(path, (s) => ({
+        ...s,
+        annotations: s.annotations.filter((a) => a.id !== id),
+      }));
+    },
+    [updatePath],
+  );
+
+  const updateAnnotation = useCallback(
+    (path: FramePath, id: string, comment: string) => {
+      updatePath(path, (s) => ({
+        ...s,
+        annotations: s.annotations.map((a) => (a.id === id ? { ...a, comment } : a)),
+      }));
     },
     [updatePath],
   );
@@ -151,8 +191,32 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
   }, [notify]);
 
   const ctx = useMemo<ViewStoreCtx>(
-    () => ({ getSlice, setFolds, expand, setChoice, collapse, subscribe, symbol, setSymbol }),
-    [getSlice, setFolds, expand, setChoice, collapse, subscribe, symbol, setSymbol],
+    () => ({
+      getSlice,
+      setFolds,
+      expand,
+      setChoice,
+      collapse,
+      addAnnotation,
+      removeAnnotation,
+      updateAnnotation,
+      subscribe,
+      symbol,
+      setSymbol,
+    }),
+    [
+      getSlice,
+      setFolds,
+      expand,
+      setChoice,
+      collapse,
+      addAnnotation,
+      removeAnnotation,
+      updateAnnotation,
+      subscribe,
+      symbol,
+      setSymbol,
+    ],
   );
 
   return <ViewStoreContext.Provider value={ctx}>{children}</ViewStoreContext.Provider>;
@@ -171,6 +235,12 @@ export function useFrameSlice(path: FramePath): FrameSlice {
   const [, setTick] = useState(0);
   useEffect(() => store.subscribe(() => setTick((n) => n + 1)), [store]);
   return store.getSlice(path);
+}
+
+// Same idea but returns the root slice — used by the export-feedback
+// affordance so it sees every annotation in the tree.
+export function useRootSlice(): FrameSlice {
+  return useFrameSlice([]);
 }
 
 function mutate(
