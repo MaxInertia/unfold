@@ -2,24 +2,90 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Root as HastRoot } from "hast";
 import { fetchBodyByCall } from "./api";
 import { highlightToHast } from "./highlight";
-import { renderHast } from "./hastRender";
+import { renderHast, type LineAction } from "./hastRender";
 import type { CallID, CallSite, Frame as FrameT } from "./types";
+import { useFrameSlice, useViewStore, type FramePath } from "./viewState";
+
+export interface FoldRange {
+  start: number;
+  end: number;
+}
 
 interface FrameProps {
   frame: FrameT;
+  path: FramePath;
   onClose?: () => void;
 }
 
-interface ExpandedChild {
-  frame: FrameT;
-  choice: number; // candidate index, only meaningful for interface kind
-}
-
-export function Frame({ frame, onClose }: FrameProps) {
+export function Frame({ frame, path, onClose }: FrameProps) {
+  const store = useViewStore();
+  const slice = useFrameSlice(path);
   const [hast, setHast] = useState<HastRoot | null>(null);
-  const [expanded, setExpanded] = useState<Map<CallID, ExpandedChild>>(new Map());
+  // Loaded child frames are component-local; the URL only persists the
+  // intent (which calls are expanded with what choice).
+  const [loadedChildren, setLoadedChildren] = useState<Map<CallID, FrameT>>(new Map());
   const [loading, setLoading] = useState<Set<CallID>>(new Set());
   const [errors, setErrors] = useState<Map<CallID, string>>(new Map());
+  const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
+
+  // Fetch any expanded children we don't have loaded yet, and prune any
+  // we've loaded but the slice no longer expands.
+  useEffect(() => {
+    const wantedIds = new Set(Object.keys(slice.expansions) as CallID[]);
+    // Drop loaded frames whose call is no longer expanded.
+    setLoadedChildren((current) => {
+      let mutated = false;
+      const next = new Map(current);
+      for (const id of next.keys()) {
+        if (!wantedIds.has(id)) {
+          next.delete(id);
+          mutated = true;
+        }
+      }
+      return mutated ? next : current;
+    });
+
+    let alive = true;
+    for (const cid of wantedIds) {
+      const want = slice.expansions[cid];
+      if (!want) continue;
+      const loaded = loadedChildren.get(cid);
+      // Need to (re)fetch if not loaded OR loaded with stale choice.
+      if (loaded && (loaded as { __choice?: number }).__choice === want.choice) continue;
+      if (loading.has(cid)) continue;
+      setLoading((s) => new Set(s).add(cid));
+      fetchBodyByCall(cid, want.choice)
+        .then((child) => {
+          if (!alive) return;
+          // Tag with the choice so we can detect choice changes.
+          (child as { __choice?: number }).__choice = want.choice;
+          setLoading((s) => {
+            const n = new Set(s);
+            n.delete(cid);
+            return n;
+          });
+          setLoadedChildren((m) => new Map(m).set(cid, child));
+          setErrors((m) => {
+            const n = new Map(m);
+            n.delete(cid);
+            return n;
+          });
+        })
+        .catch((err: Error) => {
+          if (!alive) return;
+          setLoading((s) => {
+            const n = new Set(s);
+            n.delete(cid);
+            return n;
+          });
+          setErrors((m) => new Map(m).set(cid, err.message));
+        });
+    }
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slice.expansions]);
 
   // Highlight source whenever the frame changes.
   useEffect(() => {
@@ -29,8 +95,6 @@ export function Frame({ frame, onClose }: FrameProps) {
       .then((h) => alive && setHast(h))
       .catch((e) => {
         if (!alive) return;
-        // If highlighting fails, fall back to a plain-text root so the
-        // rest of the UI still works.
         const fallback: HastRoot = {
           type: "root",
           children: [
@@ -51,60 +115,77 @@ export function Frame({ frame, onClose }: FrameProps) {
     };
   }, [frame]);
 
-  function expandCall(call: CallSite, choice: number) {
-    setLoading((s) => new Set(s).add(call.id));
-    setErrors((m) => {
-      const n = new Map(m);
-      n.delete(call.id);
-      return n;
-    });
-    fetchBodyByCall(call.id, choice)
-      .then((child) => {
-        setLoading((s) => {
-          const n = new Set(s);
-          n.delete(call.id);
-          return n;
-        });
-        setExpanded((m) => new Map(m).set(call.id, { frame: child, choice }));
-      })
-      .catch((err: Error) => {
-        setLoading((s) => {
-          const n = new Set(s);
-          n.delete(call.id);
-          return n;
-        });
-        setErrors((m) => new Map(m).set(call.id, err.message));
-      });
-  }
+  // Esc cancels selection.
+  useEffect(() => {
+    if (!selection) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setSelection(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selection]);
 
   function toggleCall(call: CallSite) {
     if (call.kind === "indirect") return;
     if (call.kind === "interface" && (call.candidates?.length ?? 0) === 0) return;
     if (call.kind === "direct" && !call.targetId) return;
 
-    if (expanded.has(call.id)) {
-      setExpanded((m) => {
-        const n = new Map(m);
-        n.delete(call.id);
-        return n;
-      });
-      return;
+    if (slice.expansions[call.id]) {
+      store.collapse(path, call.id);
+    } else {
+      store.expand(path, call.id, 0);
     }
-    if (loading.has(call.id)) return;
-    expandCall(call, 0);
   }
 
   function chooseImpl(call: CallSite, choice: number) {
-    expandCall(call, choice);
+    store.setChoice(path, call.id, choice);
   }
 
-  function closeChild(cid: CallID) {
-    setExpanded((m) => {
-      const n = new Map(m);
-      n.delete(cid);
-      return n;
-    });
+  function closeChild(callId: CallID) {
+    store.collapse(path, callId);
   }
+
+  // Selection / fold state lives in the store under slice.folds.
+  function onLineNumClick(idx: number, e: React.MouseEvent) {
+    e.preventDefault();
+    if (e.shiftKey && selection) {
+      setSelection({ anchor: selection.anchor, head: idx });
+      return;
+    }
+    setSelection({ anchor: idx, head: idx });
+  }
+
+  function isLineSelected(idx: number): boolean {
+    if (!selection) return false;
+    const lo = Math.min(selection.anchor, selection.head);
+    const hi = Math.max(selection.anchor, selection.head);
+    return idx >= lo && idx <= hi;
+  }
+
+  function foldSelection() {
+    if (!selection) return;
+    const lo = Math.min(selection.anchor, selection.head);
+    const hi = Math.max(selection.anchor, selection.head);
+    store.setFolds(path, mergeRange(slice.folds, [lo, hi]));
+    setSelection(null);
+  }
+
+  function unfoldRange(start: number) {
+    store.setFolds(
+      path,
+      slice.folds.filter(([s]) => s !== start),
+    );
+  }
+
+  const lineAction = useMemo<(idx: number) => LineAction>(() => {
+    return (idx: number): LineAction => {
+      for (const [start, end] of slice.folds) {
+        if (idx === start) return { kind: "fold-start", endLine: end };
+        if (idx > start && idx <= end) return { kind: "skip" };
+      }
+      return { kind: "render" };
+    };
+  }, [slice.folds]);
 
   // Renderer hooks for hastRender.
   function renderCallSpan(
@@ -113,7 +194,7 @@ export function Frame({ frame, onClose }: FrameProps) {
     domProps: Record<string, unknown>,
   ): ReactNode {
     const isLoading = loading.has(call.id);
-    const isExpanded = expanded.has(call.id);
+    const isExpanded = !!slice.expansions[call.id];
     const cls = [
       domProps.className as string | undefined,
       isExpanded ? "expanded" : "",
@@ -136,21 +217,21 @@ export function Frame({ frame, onClose }: FrameProps) {
   }
 
   function renderLineExtras(lineIdx: number, lineSource: string): ReactNode {
-    // Intentionally a slot per line — multiple expanded calls on one
-    // line stack in source order.
     const extras: ReactNode[] = [];
-    // Find calls whose start offset falls on this line, in spanStart
-    // order so siblings render predictably.
     const calls = lineCallsCache.get(lineIdx);
     if (!calls) return null;
     for (const call of calls) {
-      const child = expanded.get(call.id);
-      if (child) {
+      const want = slice.expansions[call.id];
+      const child = loadedChildren.get(call.id);
+      if (want && child) {
+        const childPath: FramePath = [...path, { callId: call.id, choice: want.choice }];
         extras.push(
           <InlineChild
-            key={`x:${call.id}:${child.choice}`}
+            key={`x:${call.id}:${want.choice}`}
             call={call}
-            child={child}
+            childFrame={child}
+            choice={want.choice}
+            childPath={childPath}
             indent={leadingIndent(lineSource)}
             onChoose={(c) => chooseImpl(call, c)}
             onClose={() => closeChild(call.id)}
@@ -173,10 +254,45 @@ export function Frame({ frame, onClose }: FrameProps) {
     return extras.length ? <Fragment key={`extras:${lineIdx}`}>{extras}</Fragment> : null;
   }
 
-  // Pre-compute calls-per-line and the source of each line so
-  // renderLineExtras can place children with the correct indent.
   const lineCallsCache = useMemo(() => buildLineCalls(frame), [frame]);
   const lineSources = useMemo(() => frame.source.split("\n"), [frame]);
+
+  function renderLineGutter(lineIdx: number): ReactNode {
+    const fileLineNum = frame.startLine + lineIdx;
+    const selected = isLineSelected(lineIdx);
+    return (
+      <button
+        type="button"
+        className={`line-num${selected ? " line-num--selected" : ""}`}
+        onClick={(e) => onLineNumClick(lineIdx, e)}
+        onMouseDown={(e) => e.preventDefault()}
+        title={`line ${fileLineNum} — click to select, shift-click to extend`}
+      >
+        {fileLineNum}
+      </button>
+    );
+  }
+
+  function renderFoldPlaceholder(startLine: number, endLine: number): ReactNode {
+    const count = endLine - startLine + 1;
+    const fileStart = frame.startLine + startLine;
+    const fileEnd = frame.startLine + endLine;
+    return (
+      <button
+        type="button"
+        className="fold-placeholder"
+        onClick={() => unfoldRange(startLine)}
+        title={`unfold lines ${fileStart}–${fileEnd}`}
+      >
+        ··· {count} {count === 1 ? "line" : "lines"} hidden ({fileStart}–{fileEnd})
+      </button>
+    );
+  }
+
+  const hasSelection = selection !== null;
+  const selectionCount = selection
+    ? Math.abs(selection.head - selection.anchor) + 1
+    : 0;
 
   return (
     <div className="frame">
@@ -191,6 +307,24 @@ export function Frame({ frame, onClose }: FrameProps) {
           </button>
         )}
       </header>
+      {hasSelection && (
+        <div className="frame-selectbar">
+          <span className="frame-selectbar-info">
+            {selectionCount} {selectionCount === 1 ? "line" : "lines"} selected
+          </span>
+          <button type="button" onClick={foldSelection} className="frame-selectbar-fold">
+            fold
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelection(null)}
+            className="frame-selectbar-cancel"
+          >
+            cancel
+          </button>
+          <span className="frame-selectbar-hint">shift-click to extend · esc to cancel</span>
+        </div>
+      )}
       <div className="frame-body">
         {hast ? (
           <div className="frame-source">
@@ -201,6 +335,9 @@ export function Frame({ frame, onClose }: FrameProps) {
               renderCallSpan,
               renderLineExtras: (idx) =>
                 renderLineExtras(idx, lineSources[idx] ?? ""),
+              renderLineGutter,
+              renderFoldPlaceholder,
+              lineAction,
             })}
           </div>
         ) : (
@@ -213,13 +350,23 @@ export function Frame({ frame, onClose }: FrameProps) {
 
 interface InlineChildProps {
   call: CallSite;
-  child: ExpandedChild;
+  childFrame: FrameT;
+  choice: number;
+  childPath: FramePath;
   indent: string;
   onChoose: (choice: number) => void;
   onClose: () => void;
 }
 
-function InlineChild({ call, child, indent, onChoose, onClose }: InlineChildProps) {
+function InlineChild({
+  call,
+  childFrame,
+  choice,
+  childPath,
+  indent,
+  onChoose,
+  onClose,
+}: InlineChildProps) {
   const candidates = call.candidates ?? [];
   const showSwitcher = call.kind === "interface" && candidates.length > 1;
   return (
@@ -227,10 +374,7 @@ function InlineChild({ call, child, indent, onChoose, onClose }: InlineChildProp
       {showSwitcher && (
         <div className="impl-switcher" onClick={(e) => e.stopPropagation()}>
           <span className="impl-switcher-label">impl:</span>
-          <select
-            value={child.choice}
-            onChange={(e) => onChoose(Number(e.target.value))}
-          >
+          <select value={choice} onChange={(e) => onChoose(Number(e.target.value))}>
             {candidates.map((c, i) => (
               <option key={c.targetId} value={i}>
                 {c.label}
@@ -238,13 +382,27 @@ function InlineChild({ call, child, indent, onChoose, onClose }: InlineChildProp
             ))}
           </select>
           <span className="impl-switcher-count">
-            {child.choice + 1} / {candidates.length}
+            {choice + 1} / {candidates.length}
           </span>
         </div>
       )}
-      <Frame frame={child.frame} onClose={onClose} />
+      <Frame frame={childFrame} path={childPath} onClose={onClose} />
     </div>
   );
+}
+
+function mergeRange(current: [number, number][], add: [number, number]): [number, number][] {
+  const all = [...current, add].sort((a, b) => a[0] - b[0]);
+  const out: [number, number][] = [];
+  for (const r of all) {
+    const last = out[out.length - 1];
+    if (last && r[0] <= last[1] + 1) {
+      last[1] = Math.max(last[1], r[1]);
+    } else {
+      out.push([r[0], r[1]]);
+    }
+  }
+  return out;
 }
 
 function buildLineCalls(frame: FrameT): Map<number, CallSite[]> {
@@ -267,12 +425,9 @@ function lineForOffset(source: string, offset: number): number {
 }
 
 function leadingIndent(line: string): string {
-  // Returns just the whitespace prefix (tabs become tab-character; CSS
-  // margin-left of "<tab>..." won't render — translate to em-equivalent.)
   let i = 0;
   while (i < line.length && (line[i] === "\t" || line[i] === " ")) i++;
   const ws = line.slice(0, i);
-  // Approximate: tab = 4 chars, space = 1 char, of em-width.
   let chars = 0;
   for (const c of ws) chars += c === "\t" ? 4 : 1;
   return `${chars}ch`;

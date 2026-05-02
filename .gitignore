@@ -19,3 +19,6 @@ bun.lock
 *.swp
 .idea/
 .vscode/
+
+# Stray top-level package.json from one-off bun installs (frontend deps live in /web/)
+/package.json
