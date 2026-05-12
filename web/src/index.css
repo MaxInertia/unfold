@@ -208,7 +208,7 @@ body {
 }
 
 .frame-body {
-  padding: 0.4rem 0.8rem;
+  padding: 0.4rem 0;
   overflow-x: auto;
 }
 
@@ -381,12 +381,13 @@ body {
 }
 
 /* Inline child frames — emitted directly after the line that contains
-   the expanded call site, indented to roughly match the call's column. */
+   the expanded call site. No horizontal offset: every level's line
+   numbers stay vertically aligned with the parent so deeply nested
+   code keeps full reading width. The child's own card chrome
+   (border + bg) carries the nesting cue. */
 .inline-child {
   display: block;
   margin: 0.35rem 0 0.55rem 0;
-  border-left: 2px solid var(--call-border);
-  padding-left: 0.6rem;
 }
 
 .frame-error {

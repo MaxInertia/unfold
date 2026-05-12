@@ -216,7 +216,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     );
   }
 
-  function renderLineExtras(lineIdx: number, lineSource: string): ReactNode {
+  function renderLineExtras(lineIdx: number): ReactNode {
     const extras: ReactNode[] = [];
     const calls = lineCallsCache.get(lineIdx);
     if (!calls) return null;
@@ -232,7 +232,6 @@ export function Frame({ frame, path, onClose }: FrameProps) {
             childFrame={child}
             choice={want.choice}
             childPath={childPath}
-            indent={leadingIndent(lineSource)}
             onChoose={(c) => chooseImpl(call, c)}
             onClose={() => closeChild(call.id)}
           />,
@@ -241,11 +240,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
       const err = errors.get(call.id);
       if (err) {
         extras.push(
-          <div
-            key={`e:${call.id}`}
-            className="call-error"
-            style={{ marginLeft: leadingIndent(lineSource) }}
-          >
+          <div key={`e:${call.id}`} className="call-error">
             expand failed: {err}
           </div>,
         );
@@ -255,7 +250,6 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   }
 
   const lineCallsCache = useMemo(() => buildLineCalls(frame), [frame]);
-  const lineSources = useMemo(() => frame.source.split("\n"), [frame]);
 
   function renderLineGutter(lineIdx: number): ReactNode {
     const fileLineNum = frame.startLine + lineIdx;
@@ -333,8 +327,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
               source: frame.source,
               calls: frame.calls,
               renderCallSpan,
-              renderLineExtras: (idx) =>
-                renderLineExtras(idx, lineSources[idx] ?? ""),
+              renderLineExtras: (idx) => renderLineExtras(idx),
               renderLineGutter,
               renderFoldPlaceholder,
               lineAction,
@@ -353,7 +346,6 @@ interface InlineChildProps {
   childFrame: FrameT;
   choice: number;
   childPath: FramePath;
-  indent: string;
   onChoose: (choice: number) => void;
   onClose: () => void;
 }
@@ -363,14 +355,13 @@ function InlineChild({
   childFrame,
   choice,
   childPath,
-  indent,
   onChoose,
   onClose,
 }: InlineChildProps) {
   const candidates = call.candidates ?? [];
   const showSwitcher = call.kind === "interface" && candidates.length > 1;
   return (
-    <div className="inline-child" style={{ marginLeft: indent }}>
+    <div className="inline-child">
       {showSwitcher && (
         <div className="impl-switcher" onClick={(e) => e.stopPropagation()}>
           <span className="impl-switcher-label">impl:</span>
@@ -422,15 +413,6 @@ function lineForOffset(source: string, offset: number): number {
   const stop = Math.min(offset, source.length);
   for (let i = 0; i < stop; i++) if (source.charCodeAt(i) === 10) line++;
   return line;
-}
-
-function leadingIndent(line: string): string {
-  let i = 0;
-  while (i < line.length && (line[i] === "\t" || line[i] === " ")) i++;
-  const ws = line.slice(0, i);
-  let chars = 0;
-  for (const c of ws) chars += c === "\t" ? 4 : 1;
-  return `${chars}ch`;
 }
 
 function prettyName(id: string): string {
