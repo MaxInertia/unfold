@@ -141,6 +141,73 @@ func testUTF16Offsets(e *Engine) func(*testing.T) {
 	}
 }
 
+// TestAngularTemplates drives the sidecar against an Angular fixture and
+// checks that a component template is indexed as an html Frame whose calls
+// resolve to the component's methods, with UTF-16 offsets that survive
+// multibyte template text. Skipped when bun is absent.
+func TestAngularTemplates(t *testing.T) {
+	if _, err := exec.LookPath("bun"); err != nil {
+		t.Skip("bun not found; skipping Angular template integration test")
+	}
+	_, thisFile, _, _ := runtime.Caller(0)
+	repo := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	t.Setenv("UNFOLD_TSINDEXER", filepath.Join(repo, "tsindexer", "main.ts"))
+	fixture := filepath.Join(repo, "tsindexer", "testdata", "angular")
+
+	e, err := Load(fixture, "./...")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer e.Close()
+
+	// The component template resolves and is an html frame.
+	id, err := e.LookupSymbol("AppComponent")
+	if err != nil {
+		t.Fatalf("LookupSymbol(AppComponent): %v", err)
+	}
+	tf, err := e.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame(template): %v", err)
+	}
+	if tf.Language != "html" {
+		t.Errorf("template language: got %q want html", tf.Language)
+	}
+
+	var onClick *model.CallSite
+	getNameCount := 0
+	for i := range tf.Calls {
+		c := tf.Calls[i]
+		switch c.DisplayName {
+		case "onClick":
+			onClick = &tf.Calls[i]
+		case "getName":
+			getNameCount++
+			if c.Kind != "direct" || c.TargetID == "" {
+				t.Errorf("getName template call unresolved: %+v", c)
+			}
+			// UTF-16 span must recover the name even after multibyte text.
+			if got := utf16Slice(tf.Source, c.SpanStart, c.SpanEnd); got != "getName" {
+				t.Errorf("template span sliced to %q, want getName", got)
+			}
+		}
+	}
+	if onClick == nil {
+		t.Fatalf("onClick call not found in template; calls=%v", tf.Calls)
+	}
+	if getNameCount < 2 {
+		t.Errorf("expected 2 getName calls (incl. one after the emoji), got %d", getNameCount)
+	}
+
+	// Expanding a template call lands on the component method body.
+	body, err := e.FrameForCall(onClick.ID, 0)
+	if err != nil {
+		t.Fatalf("FrameForCall(onClick): %v", err)
+	}
+	if !strings.Contains(body.Source, "onClick(") {
+		t.Errorf("onClick expansion missing 'onClick(': %q", body.Source)
+	}
+}
+
 // utf16Slice slices s by UTF-16 code-unit offsets, the way a JS string
 // (and thus the frontend) is indexed.
 func utf16Slice(s string, start, end int) string {

@@ -7,10 +7,23 @@
 //
 // Methods: load, lookupSymbol, frame, frameForCall, search.
 //
-// Phase 5b implements direct-call resolution; interface dispatch is
-// classified (kind="interface") but candidates are filled in Phase 5c.
+// Direct-call resolution and interface dispatch (candidates) cover .ts.
+// Angular HTML templates (inline `template:` and external `templateUrl:`)
+// are also indexed: each becomes a synthetic Frame whose source is the HTML
+// and whose call sites point at the component's methods, so you can follow
+// flow from a template into the component body.
 
 import { createInterface } from "node:readline";
+import { readFileSync } from "node:fs";
+import { dirname, resolve as resolvePath } from "node:path";
+import {
+  ImplicitReceiver,
+  parseTemplate,
+  RecursiveAstVisitor,
+  tmplAstVisitAll,
+  TmplAstRecursiveVisitor,
+  type AST,
+} from "@angular/compiler";
 import {
   Node,
   Project,
@@ -66,6 +79,24 @@ interface CallInfo {
   candidates?: { targetId: string; label: string }[];
 }
 
+// A synthetic frame for an Angular component template.
+interface TemplateInfo {
+  id: string;
+  name: string; // e.g. "AppComponent ⟨template⟩"
+  file: string;
+  line: number;
+  frame: Frame;
+}
+
+// One method invocation found in a template binding expression.
+interface TplCall {
+  name: string; // method name, e.g. "onClick"
+  displayName: string; // "onClick" or "user.fullName"
+  start: number; // UTF-16 offset into the template HTML
+  end: number;
+  implicit: boolean; // receiver is the component instance (this / implicit)
+}
+
 // ---- engine ----
 
 class TSEngine {
@@ -75,6 +106,7 @@ class TSEngine {
   // Keyed by the interface/abstract-class declaration's node key; value is
   // the concrete classes that implement/extend it.
   private implementers = new Map<string, ClassDeclaration[]>();
+  private templates = new Map<string, TemplateInfo>();
   private loaded = false;
 
   load(dir: string): { funcs: number } {
@@ -95,8 +127,97 @@ class TSEngine {
     this.registerTargets();
     this.buildImplementers();
     this.indexCalls();
+    this.indexTemplates();
     this.loaded = true;
     return { funcs: this.funcs.size };
+  }
+
+  // Index every @Component's template (inline or templateUrl) as a synthetic
+  // frame whose call sites resolve to the component's own methods. Component
+  // methods are already registered as targets, so template calls reuse them.
+  private indexTemplates() {
+    for (const sf of this.project.getSourceFiles()) {
+      if (sf.isInNodeModules() || sf.isDeclarationFile()) continue;
+      for (const cls of sf.getClasses()) {
+        const dec = cls.getDecorator("Component");
+        if (!dec) continue;
+        const obj = dec.getArguments()[0];
+        if (!obj || !Node.isObjectLiteralExpression(obj)) continue;
+
+        let html: string | undefined;
+        let templateFile = sf.getFilePath();
+        let templateId = "";
+        let startLine = 1;
+
+        const tmplProp = obj.getProperty("template");
+        const urlProp = obj.getProperty("templateUrl");
+        if (tmplProp && Node.isPropertyAssignment(tmplProp)) {
+          const init = tmplProp.getInitializer();
+          if (init && (Node.isStringLiteral(init) || Node.isNoSubstitutionTemplateLiteral(init))) {
+            html = init.getLiteralText();
+            startLine = init.getStartLineNumber();
+            templateId = `${sf.getFilePath()}#template@${init.getStart()}`;
+          }
+        } else if (urlProp && Node.isPropertyAssignment(urlProp)) {
+          const init = urlProp.getInitializer();
+          if (init && (Node.isStringLiteral(init) || Node.isNoSubstitutionTemplateLiteral(init))) {
+            const abs = resolvePath(dirname(sf.getFilePath()), init.getLiteralText());
+            try {
+              html = readFileSync(abs, "utf8");
+              templateFile = abs;
+              templateId = `${abs}#template`;
+            } catch {
+              html = undefined;
+            }
+          }
+        }
+        if (html === undefined || !templateId) continue;
+
+        const className = cls.getName() ?? "(anonymous)";
+        const calls: CallSite[] = [];
+        for (const tc of collectTemplateCalls(html, templateFile)) {
+          const callId = `${templateId}:${tc.start}`;
+          let kind: CallKind = "indirect";
+          let target: string | undefined;
+          if (tc.implicit) {
+            const m = cls.getMethod(tc.name);
+            if (m && m.getBody()) {
+              const tid = targetId(m);
+              if (this.funcs.has(tid)) {
+                kind = "direct";
+                target = tid;
+              }
+            }
+          }
+          this.callsById.set(callId, { kind, target });
+          calls.push({
+            id: callId,
+            spanStart: tc.start,
+            spanEnd: tc.end,
+            displayName: tc.displayName,
+            kind,
+            targetId: target,
+          });
+        }
+
+        const frame: Frame = {
+          id: templateId,
+          file: templateFile,
+          language: "html",
+          startLine,
+          endLine: startLine + html.split("\n").length - 1,
+          source: html,
+          calls,
+        };
+        this.templates.set(templateId, {
+          id: templateId,
+          name: `${className} ⟨template⟩`,
+          file: templateFile,
+          line: startLine,
+          frame,
+        });
+      }
+    }
   }
 
   // Map each interface (and abstract class) to the concrete classes that
@@ -276,24 +397,32 @@ class TSEngine {
 
   lookupSymbol(name: string): string {
     if (!this.loaded) throw new Error("project not loaded");
-    if (this.funcs.has(name)) return name; // exact target id (picker round-trip)
+    if (this.funcs.has(name) || this.templates.has(name)) return name; // exact id round-trip
 
-    const matches: FuncInfo[] = [];
+    const q = name.toLowerCase();
+    const matches: { id: string; label: string }[] = [];
     for (const fi of this.funcs.values()) {
       const base = fi.name.includes(".") ? fi.name.slice(fi.name.lastIndexOf(".") + 1) : fi.name;
-      if (fi.name === name || base === name) matches.push(fi);
+      if (fi.name === name || base === name) matches.push({ id: fi.id, label: fi.name });
+    }
+    for (const t of this.templates.values()) {
+      if (t.name === name || t.name.toLowerCase().includes(q)) matches.push({ id: t.id, label: t.name });
     }
     if (matches.length === 0) throw new Error(`no symbol matches ${JSON.stringify(name)}`);
-    matches.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    matches.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
     return matches[0].id;
   }
 
   frame(id: string): Frame {
     if (!this.loaded) throw new Error("project not loaded");
     const fi = this.funcs.get(id);
-    if (!fi) throw new Error(`unknown target ${JSON.stringify(id)}`);
-    if (!fi.frame) fi.frame = this.buildFrame(fi);
-    return fi.frame;
+    if (fi) {
+      if (!fi.frame) fi.frame = this.buildFrame(fi);
+      return fi.frame;
+    }
+    const tpl = this.templates.get(id);
+    if (tpl) return tpl.frame;
+    throw new Error(`unknown target ${JSON.stringify(id)}`);
   }
 
   frameForCall(callId: string, choice: number): Frame {
@@ -330,8 +459,72 @@ class TSEngine {
       });
       if (out.length >= limit) break;
     }
+    // Surface component templates too.
+    for (const t of [...this.templates.values()].sort((a, b) => (a.id < b.id ? -1 : 1))) {
+      if (out.length >= limit) break;
+      if (q && !t.name.toLowerCase().includes(q)) continue;
+      out.push({ targetId: t.id, label: t.name, file: t.file, line: t.line });
+    }
     return out;
   }
+}
+
+// Parse an Angular template and collect every method invocation in a binding
+// expression (event handler, interpolation, property binding). Offsets are
+// UTF-16 string indices into `html`, matching how the frontend reads them.
+function collectTemplateCalls(html: string, fileForDiag: string): TplCall[] {
+  let parsed;
+  try {
+    parsed = parseTemplate(html, fileForDiag, { preserveWhitespaces: true });
+  } catch {
+    return [];
+  }
+
+  const exprs: AST[] = [];
+  class NodeCollector extends TmplAstRecursiveVisitor {
+    visitBoundEvent(e: { handler?: AST }) {
+      if (e.handler) exprs.push(e.handler);
+    }
+    visitBoundText(t: { value?: AST }) {
+      if (t.value) exprs.push(t.value);
+    }
+    visitBoundAttribute(a: { value?: AST }) {
+      if (a.value) exprs.push(a.value);
+    }
+  }
+  try {
+    tmplAstVisitAll(new NodeCollector(), parsed.nodes);
+  } catch {
+    return [];
+  }
+
+  const calls: TplCall[] = [];
+  class CallFinder extends RecursiveAstVisitor {
+    visitCall(node: { receiver?: unknown }, ctx: unknown) {
+      const recv = node.receiver as
+        | { name?: string; nameSpan?: { start: number; end: number }; receiver?: unknown }
+        | undefined;
+      if (recv && recv.nameSpan && typeof recv.name === "string") {
+        const implicit = recv.receiver instanceof ImplicitReceiver; // covers `this.x` and `x`
+        const inner = recv.receiver as { name?: string } | undefined;
+        const displayName =
+          implicit || !inner || typeof inner.name !== "string"
+            ? recv.name
+            : `${inner.name}.${recv.name}`;
+        calls.push({ name: recv.name, displayName, start: recv.nameSpan.start, end: recv.nameSpan.end, implicit });
+      }
+      super.visitCall(node as never, ctx);
+    }
+  }
+  for (const e of exprs) {
+    const ast = (e as { ast?: AST }).ast ?? e;
+    try {
+      (ast as { visit: (v: RecursiveAstVisitor, ctx: unknown) => void }).visit(new CallFinder(), null);
+    } catch {
+      /* skip a malformed expression */
+    }
+  }
+  return calls;
 }
 
 // ---- helpers ----
