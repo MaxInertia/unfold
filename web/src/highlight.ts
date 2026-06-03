@@ -8,7 +8,7 @@ function getHighlighter(): Promise<Highlighter> {
   if (!cached) {
     cached = createHighlighter({
       themes: ["github-light", "github-dark"],
-      langs: ["go", "typescript", "javascript", "tsx"],
+      langs: ["go", "typescript", "javascript", "tsx", "html"],
     });
   }
   return cached;
@@ -56,6 +56,7 @@ function supportedLang(lang: string): string {
     case "typescript":
     case "tsx":
     case "javascript":
+    case "html":
       return lang;
     default:
       return "go";
