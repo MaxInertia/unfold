@@ -16,8 +16,8 @@ import {
   Project,
   SyntaxKind,
   type CallExpression,
+  type ClassDeclaration,
   type Node as TNode,
-  type SourceFile,
 } from "ts-morph";
 
 // ---- wire types (mirror internal/model) ----
@@ -72,6 +72,9 @@ class TSEngine {
   private project!: Project;
   private funcs = new Map<string, FuncInfo>();
   private callsById = new Map<string, CallInfo>();
+  // Keyed by the interface/abstract-class declaration's node key; value is
+  // the concrete classes that implement/extend it.
+  private implementers = new Map<string, ClassDeclaration[]>();
   private loaded = false;
 
   load(dir: string): { funcs: number } {
@@ -90,9 +93,39 @@ class TSEngine {
     }
 
     this.registerTargets();
+    this.buildImplementers();
     this.indexCalls();
     this.loaded = true;
     return { funcs: this.funcs.size };
+  }
+
+  // Map each interface (and abstract class) to the concrete classes that
+  // implement (or extend) it, so an interface-dispatched call can offer its
+  // candidate bodies. This mirrors the Go engine's implementer index.
+  // Coverage is the explicit `implements`/`extends` graph; purely
+  // structural (duck-typed) implementers without a clause are not detected.
+  private buildImplementers() {
+    for (const sf of this.project.getSourceFiles()) {
+      if (sf.isInNodeModules() || sf.isDeclarationFile()) continue;
+      for (const cls of sf.getClasses()) {
+        for (const impl of cls.getImplements()) {
+          const owner = heritageDecl(impl);
+          if (owner) this.addImplementer(owner, cls);
+        }
+        const ext = cls.getExtends();
+        if (ext) {
+          const owner = heritageDecl(ext);
+          if (owner && Node.isClassDeclaration(owner)) this.addImplementer(owner, cls);
+        }
+      }
+    }
+  }
+
+  private addImplementer(ownerDecl: TNode, cls: ClassDeclaration) {
+    const key = targetId(ownerDecl);
+    const arr = this.implementers.get(key) ?? [];
+    arr.push(cls);
+    this.implementers.set(key, arr);
   }
 
   // Pass 1: register every function-like declaration as a target.
@@ -218,9 +251,27 @@ class TSEngine {
     return { kind: "indirect" };
   }
 
-  // Phase 5b: no implementers yet.
-  private candidatesFor(_decl: TNode): { targetId: string; label: string }[] {
-    return [];
+  // Enumerate the concrete-method candidates for an interface/abstract
+  // method declaration: every implementing class's method of the same name
+  // that we have a registered body for. Stable (sorted) so choice indexes
+  // are deterministic.
+  private candidatesFor(methodDecl: TNode): { targetId: string; label: string }[] {
+    const owner = methodDecl.getParent();
+    if (!owner) return [];
+    const name = (methodDecl as { getName?: () => string }).getName?.() ?? "";
+    if (!name) return [];
+
+    const out: { targetId: string; label: string }[] = [];
+    for (const cls of this.implementers.get(targetId(owner)) ?? []) {
+      const m = cls.getMethod(name);
+      if (!m || !m.getBody()) continue;
+      const id = targetId(m);
+      if (this.funcs.has(id)) {
+        out.push({ targetId: id, label: `${cls.getName() ?? "?"}.${name}` });
+      }
+    }
+    out.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+    return out;
   }
 
   lookupSymbol(name: string): string {
@@ -287,6 +338,20 @@ class TSEngine {
 
 function targetId(node: TNode): string {
   return `${node.getSourceFile().getFilePath()}#${node.getStart()}`;
+}
+
+// Resolve a heritage clause (`implements X` / `extends X`) to the interface
+// or class declaration it names, following import aliases.
+function heritageDecl(node: TNode): TNode | undefined {
+  const expr = (node as { getExpression?: () => TNode }).getExpression?.();
+  if (!expr) return undefined;
+  let sym = expr.getSymbol();
+  if (sym) {
+    const aliased = sym.getAliasedSymbol();
+    if (aliased) sym = aliased;
+  }
+  const decls = sym?.getDeclarations() ?? [];
+  return decls.find((d) => Node.isInterfaceDeclaration(d) || Node.isClassDeclaration(d));
 }
 
 // The function-name node a call decorates: `foo` in foo(), `bar` in x.bar().
