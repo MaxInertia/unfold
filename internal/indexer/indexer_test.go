@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 // TestLoadSelf indexes the unfold module itself. It's a sanity check, not
@@ -203,6 +204,71 @@ func TestInterfaceCandidates(t *testing.T) {
 	if clamped.ID != first.ID {
 		t.Errorf("choice=99 should clamp to 0; got %s, want %s", clamped.ID, first.ID)
 	}
+}
+
+// TestUTF16SpanOffsets verifies call-site span offsets are UTF-16 code-unit
+// indices into Source (what the frontend reads), not UTF-8 byte offsets.
+// resolveCall is a good probe: its comments contain em-dashes (3 bytes, 1
+// UTF-16 unit), so byte offsets would drift the spans right.
+func TestUTF16SpanOffsets(t *testing.T) {
+	idx := New()
+	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	id, err := idx.LookupSymbol("resolveCall")
+	if err != nil {
+		t.Fatalf("LookupSymbol(resolveCall): %v", err)
+	}
+	frame, err := idx.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame: %v", err)
+	}
+
+	// Sanity: the probe only means something if the source has non-ASCII.
+	hasNonASCII := false
+	for _, r := range frame.Source {
+		if r > 127 {
+			hasNonASCII = true
+			break
+		}
+	}
+	if !hasNonASCII {
+		t.Skip("resolveCall source is all ASCII; probe is meaningless")
+	}
+
+	driftSeen := false
+	for _, c := range frame.Calls {
+		want := c.DisplayName
+		if dot := strings.LastIndex(want, "."); dot >= 0 {
+			want = want[dot+1:]
+		}
+		// UTF-16 slice (what the frontend does) must recover the name token.
+		if got := utf16SliceStr(frame.Source, c.SpanStart, c.SpanEnd); got != want {
+			t.Errorf("UTF-16 span for %q sliced to %q, want %q", c.DisplayName, got, want)
+		}
+		// If a naive byte slice differs, this span is one the fix corrected.
+		if byteSlice(frame.Source, c.SpanStart, c.SpanEnd) != want {
+			driftSeen = true
+		}
+	}
+	if !driftSeen {
+		t.Error("expected at least one span where byte offsets would have drifted; none found")
+	}
+}
+
+func utf16SliceStr(s string, start, end int) string {
+	u := utf16.Encode([]rune(s))
+	if start < 0 || end > len(u) || start > end {
+		return ""
+	}
+	return string(utf16.Decode(u[start:end]))
+}
+
+func byteSlice(s string, start, end int) string {
+	if start < 0 || end > len(s) || start > end {
+		return ""
+	}
+	return s[start:end]
 }
 
 func findCall(calls []CallSite, pred func(CallSite) bool) bool {

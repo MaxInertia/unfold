@@ -17,9 +17,37 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"golang.org/x/tools/go/packages"
 )
+
+// utf16Offset returns the number of UTF-16 code units in b[:byteOffset].
+// The frontend indexes a function's source as a JavaScript (UTF-16) string,
+// so call-site span offsets must be expressed in UTF-16 units, not UTF-8
+// bytes. ASCII text counts one unit per byte (this is the identity); runes
+// above the BMP count as two units (a surrogate pair).
+func utf16Offset(b []byte, byteOffset int) int {
+	if byteOffset > len(b) {
+		byteOffset = len(b)
+	}
+	n := 0
+	for i := 0; i < byteOffset; {
+		r, size := utf8.DecodeRune(b[i:])
+		if r == utf8.RuneError && size <= 1 {
+			n++ // invalid byte — count it as one unit and advance
+			i++
+			continue
+		}
+		if r > 0xFFFF {
+			n += 2 // encoded as a surrogate pair in UTF-16
+		} else {
+			n++
+		}
+		i += size
+	}
+	return n
+}
 
 // TargetID uniquely identifies a function across the loaded module set.
 // It is the qualified name from go/types (*types.Func).FullName, e.g.
@@ -471,15 +499,20 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 		return nil, err
 	}
 
+	// Span offsets are reported as UTF-16 code-unit indices into Source,
+	// because the frontend indexes the source as a JavaScript (UTF-16)
+	// string. Emitting raw UTF-8 byte offsets would drift the highlight
+	// right by one unit per extra byte of any non-ASCII rune before the
+	// span (e.g. an em-dash in a comment is 3 bytes but 1 UTF-16 unit).
 	calls := make([]CallSite, 0, len(fi.calls))
 	base := startPos.Offset
 	for _, c := range fi.calls {
-		callStart := i.fset.Position(c.pos).Offset - base
-		callEnd := i.fset.Position(c.end).Offset - base
+		byteStart := i.fset.Position(c.pos).Offset - base
+		byteEnd := i.fset.Position(c.end).Offset - base
 		calls = append(calls, CallSite{
 			ID:          c.id,
-			SpanStart:   callStart,
-			SpanEnd:     callEnd,
+			SpanStart:   utf16Offset(src, byteStart),
+			SpanEnd:     utf16Offset(src, byteEnd),
 			DisplayName: c.displayName,
 			Kind:        c.kind,
 			TargetID:    c.target,
