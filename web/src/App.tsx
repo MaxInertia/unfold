@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { Frame } from "./Frame";
+import { CallTree } from "./CallTree";
 import { fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
+
+const TREE_COLLAPSED_KEY = "unfold.tree.collapsed";
 
 export function App() {
   return (
@@ -19,6 +22,13 @@ function AppShell() {
   const [rootFrame, setRootFrame] = useState<FrameT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [treeCollapsed, setTreeCollapsed] = useState(
+    () => localStorage.getItem(TREE_COLLAPSED_KEY) === "1",
+  );
+
+  useEffect(() => {
+    localStorage.setItem(TREE_COLLAPSED_KEY, treeCollapsed ? "1" : "0");
+  }, [treeCollapsed]);
 
   useEffect(() => {
     if (!symbol) {
@@ -47,29 +57,67 @@ function AppShell() {
   }, []);
 
   return (
-    <div className="app">
+    <div className={`app${treeCollapsed ? " app--tree-collapsed" : ""}`}>
       <header className="app-header">
         <h1>unfold</h1>
         {target && <span className="app-target">target: <code>{target}</code></span>}
       </header>
-      <SymbolPicker onPick={(s) => store.setSymbol(s)} />
-      {error && <div className="app-error">{error}</div>}
-      {loading && <div className="app-loading">loading…</div>}
-      {rootFrame && (
-        <div className="app-root-frame">
-          <Frame frame={rootFrame} path={[]} />
+      <div className="app-main">
+        <aside className={`tree-panel${treeCollapsed ? " tree-panel--collapsed" : ""}`}>
+          {treeCollapsed ? (
+            <button
+              type="button"
+              className="tree-expand"
+              onClick={() => setTreeCollapsed(false)}
+              title="show call tree"
+              aria-label="show call tree"
+            >
+              <span className="tree-expand-icon">›</span>
+              <span className="tree-expand-label">call tree</span>
+            </button>
+          ) : rootFrame ? (
+            <CallTree rootFrame={rootFrame} onCollapse={() => setTreeCollapsed(true)} />
+          ) : (
+            <div className="tree-inner">
+              <div className="tree-header">
+                <span className="tree-title">call tree</span>
+                <button
+                  type="button"
+                  className="tree-collapse"
+                  onClick={() => setTreeCollapsed(true)}
+                  title="collapse panel"
+                  aria-label="collapse call tree"
+                >
+                  ‹
+                </button>
+              </div>
+              <p className="tree-placeholder">Pick a function to see its call tree.</p>
+            </div>
+          )}
+        </aside>
+        <div className="app-content">
+          <SymbolPicker onPick={(s) => store.setSymbol(s)} />
+          {error && <div className="app-error">{error}</div>}
+          {loading && <div className="app-loading">loading…</div>}
+          {rootFrame && (
+            <div className="app-root-frame">
+              <Frame frame={rootFrame} path={[]} />
+            </div>
+          )}
+          {!rootFrame && !loading && !error && (
+            <p className="app-hint">
+              Search for a function above and select one to start. Click any
+              underlined call site to expand its body inline; interface calls
+              surface a dropdown to pick which implementation to view. The
+              call tree on the left mirrors what you expand — click a node to
+              unfold it here and there at once. Click a line number to start a
+              selection, shift-click another to extend, then "fold" to collapse
+              the range. URL hash carries your view — reload preserves it, and
+              the link is shareable.
+            </p>
+          )}
         </div>
-      )}
-      {!rootFrame && !loading && !error && (
-        <p className="app-hint">
-          Search for a function above and select one to start. Click any
-          underlined call site to expand its body inline; interface calls
-          surface a dropdown to pick which implementation to view. Click a
-          line number to start a selection, shift-click another to extend,
-          then "fold" to collapse the range. URL hash carries your view —
-          reload preserves it, and the link is shareable.
-        </p>
-      )}
+      </div>
     </div>
   );
 }
