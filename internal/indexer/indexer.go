@@ -19,6 +19,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/MaxInertia/unfold/internal/model"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -49,70 +50,29 @@ func utf16Offset(b []byte, byteOffset int) int {
 	return n
 }
 
-// TargetID uniquely identifies a function across the loaded module set.
-// It is the qualified name from go/types (*types.Func).FullName, e.g.
-// "github.com/x/y.(*T).Method" or "github.com/x/y.Func".
-type TargetID string
-
-// CallID uniquely identifies a call site. It is "<file>:<byte-offset>".
-type CallID string
-
-// CallKind classifies a call site by how its target is resolved.
-type CallKind string
-
-const (
-	KindDirect    CallKind = "direct"    // resolved to one specific function
-	KindInterface CallKind = "interface" // dispatched through an interface (Phase 2 enumerates candidates)
-	KindIndirect  CallKind = "indirect"  // through a function value, builtin, or otherwise unresolvable
+// The wire types live in internal/model so every engine emits the same
+// JSON shapes. These aliases keep the indexer's call sites terse and let
+// existing callers/tests continue to reference indexer.Frame etc. For the
+// Go engine, TargetID is *types.Func.FullName (e.g.
+// "github.com/x/y.(*T).Method") and CallID is "<file>:<byte-offset>".
+type (
+	TargetID     = model.TargetID
+	CallID       = model.CallID
+	CallKind     = model.CallKind
+	Frame        = model.Frame
+	CallSite     = model.CallSite
+	Candidate    = model.Candidate
+	SearchResult = model.SearchResult
 )
 
-// Frame is the unit the frontend renders: a function's source plus the
-// call sites inside it. Byte offsets in CallSite.SpanStart/SpanEnd are
-// relative to Source (not to the original file) so the frontend can
-// decorate spans without knowing where the body lives on disk.
-type Frame struct {
-	ID        TargetID   `json:"id"`
-	File      string     `json:"file"`
-	Language  string     `json:"language"`
-	StartLine int        `json:"startLine"`
-	EndLine   int        `json:"endLine"`
-	Source    string     `json:"source"`
-	Calls     []CallSite `json:"calls"`
-}
+const (
+	KindDirect    = model.KindDirect
+	KindInterface = model.KindInterface
+	KindIndirect  = model.KindIndirect
+)
 
-// CallSite describes one call inside a function body.
-type CallSite struct {
-	ID          CallID   `json:"id"`
-	SpanStart   int      `json:"spanStart"`
-	SpanEnd     int      `json:"spanEnd"`
-	DisplayName string   `json:"displayName"`
-	Kind        CallKind `json:"kind"`
-
-	// TargetID is set for direct calls (the resolved target). Empty for
-	// interface and indirect calls.
-	TargetID TargetID `json:"targetId,omitempty"`
-
-	// Candidates lists possible expansion targets for interface calls.
-	// Empty for direct (TargetID is the only target) and indirect calls.
-	// The first candidate is the default chosen by /api/body when no
-	// choice query param is supplied.
-	Candidates []Candidate `json:"candidates,omitempty"`
-}
-
-// Candidate is one concrete implementation of an interface method, used
-// to populate the impl-switcher dropdown.
-type Candidate struct {
-	TargetID TargetID `json:"targetId"`
-	Label    string   `json:"label"` // e.g. "*foo.RealService.Process"
-}
-
-// SearchResult is one hit returned from Indexer.Search.
-type SearchResult struct {
-	TargetID TargetID `json:"targetId"`
-	Label    string   `json:"label"`
-	File     string   `json:"file"`
-	Line     int      `json:"line"`
-}
+// Indexer implements model.Engine.
+var _ model.Engine = (*Indexer)(nil)
 
 // Indexer holds loaded packages and the per-function call-site index.
 type Indexer struct {

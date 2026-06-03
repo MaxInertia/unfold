@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/MaxInertia/unfold/internal/indexer"
+	"github.com/MaxInertia/unfold/internal/engine"
 	"github.com/MaxInertia/unfold/internal/server"
 )
 
@@ -22,7 +22,8 @@ func main() {
 	var (
 		addr   = flag.String("addr", "127.0.0.1:0", "address to bind (default: random free port on localhost)")
 		noOpen = flag.Bool("no-open", false, "don't open the browser")
-		dir    = flag.String("dir", "", "module directory to load packages from (default: cwd)")
+		dir    = flag.String("dir", "", "project directory to load from (default: cwd)")
+		lang   = flag.String("lang", "", "force engine language: go|typescript (default: autodetect)")
 	)
 	flag.Parse()
 
@@ -31,9 +32,13 @@ func main() {
 		target = "./..."
 	}
 
-	idx := indexer.New()
-	if err := idx.Load(*dir, target); err != nil {
-		log.Fatalf("indexer load failed: %v", err)
+	detected, err := engine.Detect(*dir, *lang)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	eng, err := engine.Load(detected, *dir, target)
+	if err != nil {
+		log.Fatalf("%s engine load failed: %v", detected, err)
 	}
 
 	listener, err := net.Listen("tcp", *addr)
@@ -42,7 +47,7 @@ func main() {
 	}
 	url := fmt.Sprintf("http://%s", listener.Addr().String())
 
-	srv := server.New(idx)
+	srv := server.New(eng)
 	srv.SetTarget(target)
 	httpServer := &http.Server{Handler: srv.Handler()}
 

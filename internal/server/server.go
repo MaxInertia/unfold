@@ -7,24 +7,25 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/MaxInertia/unfold/internal/indexer"
+	"github.com/MaxInertia/unfold/internal/model"
 )
 
 //go:embed all:static/dist
 var staticFS embed.FS
 
 type Server struct {
-	idx    *indexer.Indexer
+	engine model.Engine
 	static fs.FS
 	target string
 }
 
-func New(idx *indexer.Indexer) *Server {
+// New builds a server backed by any indexing engine (Go or TypeScript).
+func New(engine model.Engine) *Server {
 	sub, err := fs.Sub(staticFS, "static/dist")
 	if err != nil {
 		panic(err)
 	}
-	return &Server{idx: idx, static: sub}
+	return &Server{engine: engine, static: sub}
 }
 
 // SetTarget records the indexer pattern (e.g. "./...") for the /api/health response.
@@ -51,12 +52,12 @@ func (s *Server) handleSymbol(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing required query param: name")
 		return
 	}
-	id, err := s.idx.LookupSymbol(name)
+	id, err := s.engine.LookupSymbol(name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	frame, err := s.idx.Frame(id)
+	frame, err := s.engine.Frame(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -76,7 +77,7 @@ func (s *Server) handleBody(w http.ResponseWriter, r *http.Request) {
 	case targetID != "" && callID != "":
 		writeError(w, http.StatusBadRequest, "specify exactly one of targetId or callId")
 	case targetID != "":
-		frame, err := s.idx.Frame(indexer.TargetID(targetID))
+		frame, err := s.engine.Frame(model.TargetID(targetID))
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -89,7 +90,7 @@ func (s *Server) handleBody(w http.ResponseWriter, r *http.Request) {
 				choice = n
 			}
 		}
-		frame, err := s.idx.FrameForCall(indexer.CallID(callID), choice)
+		frame, err := s.engine.FrameForCall(model.CallID(callID), choice)
 		if err != nil {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
@@ -110,7 +111,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"results": s.idx.Search(q, limit),
+		"results": s.engine.Search(q, limit),
 	})
 }
 
