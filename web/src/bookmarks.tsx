@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import type { TargetID } from "./types";
 
 // A bookmark is a saved symbol you can jump back to. We keep a display
@@ -81,18 +81,27 @@ export function toggleBookmark(b: Bookmark) {
 
 cache = read();
 
-// Subscribe a component to bookmark changes.
+function subscribe(onChange: () => void): () => void {
+  listeners.add(onChange);
+  return () => {
+    listeners.delete(onChange);
+  };
+}
+
+// Subscribe a component to bookmark changes. useSyncExternalStore is the
+// canonical way to read an external store: it can't miss an update between
+// render and subscribe, and it won't tear under concurrent rendering — both
+// of which a hand-rolled useState+useEffect subscription can. `cache` is a
+// stable reference that only changes when bookmarks change, so the snapshot
+// is correctly memoized.
 export function useBookmarks() {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const l = () => tick((n) => n + 1);
-    listeners.add(l);
-    return () => {
-      listeners.delete(l);
-    };
-  }, []);
+  const bookmarks = useSyncExternalStore(
+    subscribe,
+    () => cache,
+    () => cache,
+  );
   return {
-    bookmarks: cache,
+    bookmarks,
     isBookmarked,
     toggle: toggleBookmark,
     remove: removeBookmark,
