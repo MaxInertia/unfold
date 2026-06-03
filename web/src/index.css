@@ -47,21 +47,50 @@ body {
 }
 
 .app {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 1.5rem 1rem 4rem;
+  /* Full-bleed: the sidebar pins to the left edge and the code pane fills
+     the rest of the width, instead of a centered fixed-width column. */
+  max-width: none;
+  margin: 0;
+  padding: 1.5rem 0 4rem;
 }
 
-/* Two-column body: collapsible call-tree sidebar + main content. */
+.app-header {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+/* Two-column body: resizable sidebar (pinned left) + main content. */
 .app-main {
   display: flex;
   align-items: flex-start;
-  gap: 1.25rem;
+  gap: 0;
 }
 
 .app-content {
   flex: 1 1 auto;
   min-width: 0;
+  padding: 0 1rem;
+}
+
+/* Drag handle on the sidebar's right edge. Full row height so it's grabbable
+   anywhere along the seam; only tints on hover/drag. */
+.resize-handle {
+  flex: 0 0 7px;
+  align-self: stretch;
+  cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--card-border);
+  transition: background 0.12s;
+}
+
+.resize-handle:hover,
+body.resizing .resize-handle {
+  background: var(--call-border);
+}
+
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .app-header {

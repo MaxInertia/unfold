@@ -8,6 +8,8 @@ import { ViewStoreProvider, useViewStore } from "./viewState";
 import { setBookmarkProject, useBookmarks } from "./bookmarks";
 
 const TREE_COLLAPSED_KEY = "unfold.tree.collapsed";
+const SIDEBAR_WIDTH_KEY = "unfold.sidebar.width";
+const SIDEBAR_MIN = 200;
 
 export function App() {
   return (
@@ -28,10 +30,37 @@ function AppShell() {
     () => localStorage.getItem(TREE_COLLAPSED_KEY) === "1",
   );
   const [sidebarTab, setSidebarTab] = useState<"files" | "calls">("calls");
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return v >= SIDEBAR_MIN ? v : 280;
+  });
 
   useEffect(() => {
     localStorage.setItem(TREE_COLLAPSED_KEY, treeCollapsed ? "1" : "0");
   }, [treeCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  // Drag the handle on the sidebar's right edge to resize it.
+  function onResizeStart(e: React.PointerEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    const max = Math.max(280, Math.floor(window.innerWidth * 0.6));
+    const move = (ev: PointerEvent) => {
+      setSidebarWidth(Math.min(max, Math.max(SIDEBAR_MIN, startW + ev.clientX - startX)));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.classList.remove("resizing");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    document.body.classList.add("resizing");
+  }
 
   useEffect(() => {
     if (!symbol) {
@@ -69,7 +98,10 @@ function AppShell() {
         {target && <span className="app-target">target: <code>{target}</code></span>}
       </header>
       <div className="app-main">
-        <aside className={`tree-panel${treeCollapsed ? " tree-panel--collapsed" : ""}`}>
+        <aside
+          className={`tree-panel${treeCollapsed ? " tree-panel--collapsed" : ""}`}
+          style={treeCollapsed ? undefined : { flex: `0 0 ${sidebarWidth}px` }}
+        >
           {treeCollapsed ? (
             <button
               type="button"
@@ -123,6 +155,15 @@ function AppShell() {
             </>
           )}
         </aside>
+        {!treeCollapsed && (
+          <div
+            className="resize-handle"
+            onPointerDown={onResizeStart}
+            role="separator"
+            aria-orientation="vertical"
+            title="drag to resize"
+          />
+        )}
         <div className="app-content">
           <SymbolPicker onPick={(s) => store.setSymbol(s)} />
           {error && <div className="app-error">{error}</div>}
