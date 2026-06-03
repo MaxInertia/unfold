@@ -183,6 +183,16 @@ func (e *Engine) Search(query string, limit int) []model.SearchResult {
 	return res.Results
 }
 
+func (e *Engine) Files() []string {
+	var res struct {
+		Files []string `json:"files"`
+	}
+	if err := e.call("files", map[string]any{}, &res); err != nil {
+		return nil
+	}
+	return res.Files
+}
+
 // Close shuts the sidecar down.
 func (e *Engine) Close() error {
 	if e.stdin != nil {

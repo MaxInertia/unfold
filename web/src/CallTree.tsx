@@ -7,36 +7,16 @@ import {
   type FramePath,
 } from "./viewState";
 
-interface CallTreeProps {
-  rootFrame: FrameT;
-  onCollapse: () => void;
-}
-
-// CallTree is a navigation sidebar mirroring the inline-view expansion
-// state. The top level lists the calls inside the focused (root) function;
-// expanding a node unfolds its callee both here and in the main view (both
-// read/write the same ViewStore), nesting the callee's own calls beneath.
-export function CallTree({ rootFrame, onCollapse }: CallTreeProps) {
+// CallTree is the sidebar's "calls" tab body: it mirrors the inline-view
+// expansion state. The top level lists the calls inside the focused (root)
+// function; expanding a node unfolds its callee both here and in the main
+// view (both read/write the same ViewStore), nesting callees beneath. The
+// surrounding card / tab chrome lives in App.
+export function CallTree({ rootFrame }: { rootFrame: FrameT }) {
   return (
-    <div className="tree-inner">
-      <div className="tree-header">
-        <span className="tree-title">call tree</span>
-        <button
-          type="button"
-          className="tree-collapse"
-          onClick={onCollapse}
-          title="collapse panel"
-          aria-label="collapse call tree"
-        >
-          ‹
-        </button>
-      </div>
-      <div className="tree-body">
-        <ul className="tree-list tree-list--root">
-          <RootNode rootFrame={rootFrame} />
-        </ul>
-      </div>
-    </div>
+    <ul className="tree-list tree-list--root">
+      <RootNode rootFrame={rootFrame} />
+    </ul>
   );
 }
 
