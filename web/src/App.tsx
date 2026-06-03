@@ -4,6 +4,7 @@ import { CallTree } from "./CallTree";
 import { fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
+import { setBookmarkProject, useBookmarks } from "./bookmarks";
 
 const TREE_COLLAPSED_KEY = "unfold.tree.collapsed";
 
@@ -52,7 +53,10 @@ function AppShell() {
   useEffect(() => {
     fetch("/api/health")
       .then((r) => r.json())
-      .then((h) => setTarget(h.target ?? null))
+      .then((h) => {
+        setTarget(h.target ?? null);
+        setBookmarkProject(h.target ?? null); // namespace bookmarks per project
+      })
       .catch(() => {});
   }, []);
 
@@ -69,30 +73,35 @@ function AppShell() {
               type="button"
               className="tree-expand"
               onClick={() => setTreeCollapsed(false)}
-              title="show call tree"
-              aria-label="show call tree"
+              title="show sidebar"
+              aria-label="show sidebar"
             >
               <span className="tree-expand-icon">›</span>
-              <span className="tree-expand-label">call tree</span>
+              <span className="tree-expand-label">tree · marks</span>
             </button>
-          ) : rootFrame ? (
-            <CallTree rootFrame={rootFrame} onCollapse={() => setTreeCollapsed(true)} />
           ) : (
-            <div className="tree-inner">
-              <div className="tree-header">
-                <span className="tree-title">call tree</span>
-                <button
-                  type="button"
-                  className="tree-collapse"
-                  onClick={() => setTreeCollapsed(true)}
-                  title="collapse panel"
-                  aria-label="collapse call tree"
-                >
-                  ‹
-                </button>
-              </div>
-              <p className="tree-placeholder">Pick a function to see its call tree.</p>
-            </div>
+            <>
+              <BookmarksPanel onOpen={(id) => store.setSymbol(id)} />
+              {rootFrame ? (
+                <CallTree rootFrame={rootFrame} onCollapse={() => setTreeCollapsed(true)} />
+              ) : (
+                <div className="tree-inner">
+                  <div className="tree-header">
+                    <span className="tree-title">call tree</span>
+                    <button
+                      type="button"
+                      className="tree-collapse"
+                      onClick={() => setTreeCollapsed(true)}
+                      title="collapse panel"
+                      aria-label="collapse sidebar"
+                    >
+                      ‹
+                    </button>
+                  </div>
+                  <p className="tree-placeholder">Pick a function to see its call tree.</p>
+                </div>
+              )}
+            </>
           )}
         </aside>
         <div className="app-content">
@@ -120,6 +129,53 @@ function AppShell() {
       </div>
     </div>
   );
+}
+
+// The saved-symbols list, shown atop the sidebar. Hidden when empty — the
+// star in each frame header is how you add one.
+function BookmarksPanel({ onOpen }: { onOpen: (id: string) => void }) {
+  const { bookmarks, remove } = useBookmarks();
+  if (bookmarks.length === 0) return null;
+  return (
+    <div className="bookmarks">
+      <div className="bookmarks-header">
+        <span className="bookmarks-title">bookmarks</span>
+        <span className="bookmarks-count">{bookmarks.length}</span>
+      </div>
+      <ul className="bookmarks-list">
+        {bookmarks.map((b) => (
+          <li key={b.targetId} className="bookmark">
+            <button
+              type="button"
+              className="bookmark-open"
+              onClick={() => onOpen(b.targetId)}
+              title={b.targetId}
+            >
+              <span className="bookmark-name">{b.title}</span>
+              <span className="bookmark-loc">
+                {shortFile(b.file)}
+                {b.line ? `:${b.line}` : ""}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="bookmark-remove"
+              onClick={() => remove(b.targetId)}
+              title="remove bookmark"
+              aria-label="remove bookmark"
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function shortFile(p: string): string {
+  const parts = p.split("/");
+  return parts.slice(-2).join("/");
 }
 
 function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {

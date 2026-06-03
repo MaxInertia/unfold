@@ -30,7 +30,12 @@ const (
 // frontend indexes the JS (UTF-16) source string, so multibyte text must
 // be accounted for consistently.
 type Frame struct {
-	ID        TargetID   `json:"id"`
+	ID TargetID `json:"id"`
+	// Title is a short human-readable name for the frame (e.g. "Indexer.Frame"
+	// or "English.greet"), used for the frame header and bookmark labels. The
+	// ID is engine-specific and often not display-friendly (the TS engine's is
+	// "<file>#<pos>"), so engines supply a clean Title.
+	Title     string     `json:"title,omitempty"`
 	File      string     `json:"file"`
 	Language  string     `json:"language"` // "go", "typescript", "tsx", ...
 	StartLine int        `json:"startLine"`

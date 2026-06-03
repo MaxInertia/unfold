@@ -5,6 +5,7 @@ import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
 import type { CallID, CallSite, Frame as FrameT } from "./types";
 import { pathKey, useFrameSlice, useViewStore, type FramePath } from "./viewState";
+import { useBookmarks } from "./bookmarks";
 
 export interface FoldRange {
   start: number;
@@ -20,6 +21,7 @@ interface FrameProps {
 export function Frame({ frame, path, onClose }: FrameProps) {
   const store = useViewStore();
   const slice = useFrameSlice(path);
+  const bookmarks = useBookmarks();
   const [hast, setHast] = useState<HastRoot | null>(null);
   // Loaded child frames are component-local; the URL only persists the
   // intent (which calls are expanded with what choice).
@@ -291,7 +293,23 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   return (
     <div className="frame" data-frame-key={pathKey(path)}>
       <header className="frame-header">
-        <span className="frame-title">{prettyName(frame.id)}</span>
+        <button
+          type="button"
+          className={`frame-bookmark${bookmarks.isBookmarked(frame.id) ? " frame-bookmark--on" : ""}`}
+          onClick={() =>
+            bookmarks.toggle({
+              targetId: frame.id,
+              title: frameTitle(frame),
+              file: frame.file,
+              line: frame.startLine,
+            })
+          }
+          title={bookmarks.isBookmarked(frame.id) ? "remove bookmark" : "bookmark this function"}
+          aria-label="toggle bookmark"
+        >
+          {bookmarks.isBookmarked(frame.id) ? "★" : "☆"}
+        </button>
+        <span className="frame-title">{frameTitle(frame)}</span>
         <span className="frame-loc">
           {shortPath(frame.file)}:{frame.startLine}
         </span>
@@ -413,6 +431,10 @@ function lineForOffset(source: string, offset: number): number {
   const stop = Math.min(offset, source.length);
   for (let i = 0; i < stop; i++) if (source.charCodeAt(i) === 10) line++;
   return line;
+}
+
+function frameTitle(frame: FrameT): string {
+  return frame.title && frame.title.trim() ? frame.title : prettyName(frame.id);
 }
 
 function prettyName(id: string): string {

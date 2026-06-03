@@ -49,6 +49,7 @@ interface CallSite {
 
 interface Frame {
   id: string;
+  title?: string; // display-friendly name, e.g. "English.greet"
   file: string;
   language: string;
   startLine: number;
@@ -202,6 +203,7 @@ class TSEngine {
 
         const frame: Frame = {
           id: templateId,
+          title: `${className} ⟨template⟩`,
           file: templateFile,
           language: "html",
           startLine,
@@ -304,6 +306,7 @@ class TSEngine {
 
     return {
       id: fi.id,
+      title: fi.name,
       file: sf.getFilePath(),
       language: sf.getFilePath().endsWith(".tsx") ? "tsx" : "typescript",
       startLine: fi.decl.getStartLineNumber(),
