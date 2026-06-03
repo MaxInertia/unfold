@@ -72,18 +72,19 @@ func TestLoadSelf(t *testing.T) {
 		}
 	}
 
-	// indexer.New() in main is package-level — must be direct and resolvable.
+	// engine.Load(...) in main is a package-level call — must be direct
+	// and resolvable into the internal/engine package.
 	if !findCall(frame.Calls, func(c CallSite) bool {
-		return c.DisplayName == "indexer.New" && c.Kind == KindDirect && c.TargetID != ""
+		return c.DisplayName == "engine.Load" && c.Kind == KindDirect && c.TargetID != ""
 	}) {
-		t.Errorf("expected a direct call to indexer.New in main; calls=%v", callSummary(frame.Calls))
+		t.Errorf("expected a direct call to engine.Load in main; calls=%v", callSummary(frame.Calls))
 	}
 
-	// idx.Load — method on concrete *Indexer, must resolve direct.
+	// engine.Detect — also a package-level call, must resolve direct.
 	if !findCall(frame.Calls, func(c CallSite) bool {
-		return c.DisplayName == "idx.Load" && c.Kind == KindDirect && c.TargetID != ""
+		return c.DisplayName == "engine.Detect" && c.Kind == KindDirect && c.TargetID != ""
 	}) {
-		t.Errorf("expected a direct call to idx.Load in main; calls=%v", callSummary(frame.Calls))
+		t.Errorf("expected a direct call to engine.Detect in main; calls=%v", callSummary(frame.Calls))
 	}
 }
 
@@ -103,26 +104,26 @@ func TestFrameForCall(t *testing.T) {
 		t.Fatalf("frame: %v", err)
 	}
 
-	// Find indexer.New() and follow it.
-	var newCall *CallSite
+	// Find engine.Load() and follow it.
+	var loadCall *CallSite
 	for i, c := range mainFrame.Calls {
-		if c.DisplayName == "indexer.New" {
-			newCall = &mainFrame.Calls[i]
+		if c.DisplayName == "engine.Load" {
+			loadCall = &mainFrame.Calls[i]
 			break
 		}
 	}
-	if newCall == nil {
-		t.Fatal("indexer.New call not found in main")
+	if loadCall == nil {
+		t.Fatal("engine.Load call not found in main")
 	}
-	callee, err := idx.FrameForCall(newCall.ID, 0)
+	callee, err := idx.FrameForCall(loadCall.ID, 0)
 	if err != nil {
 		t.Fatalf("FrameForCall: %v", err)
 	}
-	if !strings.Contains(callee.Source, "func New()") {
-		t.Errorf("callee source missing 'func New()': %s", truncate(callee.Source, 150))
+	if !strings.Contains(callee.Source, "func Load(") {
+		t.Errorf("callee source missing 'func Load(': %s", truncate(callee.Source, 150))
 	}
-	if !strings.Contains(string(callee.ID), "indexer.New") {
-		t.Errorf("callee target id %q doesn't include indexer.New", callee.ID)
+	if !strings.Contains(string(callee.ID), "engine.Load") {
+		t.Errorf("callee target id %q doesn't include engine.Load", callee.ID)
 	}
 }
 

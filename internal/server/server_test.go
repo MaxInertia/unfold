@@ -52,23 +52,23 @@ func TestEndpoints(t *testing.T) {
 	})
 
 	t.Run("body-by-targetId-then-follow-call", func(t *testing.T) {
-		// Resolve main, then follow indexer.New() from inside it.
+		// Resolve main, then follow engine.Load() from inside it.
 		var main indexer.Frame
 		getJSON(t, ts.URL+"/api/symbol?name=main", http.StatusOK, &main)
-		var newCallID indexer.CallID
+		var loadCallID indexer.CallID
 		for _, c := range main.Calls {
-			if c.DisplayName == "indexer.New" {
-				newCallID = c.ID
+			if c.DisplayName == "engine.Load" {
+				loadCallID = c.ID
 				break
 			}
 		}
-		if newCallID == "" {
-			t.Fatal("indexer.New call not found in main frame")
+		if loadCallID == "" {
+			t.Fatal("engine.Load call not found in main frame")
 		}
 		var callee indexer.Frame
-		getJSON(t, ts.URL+"/api/body?callId="+string(newCallID), http.StatusOK, &callee)
-		if !strings.Contains(callee.Source, "func New()") {
-			t.Errorf("callee source missing 'func New()': %s", callee.Source[:minInt(120, len(callee.Source))])
+		getJSON(t, ts.URL+"/api/body?callId="+string(loadCallID), http.StatusOK, &callee)
+		if !strings.Contains(callee.Source, "func Load(") {
+			t.Errorf("callee source missing 'func Load(': %s", callee.Source[:minInt(120, len(callee.Source))])
 		}
 	})
 
