@@ -10,6 +10,7 @@ import (
 
 	"github.com/MaxInertia/unfold/internal/indexer"
 	"github.com/MaxInertia/unfold/internal/model"
+	"github.com/MaxInertia/unfold/internal/tsengine"
 )
 
 // Lang names a supported engine language.
@@ -62,7 +63,7 @@ func Load(lang Lang, dir, target string) (model.Engine, error) {
 		}
 		return idx, nil
 	case LangTS:
-		return nil, fmt.Errorf("TypeScript support is not wired yet")
+		return tsengine.Load(dir, target)
 	default:
 		return nil, fmt.Errorf("unsupported language %q", lang)
 	}
