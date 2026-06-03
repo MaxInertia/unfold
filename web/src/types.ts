@@ -21,6 +21,7 @@ export interface Candidate {
 
 export interface Frame {
   id: TargetID;
+  title?: string; // display-friendly name; falls back to a prettified id
   file: string;
   language: string; // "go"
   startLine: number;

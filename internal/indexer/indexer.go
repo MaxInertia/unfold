@@ -482,6 +482,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 
 	return &Frame{
 		ID:        id,
+		Title:     goTitle(fi.obj),
 		File:      startPos.Filename,
 		Language:  "go",
 		StartLine: startPos.Line,
@@ -489,6 +490,25 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 		Source:    string(src),
 		Calls:     calls,
 	}, nil
+}
+
+// goTitle returns a short, display-friendly name for a function: "Func" for
+// package functions, "Recv.Method" for methods. (The TargetID is the fully
+// qualified FullName, which is too long for a header or bookmark label.)
+func goTitle(obj *types.Func) string {
+	name := obj.Name()
+	sig, _ := obj.Type().(*types.Signature)
+	if sig == nil || sig.Recv() == nil {
+		return name
+	}
+	recv := sig.Recv().Type()
+	if p, ok := recv.(*types.Pointer); ok {
+		recv = p.Elem()
+	}
+	if named, ok := recv.(*types.Named); ok {
+		return named.Obj().Name() + "." + name
+	}
+	return name
 }
 
 // FrameForCall returns a Frame for the chosen target of the given call.

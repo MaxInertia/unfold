@@ -677,6 +677,134 @@ body {
   letter-spacing: 0.03em;
 }
 
+/* Bookmark star in the frame header */
+.frame-bookmark {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 0;
+  padding: 0 0.1rem 0 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.frame-bookmark:hover {
+  opacity: 1;
+  color: var(--fg);
+}
+
+.frame-bookmark--on {
+  color: #eab308; /* gold — same in light/dark */
+  opacity: 1;
+}
+
+/* Bookmarks panel (top of the sidebar) */
+.bookmarks {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 0.7rem;
+}
+
+.bookmarks-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(127, 127, 127, 0.06);
+  border-bottom: 1px solid var(--card-border);
+  font-size: 0.8rem;
+}
+
+.bookmarks-title {
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.bookmarks-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.bookmarks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+}
+
+.bookmark {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  border-radius: 4px;
+}
+
+.bookmark:hover {
+  background: var(--call-bg);
+}
+
+.bookmark-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0.2rem 0.35rem;
+  cursor: pointer;
+}
+
+.bookmark-name {
+  font-size: 0.82rem;
+  color: var(--accent);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-loc {
+  font-size: 0.7rem;
+  color: var(--muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-remove {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.3rem;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.bookmark:hover .bookmark-remove {
+  opacity: 0.7;
+}
+
+.bookmark-remove:hover {
+  opacity: 1;
+  color: var(--error);
+}
+
 /* On narrow viewports drop the sidebar above the content. */
 @media (max-width: 820px) {
   .app-main {
