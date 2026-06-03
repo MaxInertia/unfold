@@ -4,7 +4,7 @@ import { fetchBodyByCall } from "./api";
 import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
 import type { CallID, CallSite, Frame as FrameT } from "./types";
-import { useFrameSlice, useViewStore, type FramePath } from "./viewState";
+import { pathKey, useFrameSlice, useViewStore, type FramePath } from "./viewState";
 
 export interface FoldRange {
   start: number;
@@ -289,7 +289,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     : 0;
 
   return (
-    <div className="frame">
+    <div className="frame" data-frame-key={pathKey(path)}>
       <header className="frame-header">
         <span className="frame-title">{prettyName(frame.id)}</span>
         <span className="frame-loc">

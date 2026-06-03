@@ -21,6 +21,13 @@ export interface FrameSlice {
 
 export type FramePath = { callId: CallID; choice: number }[];
 
+// Stable string key for a frame path. Used to tag rendered inline frames
+// (data-frame-key) so the call tree can scroll the matching frame into
+// view. The empty path (root frame) maps to "".
+export function pathKey(path: FramePath): string {
+  return path.map((p) => `${p.callId}#${p.choice}`).join(">");
+}
+
 export const emptySlice: FrameSlice = Object.freeze({
   folds: [],
   expansions: {},
