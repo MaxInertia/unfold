@@ -272,6 +272,58 @@ func byteSlice(s string, start, end int) string {
 	return s[start:end]
 }
 
+// TestFileFrame verifies Files() lists only main-module files and that a
+// "file:<path>" target yields a whole-file frame with expandable call sites.
+func TestFileFrame(t *testing.T) {
+	idx := New()
+	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	files := idx.Files()
+	if len(files) == 0 {
+		t.Fatal("Files() returned none")
+	}
+	var serverGo string
+	for _, f := range files {
+		if strings.Contains(f, "/go/pkg/mod/") || strings.Contains(f, "/go-build/") {
+			t.Errorf("Files() leaked a dependency file: %s", f)
+		}
+		if strings.HasSuffix(f, "internal/server/server.go") {
+			serverGo = f
+		}
+	}
+	if serverGo == "" {
+		t.Fatalf("server.go not in Files(): %v", files)
+	}
+
+	fr, err := idx.Frame(TargetID("file:" + serverGo))
+	if err != nil {
+		t.Fatalf("Frame(file:server.go): %v", err)
+	}
+	if fr.Title != "server.go" {
+		t.Errorf("title: got %q want server.go", fr.Title)
+	}
+	if !strings.Contains(fr.Source, "package server") {
+		t.Error("file frame source missing 'package server'")
+	}
+	if len(fr.Calls) == 0 {
+		t.Fatal("file frame has no call sites")
+	}
+	expandable := 0
+	for _, c := range fr.Calls {
+		if c.SpanStart < 0 || c.SpanEnd > len(fr.Source) || c.SpanStart >= c.SpanEnd {
+			t.Errorf("bad span for %q: [%d,%d)", c.DisplayName, c.SpanStart, c.SpanEnd)
+		}
+		if c.Kind == KindDirect && c.TargetID != "" {
+			expandable++
+		}
+	}
+	if expandable == 0 {
+		t.Error("file frame has no expandable (direct+target) calls")
+	}
+}
+
 func findCall(calls []CallSite, pred func(CallSite) bool) bool {
 	for _, c := range calls {
 		if pred(c) {

@@ -400,6 +400,7 @@ class TSEngine {
 
   lookupSymbol(name: string): string {
     if (!this.loaded) throw new Error("project not loaded");
+    if (name.startsWith("file:")) return name; // file pseudo-target
     if (this.funcs.has(name) || this.templates.has(name)) return name; // exact id round-trip
 
     const q = name.toLowerCase();
@@ -418,6 +419,7 @@ class TSEngine {
 
   frame(id: string): Frame {
     if (!this.loaded) throw new Error("project not loaded");
+    if (id.startsWith("file:")) return this.fileFrame(id.slice(5));
     const fi = this.funcs.get(id);
     if (fi) {
       if (!fi.frame) fi.frame = this.buildFrame(fi);
@@ -426,6 +428,58 @@ class TSEngine {
     const tpl = this.templates.get(id);
     if (tpl) return tpl.frame;
     throw new Error(`unknown target ${JSON.stringify(id)}`);
+  }
+
+  // Distinct source files holding at least one registered function.
+  files(): string[] {
+    if (!this.loaded) return [];
+    const set = new Set<string>();
+    for (const fi of this.funcs.values()) set.add(fi.decl.getSourceFile().getFilePath());
+    return [...set].sort();
+  }
+
+  // A whole-file Frame: full source plus every call site in the file (offsets
+  // file-relative). Call IDs match those built during indexing, so expanding
+  // a call from the file view goes through the normal frameForCall path.
+  private fileFrame(path: string): Frame {
+    const sf = this.project.getSourceFile(path);
+    if (!sf) throw new Error(`unknown file ${JSON.stringify(path)}`);
+    const source = sf.getFullText();
+
+    const calls: CallSite[] = [];
+    for (const fi of this.funcs.values()) {
+      if (fi.decl.getSourceFile().getFilePath() !== path) continue;
+      const body = bodyNode(fi.decl);
+      if (!body) continue;
+      for (const call of body.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        const expr = call.getExpression();
+        const nameNode = callNameNode(expr);
+        if (!nameNode) continue;
+        const id = `${path}:${call.getStart()}`;
+        const info = this.callsById.get(id) ?? this.classify(expr);
+        calls.push({
+          id,
+          spanStart: nameNode.getStart(), // file-relative (base 0)
+          spanEnd: nameNode.getEnd(),
+          displayName: displayName(expr),
+          kind: info.kind,
+          targetId: info.target,
+          candidates: info.candidates,
+        });
+      }
+    }
+    calls.sort((a, b) => a.spanStart - b.spanStart);
+
+    return {
+      id: `file:${path}`,
+      title: path.slice(path.lastIndexOf("/") + 1),
+      file: path,
+      language: path.endsWith(".tsx") ? "tsx" : "typescript",
+      startLine: 1,
+      endLine: source.split("\n").length,
+      source,
+      calls,
+    };
   }
 
   frameForCall(callId: string, choice: number): Frame {
@@ -640,6 +694,8 @@ function handle(method: string, params: Record<string, unknown>): unknown {
       return engine.frameForCall(String(params.callId ?? ""), Number(params.choice ?? 0));
     case "search":
       return { results: engine.search(String(params.query ?? ""), Number(params.limit ?? 50)) };
+    case "files":
+      return { files: engine.files() };
     default:
       throw new Error(`unknown method ${JSON.stringify(method)}`);
   }

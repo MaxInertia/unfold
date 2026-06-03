@@ -677,6 +677,43 @@ body {
   letter-spacing: 0.03em;
 }
 
+/* Files | Calls tab switcher in the sidebar header */
+.tree-tabs {
+  gap: 0.25rem;
+}
+
+.tree-tab {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tree-tab:hover {
+  color: var(--fg);
+}
+
+.tree-tab--active {
+  color: var(--fg);
+  font-weight: 600;
+  background: var(--call-bg);
+}
+
+/* File tree rows */
+.dir-label {
+  color: var(--muted);
+}
+
+.file-row .tree-label {
+  color: var(--fg);
+}
+
 /* Bookmark star in the frame header */
 .frame-bookmark {
   flex: 0 0 auto;

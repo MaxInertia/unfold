@@ -91,4 +91,8 @@ type Engine interface {
 	FrameForCall(id CallID, choice int) (*Frame, error)
 	// Search returns up to limit symbols matching query.
 	Search(query string, limit int) []SearchResult
+	// Files lists the absolute paths of the indexed source files, so the
+	// frontend can show a file tree. A whole-file Frame is obtained by
+	// passing "file:<path>" as a target id to Frame.
+	Files() []string
 }
