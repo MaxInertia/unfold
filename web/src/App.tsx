@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Frame } from "./Frame";
 import { CallTree } from "./CallTree";
+import { FileTree } from "./FileTree";
 import { fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
@@ -26,6 +27,7 @@ function AppShell() {
   const [treeCollapsed, setTreeCollapsed] = useState(
     () => localStorage.getItem(TREE_COLLAPSED_KEY) === "1",
   );
+  const [sidebarTab, setSidebarTab] = useState<"files" | "calls">("calls");
 
   useEffect(() => {
     localStorage.setItem(TREE_COLLAPSED_KEY, treeCollapsed ? "1" : "0");
@@ -82,25 +84,42 @@ function AppShell() {
           ) : (
             <>
               <BookmarksPanel onOpen={(id) => store.setSymbol(id)} />
-              {rootFrame ? (
-                <CallTree rootFrame={rootFrame} onCollapse={() => setTreeCollapsed(true)} />
-              ) : (
-                <div className="tree-inner">
-                  <div className="tree-header">
-                    <span className="tree-title">call tree</span>
-                    <button
-                      type="button"
-                      className="tree-collapse"
-                      onClick={() => setTreeCollapsed(true)}
-                      title="collapse panel"
-                      aria-label="collapse sidebar"
-                    >
-                      ‹
-                    </button>
-                  </div>
-                  <p className="tree-placeholder">Pick a function to see its call tree.</p>
+              <div className="tree-inner">
+                <div className="tree-header tree-tabs">
+                  <button
+                    type="button"
+                    className={`tree-tab${sidebarTab === "files" ? " tree-tab--active" : ""}`}
+                    onClick={() => setSidebarTab("files")}
+                  >
+                    files
+                  </button>
+                  <button
+                    type="button"
+                    className={`tree-tab${sidebarTab === "calls" ? " tree-tab--active" : ""}`}
+                    onClick={() => setSidebarTab("calls")}
+                  >
+                    calls
+                  </button>
+                  <button
+                    type="button"
+                    className="tree-collapse"
+                    onClick={() => setTreeCollapsed(true)}
+                    title="collapse panel"
+                    aria-label="collapse sidebar"
+                  >
+                    ‹
+                  </button>
                 </div>
-              )}
+                <div className="tree-body">
+                  {sidebarTab === "files" ? (
+                    <FileTree onOpen={(id) => store.setSymbol(id)} />
+                  ) : rootFrame ? (
+                    <CallTree rootFrame={rootFrame} />
+                  ) : (
+                    <p className="tree-placeholder">Pick a function to see its call tree.</p>
+                  )}
+                </div>
+              </div>
             </>
           )}
         </aside>

@@ -34,3 +34,8 @@ export async function search(q: string, limit = 25): Promise<SearchResult[]> {
   const res = await getJSON<{ results: SearchResult[] }>(url);
   return res.results ?? [];
 }
+
+export async function fetchFiles(): Promise<string[]> {
+  const res = await getJSON<{ files: string[] }>("/api/files");
+  return res.files ?? [];
+}

@@ -14,6 +14,7 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -442,6 +443,9 @@ func nameSpan(fun ast.Expr) (token.Pos, token.Pos, bool) {
 // Frame returns a Frame for the given target. Returns an error if the
 // target is unknown or its body source can't be read.
 func (i *Indexer) Frame(id TargetID) (*Frame, error) {
+	if path, ok := strings.CutPrefix(string(id), "file:"); ok {
+		return i.fileFrame(path)
+	}
 	i.mu.RLock()
 	fi, ok := i.funcs[id]
 	i.mu.RUnlock()
@@ -511,6 +515,89 @@ func goTitle(obj *types.Func) string {
 	return name
 }
 
+// Files returns the sorted, distinct absolute paths of files that hold at
+// least one indexed function. Only files in the main module are listed —
+// dependency and stdlib sources (also loaded for resolution) are excluded
+// so the tree shows the project the user is reading, not its dep graph.
+func (i *Indexer) Files() []string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	set := make(map[string]struct{}, len(i.funcs))
+	for _, fi := range i.funcs {
+		if fi.pkg == nil || fi.pkg.Module == nil || !fi.pkg.Module.Main {
+			continue
+		}
+		set[i.fset.Position(fi.decl.Pos()).Filename] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for f := range set {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// fileFrame builds a Frame for a whole file: the full source plus every call
+// site across all of the file's functions, with offsets relative to the file
+// start. The call IDs match those produced during indexing, so expanding a
+// call from the file view works through the normal FrameForCall path.
+func (i *Indexer) fileFrame(path string) (*Frame, error) {
+	buf, err := i.readFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	i.mu.RLock()
+	var infos []*callInfo
+	for _, fi := range i.funcs {
+		if i.fset.Position(fi.decl.Pos()).Filename != path {
+			continue
+		}
+		infos = append(infos, fi.calls...)
+	}
+	i.mu.RUnlock()
+
+	sort.Slice(infos, func(a, b int) bool { return infos[a].pos < infos[b].pos })
+	calls := make([]CallSite, 0, len(infos))
+	for _, c := range infos {
+		calls = append(calls, CallSite{
+			ID:          c.id,
+			SpanStart:   utf16Offset(buf, i.fset.Position(c.pos).Offset),
+			SpanEnd:     utf16Offset(buf, i.fset.Position(c.end).Offset),
+			DisplayName: c.displayName,
+			Kind:        c.kind,
+			TargetID:    c.target,
+			Candidates:  c.candidates,
+		})
+	}
+
+	return &Frame{
+		ID:        TargetID("file:" + path),
+		Title:     filepath.Base(path),
+		File:      path,
+		Language:  "go",
+		StartLine: 1,
+		EndLine:   1 + strings.Count(string(buf), "\n"),
+		Source:    string(buf),
+		Calls:     calls,
+	}, nil
+}
+
+// readFile returns the full bytes of path, caching like readRange.
+func (i *Indexer) readFile(path string) ([]byte, error) {
+	i.fileBytesMu.Lock()
+	defer i.fileBytesMu.Unlock()
+	if buf, ok := i.fileBytes[path]; ok {
+		return buf, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	i.fileBytes[path] = b
+	return b, nil
+}
+
 // FrameForCall returns a Frame for the chosen target of the given call.
 //
 // For direct calls, choice is ignored.
@@ -555,6 +642,12 @@ func (i *Indexer) LookupSymbol(name string) (TargetID, error) {
 
 	if name == "" {
 		return "", fmt.Errorf("empty symbol")
+	}
+
+	// A file pseudo-target ("file:<path>") resolves to itself; Frame builds
+	// the whole-file view.
+	if strings.HasPrefix(name, "file:") {
+		return TargetID(name), nil
 	}
 
 	// Exact full-name match wins.

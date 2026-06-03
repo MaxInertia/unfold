@@ -37,12 +37,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/symbol", s.handleSymbol)
 	mux.HandleFunc("/api/body", s.handleBody)
 	mux.HandleFunc("/api/search", s.handleSearch)
+	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))
 	return mux
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "target": s.target})
+}
+
+// GET /api/files — the indexed source files, for the file tree.
+func (s *Server) handleFiles(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"files": s.engine.Files()})
 }
 
 // GET /api/symbol?name=<qualified-or-bare-name>
