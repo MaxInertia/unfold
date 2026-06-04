@@ -1,8 +1,8 @@
 // Starter build for a GoLand plugin using the IntelliJ Platform Gradle Plugin 2.x.
 // Versions are illustrative — bump to whatever's current when you run this.
 plugins {
-    id("org.jetbrains.kotlin.jvm") version "1.9.24"
-    id("org.jetbrains.intellij.platform") version "2.0.1"
+    id("org.jetbrains.kotlin.jvm") version "2.1.20"
+    id("org.jetbrains.intellij.platform") version "2.16.0"
 }
 
 group = "dev.unfold"
@@ -17,26 +17,24 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        // Compile/run against GoLand so the Go PSI API is available.
-        // Alternatively: idea ("IU", "2024.1.4") + bundledPlugin("org.jetbrains.plugins.go").
-        goland("2024.1.4")
+        // Compile against the target GoLand (currently 2025.3.1.1 / build 253)
+        // so the Go PSI + embedded-editor APIs match the IDE it'll run in.
+        goland("2025.3.1.1")
         bundledPlugin("org.jetbrains.plugins.go") // Go PSI
-        instrumentationTools()
     }
 }
 
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
-            // Compiled against 2024.1 (241) using only stable APIs, but allow
-            // installing on everything newer — otherwise the upper bound is
-            // auto-stamped to 241.* and recent GoLand refuses the plugin.
-            sinceBuild = "241"
+            // Built against 2025.3 (253); open upper bound so future builds
+            // still accept it (otherwise it's auto-stamped to 253.*).
+            sinceBuild = "253"
             untilBuild = "299.*"
         }
     }
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
