@@ -2,30 +2,57 @@ package dev.unfold.ide
 
 import com.goide.psi.GoCallExpr
 import com.goide.psi.GoFunctionOrMethodDeclaration
+import com.goide.psi.GoMethodDeclaration
 import com.goide.psi.GoReferenceExpression
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiNamedElement
+import com.intellij.psi.search.searches.DefinitionsScopedSearch
 import com.intellij.psi.util.PsiTreeUtil
 
-/** Resolve the Go call under the caret to its callee declaration via PSI. */
+/** Resolve the Go call under the caret to one or more callee declarations. */
 object PsiResolve {
 
-    fun calleeAtCaret(editor: Editor, project: Project): Callee? {
-        val psiFile = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) ?: return null
-        val element = psiFile.findElementAt(editor.caretModel.offset) ?: return null
-        val call = PsiTreeUtil.getParentOfType(element, GoCallExpr::class.java) ?: return null
-        val ref = call.expression as? GoReferenceExpression ?: return null
-        // Interface methods resolve to a method spec; this lands on a concrete
-        // decl for direct calls. Implementations picker is a follow-up.
-        val decl = ref.resolve() as? GoFunctionOrMethodDeclaration ?: return null
-        return Callee(
-            title = (decl as? PsiNamedElement)?.name ?: "callee",
-            text = decl.text,
-            project = project,
-            sourceFile = decl.containingFile.virtualFile,
-            range = decl.textRange,
-        )
+    /**
+     * Returns the expandable targets for the call at the caret:
+     * - empty  — no resolvable call (indirect, builtin, unresolved)
+     * - one    — a direct function/method call
+     * - many   — an interface/abstract method call; each concrete
+     *            implementation (like unfold's impl switcher).
+     */
+    fun calleesAtCaret(editor: Editor, project: Project): List<Callee> {
+        val psiFile = PsiDocumentManager.getInstance(project).getPsiFile(editor.document) ?: return emptyList()
+        val element = psiFile.findElementAt(editor.caretModel.offset) ?: return emptyList()
+        val call = PsiTreeUtil.getParentOfType(element, GoCallExpr::class.java) ?: return emptyList()
+        val ref = call.expression as? GoReferenceExpression ?: return emptyList()
+        val resolved = ref.resolve() ?: return emptyList()
+
+        // Direct call: a function/method that has a body.
+        if (resolved is GoFunctionOrMethodDeclaration && resolved.block != null) {
+            return listOf(calleeOf(resolved, project))
+        }
+
+        // Interface/abstract method: enumerate the concrete implementations
+        // (same search "Go to Implementation" uses).
+        return DefinitionsScopedSearch.search(resolved).findAll()
+            .filterIsInstance<GoFunctionOrMethodDeclaration>()
+            .filter { it.block != null }
+            .map { calleeOf(it, project) }
+            .sortedBy { it.title }
+    }
+
+    private fun calleeOf(decl: GoFunctionOrMethodDeclaration, project: Project): Callee = Callee(
+        title = titleOf(decl),
+        text = decl.text,
+        project = project,
+        sourceFile = decl.containingFile?.virtualFile,
+        range = decl.textRange,
+    )
+
+    private fun titleOf(decl: GoFunctionOrMethodDeclaration): String {
+        val name = (decl as? PsiNamedElement)?.name ?: "fn"
+        val recv = (decl as? GoMethodDeclaration)?.receiver?.type?.text?.trimStart('*')
+        return if (recv.isNullOrBlank()) name else "$recv.$name"
     }
 }
