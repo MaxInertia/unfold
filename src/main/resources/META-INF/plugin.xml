@@ -1,0 +1,19 @@
+<idea-plugin>
+    <id>dev.unfold.ide</id>
+    <name>Unfold</name>
+    <vendor>maxinertia</vendor>
+    <description>Inline call expansion in the editor: click a call to splice the callee body between the lines.</description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.go</depends>
+
+    <actions>
+        <action id="unfold.ExpandCall"
+                class="dev.unfold.ide.ExpandCallAction"
+                text="Unfold: Expand Call"
+                description="Splice the callee body below the current line.">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt U"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
