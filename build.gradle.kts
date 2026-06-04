@@ -28,7 +28,11 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
+            // Compiled against 2024.1 (241) using only stable APIs, but allow
+            // installing on everything newer — otherwise the upper bound is
+            // auto-stamped to 241.* and recent GoLand refuses the plugin.
             sinceBuild = "241"
+            untilBuild = "299.*"
         }
     }
 }
