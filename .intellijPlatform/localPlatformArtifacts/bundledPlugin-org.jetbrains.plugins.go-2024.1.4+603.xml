@@ -1,0 +1,24 @@
+<ivy-module version="2.0">
+  <info organisation="bundledPlugin" module="org.jetbrains.plugins.go" revision="2024.1.4+603"/>
+  <configurations>
+    <conf name="default" visibility="public"/>
+  </configurations>
+  <publications>
+    <artifact name="/home/maxinertia/.gradle/caches/8.10/transforms/ae6fad42e7a142a907cd4d4a5f8b62fd/transformed/goland-2024.1.4/plugins/go-plugin" type="directory" conf="default"/>
+  </publications>
+  <dependencies>
+    <dependency org="bundledPlugin" name="org.jetbrains.plugins.go-template" rev="241.18034.61+706"/>
+    <dependency org="bundledPlugin" name="org.jetbrains.plugins.terminal" rev="241.18034.61+927"/>
+    <dependency org="bundledPlugin" name="com.jetbrains.sh" rev="241.18034.61+510"/>
+    <dependency org="bundledPlugin" name="com.intellij.copyright" rev="241.18034.61+686"/>
+    <dependency org="bundledPlugin" name="com.intellij.plugins.watcher" rev="241.18034.61+155"/>
+    <dependency org="bundledPlugin" name="training" rev="241.18034.61+595"/>
+    <dependency org="bundledPlugin" name="tanvd.grazi" rev="241.18034.61+75"/>
+    <dependency org="bundledPlugin" name="com.intellij.completion.ml.ranking" rev="241.18034.61+858"/>
+    <dependency org="bundledPlugin" name="intellij.indexing.shared" rev="241.18034.61+564"/>
+    <dependency org="bundledPlugin" name="com.intellij.diagram" rev="241.18034.61+815"/>
+    <dependency org="bundledPlugin" name="Docker" rev="241.18034.61+829"/>
+    <dependency org="bundledPlugin" name="com.intellij.microservices.ui" rev="241.18034.61+588"/>
+    <dependency org="bundledPlugin" name="org.intellij.intelliLang" rev="241.18034.61+180"/>
+  </dependencies>
+</ivy-module>

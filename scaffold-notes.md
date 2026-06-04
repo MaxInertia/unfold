@@ -44,3 +44,35 @@ appears below the line; hit it again to remove it.
    behave like the surrounding code.
 
 See `PLAN.md` for the full phased plan and the rendering deep-dive.
+
+## Current status (all compile-verified against GoLand 2024.1.4 + Go plugin)
+
+`./gradlew buildPlugin` produces an installable plugin. What's wired:
+
+- **PSI resolution** (`PsiResolve.kt`) — the Go call under the caret →
+  `GoFunctionOrMethodDeclaration` (direct calls; interface-impl picker TODO).
+- **Three swappable renderers** behind `FrameRenderer`:
+  - `PaintedRenderer` — block inlay, colored token-by-token via the IDE's Go
+    `SyntaxHighlighter` + scheme (looks native; no native interactivity).
+  - **`EditorInlayRenderer`** — the goal: a real read-only `EditorEx` embedded
+    via `EditorEmbeddedComponentManager` (native code).
+  - `JcefRenderer` — a JCEF browser (the reuse-the-web path; falls back to
+    painted if JCEF is off).
+- **Selectable in GoLand** — `Settings > Tools > Unfold` (`UnfoldConfigurable`)
+  and a quick **Ctrl+Alt+R** popup (`SelectRendererAction`); choice persists
+  (`UnfoldSettings`). **Ctrl+Alt+U** expands the call under the caret with the
+  selected renderer; again collapses.
+
+### What still needs a *running* IDE (I can compile but not run the GUI here)
+1. **`EditorInlayRenderer` bounds/scroll/sizing** — it compiles and uses the
+   right embed API, but the visual height/scroll-sync will need tuning live.
+   This is the make-or-break experiment — try it first.
+2. To get **go-to-def / find-usages** inside the embedded editor (not just
+   highlighting), back the sub-editor with the real callee file shown as a
+   range, instead of the current detached `LightVirtualFile` copy.
+3. **Recursion/nesting** — currently one frame at a time (toggle). Phase 4.
+4. **Per-call affordances** (underline/click like unfold) — Phase 2; today you
+   trigger via caret + Ctrl+Alt+U.
+
+Try `EDITOR` first (default), compare against `PAINTED`, and switch with
+Ctrl+Alt+R.

@@ -7,6 +7,13 @@
     <depends>com.intellij.modules.platform</depends>
     <depends>org.jetbrains.plugins.go</depends>
 
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationConfigurable instance="dev.unfold.ide.UnfoldConfigurable"
+                                 displayName="Unfold"
+                                 groupId="tools"
+                                 id="dev.unfold.ide.settings"/>
+    </extensions>
+
     <actions>
         <action id="unfold.ExpandCall"
                 class="dev.unfold.ide.ExpandCallAction"
@@ -14,6 +21,12 @@
                 description="Splice the callee body below the current line.">
             <keyboard-shortcut keymap="$default" first-keystroke="control alt U"/>
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+        <action id="unfold.SelectRenderer"
+                class="dev.unfold.ide.SelectRendererAction"
+                text="Unfold: Select Renderer"
+                description="Choose how expanded code is rendered.">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt R"/>
         </action>
     </actions>
 </idea-plugin>

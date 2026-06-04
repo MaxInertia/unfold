@@ -1,0 +1,10 @@
+<ivy-module version="2.0">
+  <info organisation="bundledPlugin" module="com.intellij.configurationScript" revision="241.18034.61+28"/>
+  <configurations>
+    <conf name="default" visibility="public"/>
+  </configurations>
+  <publications>
+    <artifact name="/home/maxinertia/.gradle/caches/8.10/transforms/ae6fad42e7a142a907cd4d4a5f8b62fd/transformed/goland-2024.1.4/plugins/configurationScript" type="directory" conf="default"/>
+  </publications>
+  <dependencies/>
+</ivy-module>
