@@ -606,7 +606,13 @@ class TSEngine {
         const id = `${path}:${call.getStart()}`;
         if (seen.has(id)) continue;
         seen.add(id);
+        // Persist so a call expanded straight from the file view resolves
+        // through frameForCall, which looks up callsById. Without this, a call
+        // whose enclosing function frame was never built (the file view shows
+        // every function's calls without building their frames) would throw
+        // "unknown call" on expand. resolveCall caches the same way.
         const info = this.callsById.get(id) ?? this.classify(expr);
+        this.callsById.set(id, info);
         calls.push({
           id,
           spanStart: nameNode.getStart(), // file-relative (base 0)

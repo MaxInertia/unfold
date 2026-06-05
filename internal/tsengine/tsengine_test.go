@@ -267,6 +267,59 @@ func TestRxjsFanout(t *testing.T) {
 	})
 }
 
+// TestRxjsFanoutFileViewExpand expands a fan-out call discovered through the
+// whole-file view *without* first building the enclosing function's frame.
+// fileFrame must persist the classified call into callsById, or frameForCall
+// throws "unknown call". Uses a fresh engine so callsById starts empty.
+func TestRxjsFanoutFileViewExpand(t *testing.T) {
+	if _, err := exec.LookPath("bun"); err != nil {
+		t.Skip("bun not found; skipping RxJS fan-out file-view test")
+	}
+	_, thisFile, _, _ := runtime.Caller(0)
+	repo := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	t.Setenv("UNFOLD_TSINDEXER", filepath.Join(repo, "tsindexer", "main.ts"))
+	fixture := filepath.Join(repo, "tsindexer", "testdata", "observable")
+
+	e, err := Load(fixture, "./...")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer e.Close()
+
+	var serviceFile string
+	for _, f := range e.Files() {
+		if strings.HasSuffix(f, "service.ts") {
+			serviceFile = f
+			break
+		}
+	}
+	if serviceFile == "" {
+		t.Fatal("service.ts not in Files()")
+	}
+	// Go straight to the file view — do not build any function frame first.
+	ff, err := e.Frame(model.TargetID("file:" + serviceFile))
+	if err != nil {
+		t.Fatalf("Frame(file:service.ts): %v", err)
+	}
+	var fan *model.CallSite
+	for i := range ff.Calls {
+		if ff.Calls[i].Kind == "fanout" {
+			fan = &ff.Calls[i]
+			break
+		}
+	}
+	if fan == nil {
+		t.Fatalf("no fan-out call in file view; calls=%v", ff.Calls)
+	}
+	body, err := e.FrameForCall(fan.ID, 0)
+	if err != nil {
+		t.Fatalf("FrameForCall from file view (callsById not persisted?): %v", err)
+	}
+	if !strings.Contains(body.Source, "=>") {
+		t.Errorf("expanded receiver isn't a callback: %q", body.Source)
+	}
+}
+
 // TestAngularTemplates drives the sidecar against an Angular fixture and
 // checks that a component template is indexed as an html Frame whose calls
 // resolve to the component's methods, with UTF-16 offsets that survive
