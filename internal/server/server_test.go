@@ -99,9 +99,18 @@ func TestEndpoints(t *testing.T) {
 
 		// GET is rejected (so a cross-origin <img>/<form> can't trigger it).
 		postStatus(t, ts.URL+"/api/open?file="+anIndexed, http.MethodGet, nil, http.StatusMethodNotAllowed)
-		// Cross-site POST is rejected.
+		// Cross-site and same-site POSTs are both rejected (the threat includes
+		// another app on the same machine, which is same-site).
 		postStatus(t, ts.URL+"/api/open?file="+anIndexed, http.MethodPost,
 			map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden)
+		postStatus(t, ts.URL+"/api/open?file="+anIndexed, http.MethodPost,
+			map[string]string{"Sec-Fetch-Site": "same-site"}, http.StatusForbidden)
+		// Origin-header fallback (no Fetch-Metadata): a mismatched Origin is
+		// rejected, a matching one is allowed.
+		postStatus(t, ts.URL+"/api/open?file="+anIndexed, http.MethodPost,
+			map[string]string{"Origin": "http://evil.example"}, http.StatusForbidden)
+		postStatus(t, ts.URL+"/api/open?file="+anIndexed, http.MethodPost,
+			map[string]string{"Origin": ts.URL}, http.StatusOK)
 		// A path outside the indexed project is rejected even with a valid method/origin.
 		postStatus(t, ts.URL+"/api/open?file=%2Fetc%2Fpasswd", http.MethodPost,
 			map[string]string{"Sec-Fetch-Site": "same-origin"}, http.StatusForbidden)

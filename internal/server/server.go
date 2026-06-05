@@ -119,15 +119,19 @@ func (s *Server) fileIsIndexed(file string) bool {
 	return false
 }
 
-// sameOrigin rejects cross-site browser requests. It prefers the Fetch
+// sameOrigin rejects cross-origin browser requests. It prefers the Fetch
 // Metadata header (sent by modern browsers) and falls back to comparing the
 // Origin host with the request host. A request with neither header (curl, a
 // same-origin navigation) is allowed.
+//
+// Note same-site is rejected, not just cross-site: the threat here is another
+// app on the same machine (a different localhost:port is same-site), so only a
+// genuinely same-origin request — or a non-browser client — may open a file.
 func sameOrigin(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin", "same-site", "none":
+	case "same-origin", "none":
 		return true
-	case "cross-site":
+	case "same-site", "cross-site":
 		return false
 	}
 	origin := r.Header.Get("Origin")
