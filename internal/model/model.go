@@ -69,6 +69,18 @@ type Candidate struct {
 	Label    string   `json:"label"`
 }
 
+// TypeInfo describes the symbol under a hovered source offset: its kind,
+// name, type/signature, where it's defined, and (when it's a function the
+// engine knows) a TargetID so the frontend can open it.
+type TypeInfo struct {
+	Kind      string   `json:"kind"`                // "var", "func", "type", "const", "field", "package", ...
+	Name      string   `json:"name"`                // the identifier text
+	Type      string   `json:"type"`                // type or signature, e.g. "func(s string) error"
+	DefinedAt string   `json:"definedAt,omitempty"` // "<file>:<line>"
+	Doc       string   `json:"doc,omitempty"`       // leading doc comment, if any
+	TargetID  TargetID `json:"targetId,omitempty"`  // set when the symbol is a function/method we can open
+}
+
 // SearchResult is one hit returned from an engine's Search.
 type SearchResult struct {
 	TargetID TargetID `json:"targetId"`
@@ -95,4 +107,8 @@ type Engine interface {
 	// frontend can show a file tree. A whole-file Frame is obtained by
 	// passing "file:<path>" as a target id to Frame.
 	Files() []string
+	// TypeInfo resolves the symbol at a UTF-16 offset into the frame's
+	// Source and returns its type details. Returns nil (no error) when the
+	// offset isn't over a resolvable symbol.
+	TypeInfo(id TargetID, offset int) (*TypeInfo, error)
 }

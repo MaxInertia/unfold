@@ -3,9 +3,13 @@ package server
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/MaxInertia/unfold/internal/model"
 )
@@ -38,8 +42,70 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/body", s.handleBody)
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/files", s.handleFiles)
+	mux.HandleFunc("/api/typeinfo", s.handleTypeInfo)
+	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))
 	return mux
+}
+
+// GET /api/typeinfo?targetId=<id>&offset=<utf16-offset-in-source>
+func (s *Server) handleTypeInfo(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	id := q.Get("targetId")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing required query param: targetId")
+		return
+	}
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	ti, err := s.engine.TypeInfo(model.TargetID(id), offset)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	// ti may be nil (offset not over a symbol) — that's a valid empty result.
+	writeJSON(w, http.StatusOK, map[string]any{"typeInfo": ti})
+}
+
+// GET /api/open?file=<abs-path>&line=<n> — opens the file in the configured
+// editor. The command comes from $UNFOLD_EDITOR (a template with {file} and
+// {line}); it defaults to VS Code's "code -g {file}:{line}".
+func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	file := q.Get("file")
+	if file == "" {
+		writeError(w, http.StatusBadRequest, "missing required query param: file")
+		return
+	}
+	if err := openInEditor(file, q.Get("line")); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func openInEditor(file, line string) error {
+	if line == "" {
+		line = "1"
+	}
+	if fi, err := os.Stat(file); err != nil || fi.IsDir() {
+		return fmt.Errorf("not a readable file: %s", file)
+	}
+	tmpl := os.Getenv("UNFOLD_EDITOR")
+	if tmpl == "" {
+		tmpl = "code -g {file}:{line}"
+	}
+	parts := strings.Fields(tmpl)
+	if len(parts) == 0 {
+		return fmt.Errorf("UNFOLD_EDITOR is empty")
+	}
+	args := make([]string, len(parts))
+	for i, p := range parts {
+		p = strings.ReplaceAll(p, "{file}", file)
+		p = strings.ReplaceAll(p, "{line}", line)
+		args[i] = p
+	}
+	// Build argv directly (no shell) so paths with spaces stay one argument.
+	return exec.Command(args[0], args[1:]...).Start()
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

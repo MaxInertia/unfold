@@ -1,9 +1,9 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Root as HastRoot } from "hast";
-import { fetchBodyByCall } from "./api";
+import { fetchBodyByCall, fetchTypeInfo, openInEditor } from "./api";
 import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
-import type { CallID, CallSite, Frame as FrameT } from "./types";
+import type { CallID, CallSite, Frame as FrameT, TypeInfo } from "./types";
 import { pathKey, useFrameSlice, useViewStore, type FramePath } from "./viewState";
 import { useBookmarks } from "./bookmarks";
 
@@ -29,6 +29,72 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   const [loading, setLoading] = useState<Set<CallID>>(new Set());
   const [errors, setErrors] = useState<Map<CallID, string>>(new Map());
   const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
+  const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
+  const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0 });
+
+  // UTF-16 offset of each line's start in the source, for hover→offset mapping.
+  const lineStarts = useMemo(() => {
+    const starts = [0];
+    for (let i = 0; i < frame.source.length; i++) {
+      if (frame.source.charCodeAt(i) === 10) starts.push(i + 1);
+    }
+    return starts;
+  }, [frame.source]);
+
+  function offsetAtPoint(clientX: number, clientY: number): number | null {
+    const caret = caretFromPoint(clientX, clientY);
+    if (!caret) return null;
+    const startEl =
+      caret.node.nodeType === Node.TEXT_NODE
+        ? caret.node.parentElement
+        : (caret.node as Element);
+    const lineSpan = startEl?.closest(".line") as HTMLElement | null;
+    const row = startEl?.closest(".line-row") as HTMLElement | null;
+    if (!lineSpan || !row) return null;
+    const lineIdx = Number(row.getAttribute("data-line-idx"));
+    if (!Number.isFinite(lineIdx)) return null;
+    const measure = document.createRange();
+    measure.setStart(lineSpan, 0);
+    try {
+      measure.setEnd(caret.node, caret.offset);
+    } catch {
+      return null;
+    }
+    return (lineStarts[lineIdx] ?? 0) + measure.toString().length;
+  }
+
+  function onSourceMouseMove(e: React.MouseEvent) {
+    if (selection) return; // don't fight a line selection
+    const off = offsetAtPoint(e.clientX, e.clientY);
+    if (off == null || off === hoverRef.current.offset) return;
+    hoverRef.current.offset = off;
+    const x = e.clientX;
+    const y = e.clientY;
+    window.clearTimeout(hoverRef.current.showTimer);
+    hoverRef.current.showTimer = window.setTimeout(() => {
+      fetchTypeInfo(frame.id, off)
+        .then((info) => setTypeCard(info ? { x, y, info } : null))
+        .catch(() => setTypeCard(null));
+    }, 250);
+  }
+
+  function onSourceMouseLeave() {
+    window.clearTimeout(hoverRef.current.showTimer);
+    hoverRef.current.offset = -1;
+    hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+  }
+
+  function openDefinition(info: TypeInfo) {
+    setTypeCard(null);
+    if (info.targetId) {
+      store.setSymbol(info.targetId);
+      return;
+    }
+    const at = info.definedAt;
+    if (!at) return;
+    const i = at.lastIndexOf(":");
+    if (i > 0) openInEditor(at.slice(0, i), Number(at.slice(i + 1)) || 1).catch(() => {});
+  }
 
   // Fetch any expanded children we don't have loaded yet, and prune any
   // we've loaded but the slice no longer expands.
@@ -310,9 +376,14 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           {bookmarks.isBookmarked(frame.id) ? "★" : "☆"}
         </button>
         <span className="frame-title">{frameTitle(frame)}</span>
-        <span className="frame-loc">
+        <button
+          type="button"
+          className="frame-loc frame-loc--link"
+          title="open in editor"
+          onClick={() => openInEditor(frame.file, frame.startLine).catch(() => {})}
+        >
           {shortPath(frame.file)}:{frame.startLine}
-        </span>
+        </button>
         {onClose && (
           <button className="frame-close" onClick={onClose} aria-label="collapse">
             ×
@@ -339,7 +410,11 @@ export function Frame({ frame, path, onClose }: FrameProps) {
       )}
       <div className="frame-body">
         {hast ? (
-          <div className="frame-source">
+          <div
+            className="frame-source"
+            onMouseMove={onSourceMouseMove}
+            onMouseLeave={onSourceMouseLeave}
+          >
             {renderHast({
               hast,
               source: frame.source,
@@ -355,6 +430,31 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           <div className="frame-loading">loading…</div>
         )}
       </div>
+      {typeCard && (
+        <div
+          className="type-card"
+          style={{ left: typeCard.x + 12, top: typeCard.y + 16 }}
+          onMouseEnter={() => window.clearTimeout(hoverRef.current.hideTimer)}
+          onMouseLeave={() => setTypeCard(null)}
+        >
+          <div className="type-card-head">
+            <span className="type-card-kind">{typeCard.info.kind}</span>
+            <span className="type-card-name">{typeCard.info.name}</span>
+          </div>
+          {typeCard.info.type && <div className="type-card-type">{typeCard.info.type}</div>}
+          {typeCard.info.doc && <div className="type-card-doc">{typeCard.info.doc}</div>}
+          {typeCard.info.definedAt && (
+            <button
+              type="button"
+              className="type-card-loc"
+              onClick={() => openDefinition(typeCard.info)}
+              title={typeCard.info.targetId ? "open as root frame" : "open in editor"}
+            >
+              {shortDefined(typeCard.info.definedAt)}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -435,6 +535,31 @@ function lineForOffset(source: string, offset: number): number {
 
 function frameTitle(frame: FrameT): string {
   return frame.title && frame.title.trim() ? frame.title : prettyName(frame.id);
+}
+
+// Cross-browser caret position from screen coordinates (for hover→offset).
+function caretFromPoint(x: number, y: number): { node: Node; offset: number } | null {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  if (doc.caretRangeFromPoint) {
+    const r = doc.caretRangeFromPoint(x, y);
+    return r ? { node: r.startContainer, offset: r.startOffset } : null;
+  }
+  if (doc.caretPositionFromPoint) {
+    const p = doc.caretPositionFromPoint(x, y);
+    return p ? { node: p.offsetNode, offset: p.offset } : null;
+  }
+  return null;
+}
+
+function shortDefined(at: string): string {
+  const i = at.lastIndexOf(":");
+  const file = i > 0 ? at.slice(0, i) : at;
+  const line = i > 0 ? at.slice(i + 1) : "";
+  const base = file.slice(file.lastIndexOf("/") + 1);
+  return line ? `${base}:${line}` : base;
 }
 
 function prettyName(id: string): string {

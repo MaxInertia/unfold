@@ -1,4 +1,4 @@
-import type { CallID, Frame, SearchResult, TargetID } from "./types";
+import type { CallID, Frame, SearchResult, TargetID, TypeInfo } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -38,4 +38,25 @@ export async function search(q: string, limit = 25): Promise<SearchResult[]> {
 export async function fetchFiles(): Promise<string[]> {
   const res = await getJSON<{ files: string[] }>("/api/files");
   return res.files ?? [];
+}
+
+export async function fetchTypeInfo(targetId: TargetID, offset: number): Promise<TypeInfo | null> {
+  const url = `/api/typeinfo?targetId=${encodeURIComponent(targetId)}&offset=${offset}`;
+  const res = await getJSON<{ typeInfo: TypeInfo | null }>(url);
+  return res.typeInfo ?? null;
+}
+
+export async function openInEditor(file: string, line: number): Promise<void> {
+  const url = `/api/open?file=${encodeURIComponent(file)}&line=${line}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.error) msg = body.error;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(msg);
+  }
 }

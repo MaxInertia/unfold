@@ -36,3 +36,12 @@ export interface SearchResult {
   file: string;
   line: number;
 }
+
+export interface TypeInfo {
+  kind: string;
+  name: string;
+  type: string;
+  definedAt?: string; // "<file>:<line>"
+  doc?: string;
+  targetId?: TargetID; // present when the symbol is a function we can open
+}

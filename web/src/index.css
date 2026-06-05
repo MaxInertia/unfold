@@ -878,6 +878,85 @@ body.resizing {
   color: var(--error);
 }
 
+/* Clickable file:line in the frame header (open in editor) */
+.frame-loc--link {
+  background: transparent;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.frame-loc--link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Type-info hover card */
+.type-card {
+  position: fixed;
+  z-index: 50;
+  max-width: 460px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.82rem;
+}
+
+.type-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+
+.type-card-kind {
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: lowercase;
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+  padding: 0 0.3em;
+}
+
+.type-card-name {
+  font-weight: 600;
+}
+
+.type-card-type {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--accent);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.type-card-doc {
+  color: var(--muted);
+  margin-top: 0.3rem;
+  white-space: pre-wrap;
+  max-height: 8rem;
+  overflow: auto;
+}
+
+.type-card-loc {
+  display: block;
+  margin-top: 0.35rem;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.type-card-loc:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 /* On narrow viewports drop the sidebar above the content. */
 @media (max-width: 820px) {
   .app-main {
