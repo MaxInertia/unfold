@@ -195,6 +195,76 @@ func TestRxjsFanout(t *testing.T) {
 			t.Errorf("receiver %d body isn't a callback: %q", i, body.Source)
 		}
 	}
+
+	// Class-field subject reached via `this` (the Angular @Output / service
+	// pattern): `this.bus.next()` must still fan out to `this.bus.subscribe()`.
+	t.Run("class-field-this", func(t *testing.T) {
+		fireID, err := e.LookupSymbol("fire")
+		if err != nil {
+			t.Fatalf("LookupSymbol(fire): %v", err)
+		}
+		fr, err := e.Frame(fireID)
+		if err != nil {
+			t.Fatalf("Frame(fire): %v", err)
+		}
+		var f *model.CallSite
+		for i := range fr.Calls {
+			if fr.Calls[i].Kind == "fanout" {
+				f = &fr.Calls[i]
+				break
+			}
+		}
+		if f == nil {
+			t.Fatalf("no fan-out call in fire; calls=%v", fr.Calls)
+		}
+		if len(f.Receivers) != 2 {
+			t.Fatalf("this.bus receivers: got %d want 2 (listenA, listenB): %+v", len(f.Receivers), f.Receivers)
+		}
+		for i := range f.Receivers {
+			body, err := e.FrameForCall(f.ID, i)
+			if err != nil {
+				t.Fatalf("FrameForCall(this.bus, %d): %v", i, err)
+			}
+			if !strings.Contains(body.Source, "=>") {
+				t.Errorf("receiver %d body isn't a callback: %q", i, body.Source)
+			}
+		}
+	})
+
+	// The whole-file view must carry fan-out receivers AND must not duplicate
+	// the subscriber callbacks' inner calls (the map-mutation-during-iteration
+	// guard in fileFrame).
+	t.Run("file-view-fanout", func(t *testing.T) {
+		var serviceFile string
+		for _, f := range e.Files() {
+			if strings.HasSuffix(f, "service.ts") {
+				serviceFile = f
+				break
+			}
+		}
+		if serviceFile == "" {
+			t.Fatal("service.ts not in Files()")
+		}
+		ff, err := e.Frame(model.TargetID("file:" + serviceFile))
+		if err != nil {
+			t.Fatalf("Frame(file:service.ts): %v", err)
+		}
+		fanWithReceivers, logCount := 0, 0
+		for _, c := range ff.Calls {
+			if c.Kind == "fanout" && len(c.Receivers) == 2 {
+				fanWithReceivers++
+			}
+			if c.DisplayName == "console.log" {
+				logCount++
+			}
+		}
+		if fanWithReceivers != 1 {
+			t.Errorf("file view: got %d fan-out calls with 2 receivers, want 1", fanWithReceivers)
+		}
+		if logCount != 2 {
+			t.Errorf("file view: console.log appears %d times, want 2 (phantom duplicates indicate map-mutation bug)", logCount)
+		}
+	})
 }
 
 // TestAngularTemplates drives the sidecar against an Angular fixture and

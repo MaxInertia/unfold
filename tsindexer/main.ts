@@ -415,8 +415,10 @@ class TSEngine {
       return null;
     }
     // Only the real RxJS / Angular types — not a user class named "Subject".
+    // Require rxjs/@angular-core to be a path *segment* (or file stem), so a
+    // user dir like src/rxjs-helpers/ doesn't false-positive.
     const origin = sym?.getDeclarations()?.[0]?.getSourceFile().getFilePath() ?? "";
-    if (!/(rxjs|@angular[/\\]core)/.test(origin)) return null;
+    if (!/(^|[/\\])(rxjs|@angular[/\\]core)([/\\.]|$)/.test(origin)) return null;
 
     return { kind: "fanout", fanoutKind: "subscribers", receivers: this.resolveSubscribers(receiver) };
   }
@@ -440,7 +442,19 @@ class TSEngine {
     const out: Receiver[] = [];
     const seen = new Set<string>();
     for (const ref of refs) {
-      const access = ref.getParent();
+      let access = ref.getParent();
+      // `this.events.subscribe(...)`: the ref is the `.name` of the inner
+      // `this.events` access, so `.subscribe` is one level up. Climb past the
+      // access whose name *is* this ref. (A module-level `events.subscribe`
+      // ref is the access's `.expression`, not its `.name`, so we don't climb.)
+      if (
+        access &&
+        Node.isPropertyAccessExpression(access) &&
+        access.getName() !== "subscribe" &&
+        access.getNameNode() === ref
+      ) {
+        access = access.getParent();
+      }
       if (!access || !Node.isPropertyAccessExpression(access) || access.getName() !== "subscribe") continue;
       const call = access.getParent();
       if (!call || !Node.isCallExpression(call)) continue;
@@ -573,7 +587,15 @@ class TSEngine {
     const source = sf.getFullText();
 
     const calls: CallSite[] = [];
-    for (const fi of this.funcs.values()) {
+    const seen = new Set<string>();
+    // Snapshot the funcs: classify() below resolves fan-out receivers, which
+    // registerCallback()s new subscriber functions into this.funcs — a live
+    // Map iterator would then walk those too. The `seen` set is the real
+    // guard against duplicates: a subscribe callback is itself a registered
+    // func nested inside its enclosing function, so its inner calls would
+    // otherwise be emitted twice (once per containing function). Call ids are
+    // position-based, so the same physical call dedupes cleanly.
+    for (const fi of [...this.funcs.values()]) {
       if (fi.decl.getSourceFile().getFilePath() !== path) continue;
       const body = bodyNode(fi.decl);
       if (!body) continue;
@@ -582,6 +604,8 @@ class TSEngine {
         const nameNode = callNameNode(expr);
         if (!nameNode) continue;
         const id = `${path}:${call.getStart()}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
         const info = this.callsById.get(id) ?? this.classify(expr);
         calls.push({
           id,
@@ -591,6 +615,8 @@ class TSEngine {
           kind: info.kind,
           targetId: info.target,
           candidates: info.candidates,
+          receivers: info.receivers,
+          fanoutKind: info.fanoutKind,
         });
       }
     }
