@@ -1,12 +1,95 @@
 package engine
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/MaxInertia/unfold/internal/model"
 )
+
+// closerEngine is a fake model.Engine that also implements io.Closer. Each
+// delegated call marks itself in-flight; Close records a violation if it runs
+// while any call is in-flight — exactly the use-after-close the reload lock
+// must prevent. A shared `violated` flag aggregates across the many engines a
+// reload sequence swaps through.
+type closerEngine struct {
+	inCall   atomic.Int32
+	violated *atomic.Bool
+}
+
+func (f *closerEngine) Frame(model.TargetID) (*model.Frame, error) {
+	f.inCall.Add(1)
+	defer f.inCall.Add(-1)
+	time.Sleep(50 * time.Microsecond) // widen the window a swap could race
+	return &model.Frame{}, nil
+}
+
+func (f *closerEngine) Close() error {
+	if f.inCall.Load() != 0 {
+		f.violated.Store(true)
+	}
+	return nil
+}
+
+func (f *closerEngine) LookupSymbol(string) (model.TargetID, error) { return "", nil }
+func (f *closerEngine) FrameForCall(model.CallID, int) (*model.Frame, error) {
+	return &model.Frame{}, nil
+}
+func (f *closerEngine) Search(string, int) []model.SearchResult               { return nil }
+func (f *closerEngine) Files() []string                                       { return nil }
+func (f *closerEngine) TypeInfo(model.TargetID, int) (*model.TypeInfo, error) { return nil, nil }
+
+// TestReloadableNoCallAfterClose drives readers against a Reloadable while a
+// swapper repeatedly replaces and Closes the engine the way Reload does. The
+// fake records if it is ever Closed mid-call; with the lock held across the
+// delegated call, that must never happen. Run with -race.
+func TestReloadableNoCallAfterClose(t *testing.T) {
+	var violated atomic.Bool
+	newFake := func() *closerEngine { return &closerEngine{violated: &violated} }
+
+	r := &Reloadable{cur: newFake()}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_, _ = r.Frame("x")
+			}
+		}()
+	}
+
+	// Mirror Reload exactly: build the next engine, take the write lock to
+	// swap, release, then Close the old one.
+	for i := 0; i < 100; i++ {
+		next := newFake()
+		r.mu.Lock()
+		old := r.cur
+		r.cur = next
+		r.mu.Unlock()
+		_ = old.(io.Closer).Close()
+	}
+
+	close(stop)
+	wg.Wait()
+	_ = r.Close()
+
+	if violated.Load() {
+		t.Fatal("an engine was Closed while a delegated call was still in flight (use-after-close)")
+	}
+}
 
 // TestReloadablePicksUpNewSymbol verifies that Reload rebuilds the index so a
 // function added to the source after startup becomes resolvable — the core
