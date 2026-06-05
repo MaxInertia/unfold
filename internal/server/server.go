@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -66,14 +68,31 @@ func (s *Server) handleTypeInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"typeInfo": ti})
 }
 
-// GET /api/open?file=<abs-path>&line=<n> — opens the file in the configured
+// POST /api/open?file=<abs-path>&line=<n> — opens the file in the configured
 // editor. The command comes from $UNFOLD_EDITOR (a template with {file} and
 // {line}); it defaults to VS Code's "code -g {file}:{line}".
+//
+// This is the one side-effecting endpoint, so it's guarded three ways: it
+// requires POST (so a cross-origin <img>/<form> GET can't trigger it), it
+// rejects cross-site requests via Fetch-Metadata / Origin, and it only opens
+// files that are part of the indexed project — never an arbitrary host path.
 func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
 	q := r.URL.Query()
 	file := q.Get("file")
 	if file == "" {
 		writeError(w, http.StatusBadRequest, "missing required query param: file")
+		return
+	}
+	if !s.fileIsIndexed(file) {
+		writeError(w, http.StatusForbidden, "file is not part of the indexed project")
 		return
 	}
 	if err := openInEditor(file, q.Get("line")); err != nil {
@@ -81,6 +100,45 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// fileIsIndexed reports whether file resolves to one of the project's indexed
+// source files. This is the containment check that keeps /api/open from
+// opening (and thereby exfiltrating into the editor) arbitrary host files.
+func (s *Server) fileIsIndexed(file string) bool {
+	abs, err := filepath.Abs(file)
+	if err != nil {
+		return false
+	}
+	abs = filepath.Clean(abs)
+	for _, f := range s.engine.Files() {
+		if filepath.Clean(f) == abs {
+			return true
+		}
+	}
+	return false
+}
+
+// sameOrigin rejects cross-site browser requests. It prefers the Fetch
+// Metadata header (sent by modern browsers) and falls back to comparing the
+// Origin host with the request host. A request with neither header (curl, a
+// same-origin navigation) is allowed.
+func sameOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "same-site", "none":
+		return true
+	case "cross-site":
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Host == r.Host
 }
 
 func openInEditor(file, line string) error {

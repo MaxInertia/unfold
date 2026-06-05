@@ -48,7 +48,9 @@ export async function fetchTypeInfo(targetId: TargetID, offset: number): Promise
 
 export async function openInEditor(file: string, line: number): Promise<void> {
   const url = `/api/open?file=${encodeURIComponent(file)}&line=${line}`;
-  const res = await fetch(url);
+  // POST (not GET) so a cross-origin page can't trigger an editor-open via a
+  // bare <img>/<form>; the server also enforces a same-origin check.
+  const res = await fetch(url, { method: "POST" });
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
     try {

@@ -693,10 +693,17 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 		ti.DefinedAt = fmt.Sprintf("%s:%d", dp.Filename, dp.Line)
 	}
 	if fn, ok := obj.(*types.Func); ok {
-		ti.TargetID = TargetID(fn.FullName())
+		// Only expose TargetID for functions we actually indexed — otherwise
+		// the hover card would offer "open" on a stdlib/dependency func that
+		// LookupSymbol can't resolve, yielding a dead link. (The TS engine
+		// gates this the same way.)
+		fullName := TargetID(fn.FullName())
 		i.mu.RLock()
-		if dfi, ok := i.funcs[ti.TargetID]; ok && dfi.decl.Doc != nil {
-			ti.Doc = strings.TrimSpace(dfi.decl.Doc.Text())
+		if dfi, ok := i.funcs[fullName]; ok {
+			ti.TargetID = fullName
+			if dfi.decl.Doc != nil {
+				ti.Doc = strings.TrimSpace(dfi.decl.Doc.Text())
+			}
 		}
 		i.mu.RUnlock()
 	}
