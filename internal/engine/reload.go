@@ -59,34 +59,46 @@ func (r *Reloadable) Close() error {
 	return nil
 }
 
-func (r *Reloadable) engine() model.Engine {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.cur
-}
-
-// model.Engine — every method delegates to the current engine.
+// model.Engine — every method delegates to the current engine while holding
+// the read lock for the *whole* call. This is what makes Reload safe: Reload
+// takes the write lock to swap, which blocks until in-flight calls release
+// their read lock, so the old engine is never Close()d while a request is
+// still talking to it (the TS sidecar would otherwise have its process killed
+// mid-roundtrip). Reads still run concurrently with each other; only a reload
+// serializes against them.
 
 func (r *Reloadable) LookupSymbol(name string) (model.TargetID, error) {
-	return r.engine().LookupSymbol(name)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cur.LookupSymbol(name)
 }
 
 func (r *Reloadable) Frame(id model.TargetID) (*model.Frame, error) {
-	return r.engine().Frame(id)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cur.Frame(id)
 }
 
 func (r *Reloadable) FrameForCall(id model.CallID, choice int) (*model.Frame, error) {
-	return r.engine().FrameForCall(id, choice)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cur.FrameForCall(id, choice)
 }
 
 func (r *Reloadable) Search(query string, limit int) []model.SearchResult {
-	return r.engine().Search(query, limit)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cur.Search(query, limit)
 }
 
 func (r *Reloadable) Files() []string {
-	return r.engine().Files()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cur.Files()
 }
 
 func (r *Reloadable) TypeInfo(id model.TargetID, offset int) (*model.TypeInfo, error) {
-	return r.engine().TypeInfo(id, offset)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cur.TypeInfo(id, offset)
 }

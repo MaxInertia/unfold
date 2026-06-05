@@ -140,6 +140,13 @@ func (w *Watcher) loop() {
 			}
 			schedule()
 		case <-fire:
+			// A debounce timer may fire concurrently with Close(); don't run a
+			// reindex once we've been told to stop.
+			select {
+			case <-w.done:
+				return
+			default:
+			}
 			w.onChange()
 		case err, ok := <-w.w.Errors:
 			if !ok {

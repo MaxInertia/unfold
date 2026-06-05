@@ -3,6 +3,7 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -37,6 +38,48 @@ func TestReloadablePicksUpNewSymbol(t *testing.T) {
 	if _, err := r.LookupSymbol("Beta"); err != nil {
 		t.Fatalf("Beta should resolve after reload: %v", err)
 	}
+}
+
+// TestReloadableConcurrentReadsDuringReload hammers reads from several
+// goroutines while reloads swap the engine underneath them. Run with -race,
+// it asserts the lock discipline: reads hold the RLock for the whole call, so
+// the engine is never swapped/closed mid-read.
+func TestReloadableConcurrentReadsDuringReload(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/tmp\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc Alpha() {}\n\nfunc main() { Alpha() }\n")
+
+	r, err := NewReloadable(LangGo, dir, "./...")
+	if err != nil {
+		t.Fatalf("NewReloadable: %v", err)
+	}
+	defer r.Close()
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				_, _ = r.LookupSymbol("Alpha")
+				_ = r.Files()
+				_ = r.Search("Alpha", 5)
+			}
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		if err := r.Reload(); err != nil {
+			t.Errorf("Reload: %v", err)
+		}
+	}
+	close(done)
+	wg.Wait()
 }
 
 // TestWatcherFiresOnSourceChange checks that the debounced watcher invokes its
