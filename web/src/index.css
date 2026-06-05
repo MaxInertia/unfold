@@ -412,6 +412,13 @@ body.resizing {
   border-bottom-style: dotted;
 }
 
+.call-site--fanout.call-site--resolvable {
+  /* Fan-out producers (e.g. subject.next) get a double underline — many
+     receivers run, not one target. */
+  border-bottom-style: double;
+  border-bottom-width: 3px;
+}
+
 .call-site.loading {
   opacity: 0.6;
 }
@@ -475,6 +482,119 @@ body.resizing {
   color: var(--error);
   font-size: 0.85em;
   margin: 0.3rem 0 0.3rem 1.2rem;
+}
+
+/* Fan-out receiver list — siblings that all run when the producer fires. */
+.fanout {
+  margin: 0.35rem 0 0.55rem 0;
+  border: 1px solid var(--call-border);
+  border-left: 3px solid var(--call-border);
+  border-radius: 6px;
+  background: var(--call-bg);
+  overflow: hidden;
+}
+
+.fanout-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.78rem;
+}
+
+.fanout-title {
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.fanout-expand-all {
+  font: inherit;
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.05rem 0.4rem;
+  cursor: pointer;
+}
+
+.fanout-expand-all:hover {
+  color: var(--fg);
+  border-color: var(--call-border);
+}
+
+.fanout-close {
+  margin-left: auto;
+  font: inherit;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.fanout-close:hover {
+  color: var(--fg);
+}
+
+.fanout-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.fanout-receiver {
+  border-top: 1px solid var(--card-border);
+}
+
+.fanout-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.82rem;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 0.3rem 0.55rem;
+  cursor: pointer;
+}
+
+.fanout-row:hover {
+  background: var(--call-bg-hover);
+}
+
+.fanout-twisty {
+  color: var(--muted);
+  width: 0.8em;
+  flex: none;
+}
+
+.fanout-label {
+  font-family: var(--mono, monospace);
+}
+
+.fanout-badge {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+}
+
+.fanout-prov {
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-left: auto;
+}
+
+.fanout-body {
+  padding: 0 0.5rem 0.4rem;
 }
 
 /* Shiki dark/light mode color swap. Background overrides above keep

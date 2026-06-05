@@ -141,6 +141,62 @@ func testUTF16Offsets(e *Engine) func(*testing.T) {
 	}
 }
 
+// TestRxjsFanout checks that an observable .next() is classified as a fan-out
+// call whose receivers are the subscribe callbacks, each expandable.
+func TestRxjsFanout(t *testing.T) {
+	if _, err := exec.LookPath("bun"); err != nil {
+		t.Skip("bun not found; skipping RxJS fan-out integration test")
+	}
+	_, thisFile, _, _ := runtime.Caller(0)
+	repo := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	t.Setenv("UNFOLD_TSINDEXER", filepath.Join(repo, "tsindexer", "main.ts"))
+	fixture := filepath.Join(repo, "tsindexer", "testdata", "observable")
+
+	e, err := Load(fixture, "./...")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer e.Close()
+
+	id, err := e.LookupSymbol("emit")
+	if err != nil {
+		t.Fatalf("LookupSymbol(emit): %v", err)
+	}
+	frame, err := e.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame(emit): %v", err)
+	}
+
+	var fan *model.CallSite
+	for i := range frame.Calls {
+		if frame.Calls[i].Kind == "fanout" {
+			fan = &frame.Calls[i]
+			break
+		}
+	}
+	if fan == nil {
+		t.Fatalf("no fan-out call in emit; calls=%v", frame.Calls)
+	}
+	if fan.FanoutKind != "subscribers" {
+		t.Errorf("fanoutKind: got %q want subscribers", fan.FanoutKind)
+	}
+	if len(fan.Receivers) != 2 {
+		t.Fatalf("receivers: got %d want 2: %+v", len(fan.Receivers), fan.Receivers)
+	}
+	for i := range fan.Receivers {
+		if fan.Receivers[i].Provenance == "" {
+			t.Errorf("receiver %d missing provenance", i)
+		}
+		body, err := e.FrameForCall(fan.ID, i)
+		if err != nil {
+			t.Fatalf("FrameForCall(fan, %d): %v", i, err)
+		}
+		if !strings.Contains(body.Source, "=>") {
+			t.Errorf("receiver %d body isn't a callback: %q", i, body.Source)
+		}
+	}
+}
+
 // TestAngularTemplates drives the sidecar against an Angular fixture and
 // checks that a component template is indexed as an html Frame whose calls
 // resolve to the component's methods, with UTF-16 offsets that survive

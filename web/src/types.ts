@@ -2,7 +2,7 @@
 
 export type TargetID = string;
 export type CallID = string;
-export type CallKind = "direct" | "interface" | "indirect";
+export type CallKind = "direct" | "interface" | "indirect" | "fanout";
 
 export interface CallSite {
   id: CallID;
@@ -12,11 +12,20 @@ export interface CallSite {
   kind: CallKind;
   targetId?: TargetID; // present for direct calls
   candidates?: Candidate[]; // present for interface calls with known impls
+  receivers?: Receiver[]; // present for fan-out calls (all of them run)
+  fanoutKind?: string; // e.g. "subscribers"
 }
 
 export interface Candidate {
   targetId: TargetID;
   label: string;
+}
+
+export interface Receiver {
+  targetId: TargetID;
+  label: string;
+  provenance?: string;
+  confidence?: string; // "high" | "tentative"
 }
 
 export interface Frame {
