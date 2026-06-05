@@ -53,23 +53,23 @@ func TestEndpoints(t *testing.T) {
 	})
 
 	t.Run("body-by-targetId-then-follow-call", func(t *testing.T) {
-		// Resolve main, then follow engine.Load() from inside it.
+		// Resolve main, then follow engine.NewReloadable() from inside it.
 		var main indexer.Frame
 		getJSON(t, ts.URL+"/api/symbol?name=main", http.StatusOK, &main)
 		var loadCallID indexer.CallID
 		for _, c := range main.Calls {
-			if c.DisplayName == "engine.Load" {
+			if c.DisplayName == "engine.NewReloadable" {
 				loadCallID = c.ID
 				break
 			}
 		}
 		if loadCallID == "" {
-			t.Fatal("engine.Load call not found in main frame")
+			t.Fatal("engine.NewReloadable call not found in main frame")
 		}
 		var callee indexer.Frame
 		getJSON(t, ts.URL+"/api/body?callId="+string(loadCallID), http.StatusOK, &callee)
-		if !strings.Contains(callee.Source, "func Load(") {
-			t.Errorf("callee source missing 'func Load(': %s", callee.Source[:minInt(120, len(callee.Source))])
+		if !strings.Contains(callee.Source, "func NewReloadable(") {
+			t.Errorf("callee source missing 'func NewReloadable(': %s", callee.Source[:minInt(120, len(callee.Source))])
 		}
 	})
 

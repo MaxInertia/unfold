@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/MaxInertia/unfold/internal/model"
 )
@@ -23,6 +25,10 @@ type Server struct {
 	engine model.Engine
 	static fs.FS
 	target string
+
+	// Connected /api/events subscribers, notified when the engine reindexes.
+	mu      sync.Mutex
+	clients map[chan struct{}]struct{}
 }
 
 // New builds a server backed by any indexing engine (Go or TypeScript).
@@ -31,7 +37,7 @@ func New(engine model.Engine) *Server {
 	if err != nil {
 		panic(err)
 	}
-	return &Server{engine: engine, static: sub}
+	return &Server{engine: engine, static: sub, clients: map[chan struct{}]struct{}{}}
 }
 
 // SetTarget records the indexer pattern (e.g. "./...") for the /api/health response.
@@ -46,8 +52,73 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/typeinfo", s.handleTypeInfo)
 	mux.HandleFunc("/api/open", s.handleOpen)
+	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))
 	return mux
+}
+
+// handleEvents is a Server-Sent Events stream. It emits a "reload" event each
+// time the engine reindexes (see NotifyReload), plus periodic comment pings to
+// keep proxies from closing an idle connection. The frontend refetches the
+// current view when it receives a reload.
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch := make(chan struct{}, 1)
+	s.addClient(ch)
+	defer s.removeClient(ch)
+
+	// Open the stream so EventSource fires onopen immediately.
+	fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
+
+	ping := time.NewTicker(25 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ch:
+			fmt.Fprint(w, "event: reload\ndata: {}\n\n")
+			flusher.Flush()
+		case <-ping.C:
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// NotifyReload wakes every connected /api/events subscriber. Non-blocking: a
+// client that hasn't drained its previous notification already has a reload
+// pending, so dropping the duplicate is fine.
+func (s *Server) NotifyReload() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ch := range s.clients {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (s *Server) addClient(ch chan struct{}) {
+	s.mu.Lock()
+	s.clients[ch] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *Server) removeClient(ch chan struct{}) {
+	s.mu.Lock()
+	delete(s.clients, ch)
+	s.mu.Unlock()
 }
 
 // GET /api/typeinfo?targetId=<id>&offset=<utf16-offset-in-source>

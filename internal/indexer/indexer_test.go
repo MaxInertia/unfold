@@ -72,12 +72,12 @@ func TestLoadSelf(t *testing.T) {
 		}
 	}
 
-	// engine.Load(...) in main is a package-level call — must be direct
-	// and resolvable into the internal/engine package.
+	// engine.NewReloadable(...) in main is a package-level call — must be
+	// direct and resolvable into the internal/engine package.
 	if !findCall(frame.Calls, func(c CallSite) bool {
-		return c.DisplayName == "engine.Load" && c.Kind == KindDirect && c.TargetID != ""
+		return c.DisplayName == "engine.NewReloadable" && c.Kind == KindDirect && c.TargetID != ""
 	}) {
-		t.Errorf("expected a direct call to engine.Load in main; calls=%v", callSummary(frame.Calls))
+		t.Errorf("expected a direct call to engine.NewReloadable in main; calls=%v", callSummary(frame.Calls))
 	}
 
 	// engine.Detect — also a package-level call, must resolve direct.
@@ -104,26 +104,26 @@ func TestFrameForCall(t *testing.T) {
 		t.Fatalf("frame: %v", err)
 	}
 
-	// Find engine.Load() and follow it.
+	// Find engine.NewReloadable() and follow it.
 	var loadCall *CallSite
 	for i, c := range mainFrame.Calls {
-		if c.DisplayName == "engine.Load" {
+		if c.DisplayName == "engine.NewReloadable" {
 			loadCall = &mainFrame.Calls[i]
 			break
 		}
 	}
 	if loadCall == nil {
-		t.Fatal("engine.Load call not found in main")
+		t.Fatal("engine.NewReloadable call not found in main")
 	}
 	callee, err := idx.FrameForCall(loadCall.ID, 0)
 	if err != nil {
 		t.Fatalf("FrameForCall: %v", err)
 	}
-	if !strings.Contains(callee.Source, "func Load(") {
-		t.Errorf("callee source missing 'func Load(': %s", truncate(callee.Source, 150))
+	if !strings.Contains(callee.Source, "func NewReloadable(") {
+		t.Errorf("callee source missing 'func NewReloadable(': %s", truncate(callee.Source, 150))
 	}
-	if !strings.Contains(string(callee.ID), "engine.Load") {
-		t.Errorf("callee target id %q doesn't include engine.Load", callee.ID)
+	if !strings.Contains(string(callee.ID), "engine.NewReloadable") {
+		t.Errorf("callee target id %q doesn't include engine.NewReloadable", callee.ID)
 	}
 }
 
