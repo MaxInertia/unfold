@@ -347,3 +347,46 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+
+// TestGoroutineLaunch verifies that a call launched with the `go` keyword is
+// flagged Goroutine=true while an ordinary call in the same body is not.
+func TestGoroutineLaunch(t *testing.T) {
+	dir, err := filepath.Abs("testdata/goroutines")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := New()
+	if err := idx.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	id, err := idx.LookupSymbol("launch")
+	if err != nil {
+		t.Fatalf("LookupSymbol(launch): %v", err)
+	}
+	frame, err := idx.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame: %v", err)
+	}
+
+	var worker, blocking *CallSite
+	for i := range frame.Calls {
+		switch frame.Calls[i].DisplayName {
+		case "worker":
+			worker = &frame.Calls[i]
+		case "blocking":
+			blocking = &frame.Calls[i]
+		}
+	}
+	if worker == nil {
+		t.Fatal("no call site found for worker()")
+	}
+	if blocking == nil {
+		t.Fatal("no call site found for blocking()")
+	}
+	if !worker.Goroutine {
+		t.Errorf("worker() is launched with `go`; want Goroutine=true")
+	}
+	if blocking.Goroutine {
+		t.Errorf("blocking() is an ordinary call; want Goroutine=false")
+	}
+}

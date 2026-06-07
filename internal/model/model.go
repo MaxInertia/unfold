@@ -60,6 +60,12 @@ type CallSite struct {
 	// Empty for direct and indirect calls. The first candidate is the
 	// default chosen when no choice is supplied.
 	Candidates []Candidate `json:"candidates,omitempty"`
+
+	// Goroutine is true when this call is launched asynchronously with the
+	// `go` keyword (Go's `go f()`). It's orthogonal to Kind — a goroutine
+	// launch is still a direct/interface/indirect call to its target — and
+	// lets the frontend flag concurrency boundaries when reading a call path.
+	Goroutine bool `json:"goroutine,omitempty"`
 }
 
 // Candidate is one concrete implementation of an interface method, used to

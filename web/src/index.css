@@ -15,6 +15,9 @@
   --call-border: rgba(37, 99, 235, 0.4);
   --call-bg-disabled: rgba(0, 0, 0, 0.04);
   --call-border-disabled: rgba(0, 0, 0, 0.15);
+  --goroutine-fg: #0f766e;
+  --goroutine-bg: rgba(13, 148, 136, 0.15);
+  --goroutine-border: rgba(13, 148, 136, 0.45);
   --shiki-default: #24292f;
   --shiki-default-bg: transparent;
 }
@@ -33,6 +36,9 @@
     --call-border: rgba(88, 166, 255, 0.5);
     --call-bg-disabled: rgba(255, 255, 255, 0.04);
     --call-border-disabled: rgba(255, 255, 255, 0.12);
+    --goroutine-fg: #5eddd0;
+    --goroutine-bg: rgba(45, 212, 191, 0.16);
+    --goroutine-border: rgba(45, 212, 191, 0.5);
   }
 }
 
@@ -419,6 +425,23 @@ body.resizing {
 .call-site.expanded {
   background: var(--call-bg-hover);
   outline: 1px solid var(--call-border);
+}
+
+/* Goroutine launch (`go f()`): a small pill before the call name marking
+   that this call runs asynchronously, so concurrency boundaries are
+   visible while reading a call path. */
+.goroutine-badge {
+  margin-right: 2px;
+  font-size: 0.8em;
+  vertical-align: baseline;
+  color: var(--goroutine-fg, #0f766e);
+  cursor: help;
+  user-select: none;
+}
+
+.call-site--goroutine {
+  /* A teal accent ties the call name to its `go` badge. */
+  border-bottom-color: var(--goroutine-border, rgba(13, 148, 136, 0.45));
 }
 
 /* Inline child frames — emitted directly after the line that contains

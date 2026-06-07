@@ -12,6 +12,7 @@ export interface CallSite {
   kind: CallKind;
   targetId?: TargetID; // present for direct calls
   candidates?: Candidate[]; // present for interface calls with known impls
+  goroutine?: boolean; // call is launched with the `go` keyword
 }
 
 export interface Candidate {

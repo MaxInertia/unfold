@@ -201,6 +201,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
       domProps.className as string | undefined,
       isExpanded ? "expanded" : "",
       isLoading ? "loading" : "",
+      call.goroutine ? "call-site--goroutine" : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -213,6 +214,15 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           toggleCall(call);
         }}
       >
+        {call.goroutine && (
+          <span
+            className="goroutine-badge"
+            title="launched as a goroutine (go …)"
+            aria-label="launched as a goroutine"
+          >
+            ⚡
+          </span>
+        )}
         {children}
       </span>
     );
