@@ -368,25 +368,53 @@ func TestGoroutineLaunch(t *testing.T) {
 		t.Fatalf("Frame: %v", err)
 	}
 
-	var worker, blocking *CallSite
+	assertGoroutineFlags(t, frame)
+
+	// Same flags must hold in the whole-file view (fileFrame propagates the
+	// flag from the shared callInfo).
+	fileFrame, err := idx.Frame(TargetID("file:" + filepath.Join(dir, "main.go")))
+	if err != nil {
+		t.Fatalf("Frame(file:): %v", err)
+	}
+	assertGoroutineFlags(t, fileFrame)
+}
+
+// assertGoroutineFlags checks the goroutine flags on a frame that contains
+// the goroutines fixture's launch body: `go worker()` is flagged, while the
+// ordinary `blocking()` and the deferred `cleanup()` are not. The anonymous
+// `go func(){…}()` has no named call site, so it must not appear at all.
+func assertGoroutineFlags(t *testing.T, frame *Frame) {
+	t.Helper()
+	flags := map[string]int{} // displayName -> count
+	var worker, blocking, cleanup *CallSite
 	for i := range frame.Calls {
-		switch frame.Calls[i].DisplayName {
+		c := &frame.Calls[i]
+		flags[c.DisplayName]++
+		switch c.DisplayName {
 		case "worker":
-			worker = &frame.Calls[i]
+			worker = c
 		case "blocking":
-			blocking = &frame.Calls[i]
+			blocking = c
+		case "cleanup":
+			cleanup = c
 		}
 	}
-	if worker == nil {
-		t.Fatal("no call site found for worker()")
+
+	if worker == nil || blocking == nil || cleanup == nil {
+		t.Fatalf("missing expected call sites: %v", flags)
 	}
-	if blocking == nil {
-		t.Fatal("no call site found for blocking()")
+	// The anonymous goroutine body has no named call, so there must be
+	// exactly one worker call site (the `go worker()`), not two.
+	if flags["worker"] != 1 {
+		t.Errorf("worker call sites = %d, want 1", flags["worker"])
 	}
 	if !worker.Goroutine {
 		t.Errorf("worker() is launched with `go`; want Goroutine=true")
 	}
 	if blocking.Goroutine {
 		t.Errorf("blocking() is an ordinary call; want Goroutine=false")
+	}
+	if cleanup.Goroutine {
+		t.Errorf("cleanup() is deferred, not a goroutine; want Goroutine=false")
 	}
 }
