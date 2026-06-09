@@ -415,10 +415,13 @@ class TSEngine {
       return null;
     }
     // Only the real RxJS / Angular types — not a user class named "Subject".
-    // Require rxjs/@angular-core to be a path *segment* (or file stem), so a
-    // user dir like src/rxjs-helpers/ doesn't false-positive.
+    // Require rxjs/@angular-core to be a path *segment* (a directory) of the
+    // declaring file, matching how both packages actually resolve
+    // (node_modules/rxjs/…, node_modules/@angular/core/…). A trailing "."
+    // is intentionally NOT accepted, so a user's own file literally named
+    // rxjs.ts — or a dir like src/rxjs-helpers/ — doesn't false-positive.
     const origin = sym?.getDeclarations()?.[0]?.getSourceFile().getFilePath() ?? "";
-    if (!/(^|[/\\])(rxjs|@angular[/\\]core)([/\\.]|$)/.test(origin)) return null;
+    if (!/(^|[/\\])(rxjs|@angular[/\\]core)([/\\]|$)/.test(origin)) return null;
 
     return { kind: "fanout", fanoutKind: "subscribers", receivers: this.resolveSubscribers(receiver) };
   }
