@@ -5,6 +5,7 @@ import { FileTree } from "./FileTree";
 import { fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
+import { ReloadProvider, useReloadRevision } from "./reload";
 import { setBookmarkProject, useBookmarks } from "./bookmarks";
 
 const TREE_COLLAPSED_KEY = "unfold.tree.collapsed";
@@ -14,7 +15,9 @@ const SIDEBAR_MIN = 200;
 export function App() {
   return (
     <ViewStoreProvider>
-      <AppShell />
+      <ReloadProvider>
+        <AppShell />
+      </ReloadProvider>
     </ViewStoreProvider>
   );
 }
@@ -22,6 +25,7 @@ export function App() {
 function AppShell() {
   const store = useViewStore();
   const symbol = store.symbol;
+  const revision = useReloadRevision();
   const [target, setTarget] = useState<string | null>(null);
   const [rootFrame, setRootFrame] = useState<FrameT | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,10 +34,19 @@ function AppShell() {
     () => localStorage.getItem(TREE_COLLAPSED_KEY) === "1",
   );
   const [sidebarTab, setSidebarTab] = useState<"files" | "calls">("calls");
+  const [reindexed, setReindexed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
   });
+
+  // Flash a brief toast whenever watch mode reindexes (revision > 0).
+  useEffect(() => {
+    if (revision === 0) return;
+    setReindexed(true);
+    const t = setTimeout(() => setReindexed(false), 1800);
+    return () => clearTimeout(t);
+  }, [revision]);
 
   useEffect(() => {
     localStorage.setItem(TREE_COLLAPSED_KEY, treeCollapsed ? "1" : "0");
@@ -79,7 +92,9 @@ function AppShell() {
         setError(e.message);
         setLoading(false);
       });
-  }, [symbol]);
+    // `revision` re-runs this after a watch-mode reindex so the root frame
+    // (and, via the remount below, its expanded children) refetch.
+  }, [symbol, revision]);
 
   useEffect(() => {
     fetch("/api/health")
@@ -97,6 +112,7 @@ function AppShell() {
         <h1>unfold</h1>
         {target && <span className="app-target">target: <code>{target}</code></span>}
       </header>
+      {reindexed && <div className="app-toast">reindexed · view refreshed</div>}
       <div className="app-main">
         <aside
           className={`tree-panel${treeCollapsed ? " tree-panel--collapsed" : ""}`}
@@ -170,7 +186,9 @@ function AppShell() {
           {loading && <div className="app-loading">loading…</div>}
           {rootFrame && (
             <div className="app-root-frame">
-              <Frame frame={rootFrame} path={[]} />
+              {/* Remount the whole frame tree on reindex so every expanded
+                  child refetches; the expansion intent persists in the store. */}
+              <Frame key={revision} frame={rootFrame} path={[]} />
             </div>
           )}
           {!rootFrame && !loading && !error && (
