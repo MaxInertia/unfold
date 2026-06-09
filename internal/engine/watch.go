@@ -14,6 +14,11 @@ import (
 // sourceExts are the file extensions whose changes warrant a reindex. Other
 // files (lockfiles, images, build output) are ignored so editor churn and
 // generated artifacts don't trigger needless rebuilds.
+//
+// Note .json is deliberately absent: an arbitrary data/fixture .json doesn't
+// affect indexing, and watching all of them causes needless rebuilds. Only
+// the specific manifests that change TS module resolution trigger a reindex
+// — see isReindexTrigger.
 var sourceExts = map[string]bool{
 	".go":   true,
 	".ts":   true,
@@ -23,7 +28,20 @@ var sourceExts = map[string]bool{
 	".js":   true,
 	".jsx":  true,
 	".html": true,
-	".json": true, // tsconfig / package manifests affect TS resolution
+}
+
+// isReindexTrigger reports whether a changed path warrants a reindex: a
+// source file by extension, or one of the few JSON manifests that affect
+// TypeScript/JS module resolution (tsconfig*.json, jsconfig*.json,
+// package.json). All other .json files are ignored.
+func isReindexTrigger(path string) bool {
+	base := filepath.Base(path)
+	if strings.ToLower(filepath.Ext(base)) == ".json" {
+		return base == "package.json" ||
+			strings.HasPrefix(base, "tsconfig") ||
+			strings.HasPrefix(base, "jsconfig")
+	}
+	return sourceExts[strings.ToLower(filepath.Ext(base))]
 }
 
 // Watcher invokes onChange (debounced) whenever a source file under root
@@ -58,7 +76,9 @@ func NewWatcher(root string, debounce time.Duration, onChange func()) (*Watcher,
 		done:     make(chan struct{}),
 	}
 	if err := w.addTree(root); err != nil {
-		_ = fw.Close()
+		if cerr := fw.Close(); cerr != nil {
+			log.Printf("watch: closing watcher after failed setup: %v", cerr)
+		}
 		return nil, err
 	}
 	go w.loop()
@@ -83,7 +103,12 @@ func (w *Watcher) addTree(root string) error {
 		if path != root && skipDir(d.Name()) {
 			return filepath.SkipDir
 		}
-		_ = w.w.Add(path)
+		// Log rather than abort: one unwatchable dir (e.g. a transient
+		// permission error, or hitting the inotify watch limit) shouldn't
+		// tear down the whole watcher — the rest of the tree still works.
+		if err := w.w.Add(path); err != nil {
+			log.Printf("watch: cannot watch %s: %v", path, err)
+		}
 		return nil
 	})
 }
@@ -135,7 +160,7 @@ func (w *Watcher) loop() {
 					continue
 				}
 			}
-			if !sourceExts[strings.ToLower(filepath.Ext(ev.Name))] {
+			if !isReindexTrigger(ev.Name) {
 				continue
 			}
 			schedule()

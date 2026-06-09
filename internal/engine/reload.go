@@ -34,6 +34,13 @@ func NewReloadable(lang Lang, dir, target string) (*Reloadable, error) {
 // replaces the old one (closing it if it holds resources, e.g. the TS
 // sidecar process); on failure the previous engine is kept and the error
 // is returned so the caller can log it without disrupting the session.
+//
+// Reload is safe to run concurrently with reads, but NOT with another
+// Reload: two overlapping calls each Load independently and then swap, so
+// the engine that wins `cur` is whichever grabs the lock last — which need
+// not be the one that started last, leaving a staler engine current. Callers
+// must serialize Reload. The Watcher satisfies this: its single debounce
+// loop invokes onChange one call at a time.
 func (r *Reloadable) Reload() error {
 	eng, err := Load(r.lang, r.dir, r.target)
 	if err != nil {
