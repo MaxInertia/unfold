@@ -65,6 +65,15 @@ interface SearchResult {
   line: number;
 }
 
+interface TypeInfoOut {
+  kind: string;
+  name: string;
+  type: string;
+  definedAt?: string;
+  doc?: string;
+  targetId?: string;
+}
+
 // A registered call target: a function-like declaration we can show a body
 // for. `decl` is the node whose text becomes the frame source.
 interface FuncInfo {
@@ -499,6 +508,63 @@ class TSEngine {
     throw new Error(`call is ${info.kind}; not expandable`);
   }
 
+  // Resolve the identifier at a UTF-16 offset into the frame source.
+  typeInfo(id: string, offset: number): TypeInfoOut | null {
+    if (!this.loaded) return null;
+    let sf;
+    let absPos: number;
+    if (id.startsWith("file:")) {
+      const found = this.project.getSourceFile(id.slice(5));
+      if (!found) return null;
+      sf = found;
+      absPos = offset;
+    } else {
+      const fi = this.funcs.get(id);
+      if (!fi) return null;
+      sf = fi.decl.getSourceFile();
+      absPos = fi.decl.getStart() + offset;
+    }
+    const node = sf.getDescendantAtPos(absPos);
+    if (!node || !Node.isIdentifier(node)) return null;
+
+    let type = "";
+    try {
+      const t = node.getType();
+      const sigs = t.getCallSignatures();
+      if (sigs.length > 0) {
+        // A function/method — render its signature, not "typeof fn".
+        const sig = sigs[0];
+        const params = sig
+          .getParameters()
+          .map((p) => p.getDeclarations()[0]?.getText() ?? p.getName())
+          .join(", ");
+        type = `(${params}) => ${sig.getReturnType().getText(node)}`;
+      } else {
+        type = t.getText(node);
+      }
+    } catch {
+      type = "";
+    }
+    let sym = node.getSymbol();
+    if (sym) {
+      const aliased = sym.getAliasedSymbol();
+      if (aliased) sym = aliased;
+    }
+    const decl = sym?.getDeclarations()?.[0];
+
+    const out: TypeInfoOut = { kind: "symbol", name: node.getText(), type };
+    if (decl) {
+      out.definedAt = `${decl.getSourceFile().getFilePath()}:${decl.getStartLineNumber()}`;
+      out.kind = declKind(decl);
+      const tid = targetId(normalizeDecl(decl));
+      if (this.funcs.has(tid)) out.targetId = tid;
+      const jsdocs = (decl as { getJsDocs?: () => { getDescription(): string }[] }).getJsDocs?.();
+      const d = jsdocs && jsdocs[0]?.getDescription()?.trim();
+      if (d) out.doc = d;
+    }
+    return out;
+  }
+
   search(query: string, limit: number): SearchResult[] {
     if (!this.loaded) return [];
     const q = query.toLowerCase();
@@ -621,6 +687,35 @@ function displayName(expr: TNode): string {
   return expr.getText();
 }
 
+// A short kind label for a declaration, for the type-info card.
+function declKind(decl: TNode): string {
+  if (
+    Node.isFunctionDeclaration(decl) ||
+    Node.isMethodDeclaration(decl) ||
+    Node.isMethodSignature(decl) ||
+    Node.isArrowFunction(decl) ||
+    Node.isFunctionExpression(decl) ||
+    Node.isConstructorDeclaration(decl)
+  ) {
+    return "func";
+  }
+  if (
+    Node.isClassDeclaration(decl) ||
+    Node.isInterfaceDeclaration(decl) ||
+    Node.isTypeAliasDeclaration(decl) ||
+    Node.isEnumDeclaration(decl)
+  ) {
+    return "type";
+  }
+  if (Node.isPropertyDeclaration(decl) || Node.isPropertySignature(decl) || Node.isPropertyAssignment(decl)) {
+    return "field";
+  }
+  if (Node.isParameterDeclaration(decl)) return "param";
+  if (Node.isVariableDeclaration(decl)) return "var";
+  if (Node.isEnumMember(decl)) return "const";
+  return "symbol";
+}
+
 // Prefer a declaration that has a body (the impl among overload signatures).
 function pickDecl(decls: TNode[]): TNode | undefined {
   for (const d of decls) {
@@ -696,6 +791,8 @@ function handle(method: string, params: Record<string, unknown>): unknown {
       return { results: engine.search(String(params.query ?? ""), Number(params.limit ?? 50)) };
     case "files":
       return { files: engine.files() };
+    case "typeinfo":
+      return { typeInfo: engine.typeInfo(String(params.targetId ?? ""), Number(params.offset ?? 0)) };
     default:
       throw new Error(`unknown method ${JSON.stringify(method)}`);
   }
