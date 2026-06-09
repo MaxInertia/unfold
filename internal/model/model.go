@@ -21,6 +21,7 @@ const (
 	KindDirect    CallKind = "direct"    // resolved to one specific function
 	KindInterface CallKind = "interface" // dispatched through an interface; Candidates enumerates impls
 	KindIndirect  CallKind = "indirect"  // through a function value, builtin, or otherwise unresolvable
+	KindFanout    CallKind = "fanout"    // one site reaches many receivers (all run); Receivers enumerates them
 )
 
 // Frame is the unit the frontend renders: a function's source plus the
@@ -66,6 +67,22 @@ type CallSite struct {
 	// launch is still a direct/interface/indirect call to its target — and
 	// lets the frontend flag concurrency boundaries when reading a call path.
 	Goroutine bool `json:"goroutine,omitempty"`
+
+	// Receivers lists the targets a fan-out call reaches (all of them run,
+	// unlike Candidates where one is chosen). Set only for kind="fanout".
+	// FrameForCall(id, choice) selects Receivers[choice].
+	Receivers  []Receiver `json:"receivers,omitempty"`
+	FanoutKind string     `json:"fanoutKind,omitempty"` // e.g. "subscribers"
+}
+
+// Receiver is one target reached by a fan-out call (e.g. a subscriber of an
+// observable). Unlike Candidate, fan-out receivers all run; Provenance and
+// Confidence reflect that fan-out resolution is heuristic.
+type Receiver struct {
+	TargetID   TargetID `json:"targetId"`
+	Label      string   `json:"label"`
+	Provenance string   `json:"provenance,omitempty"` // e.g. "subscribe at app.ts:42"
+	Confidence string   `json:"confidence,omitempty"` // "high" | "tentative"
 }
 
 // Candidate is one concrete implementation of an interface method, used to
@@ -73,6 +90,18 @@ type CallSite struct {
 type Candidate struct {
 	TargetID TargetID `json:"targetId"`
 	Label    string   `json:"label"`
+}
+
+// TypeInfo describes the symbol under a hovered source offset: its kind,
+// name, type/signature, where it's defined, and (when it's a function the
+// engine knows) a TargetID so the frontend can open it.
+type TypeInfo struct {
+	Kind      string   `json:"kind"`                // "var", "func", "type", "const", "field", "package", ...
+	Name      string   `json:"name"`                // the identifier text
+	Type      string   `json:"type"`                // type or signature, e.g. "func(s string) error"
+	DefinedAt string   `json:"definedAt,omitempty"` // "<file>:<line>"
+	Doc       string   `json:"doc,omitempty"`       // leading doc comment, if any
+	TargetID  TargetID `json:"targetId,omitempty"`  // set when the symbol is a function/method we can open
 }
 
 // SearchResult is one hit returned from an engine's Search.
@@ -101,4 +130,8 @@ type Engine interface {
 	// frontend can show a file tree. A whole-file Frame is obtained by
 	// passing "file:<path>" as a target id to Frame.
 	Files() []string
+	// TypeInfo resolves the symbol at a UTF-16 offset into the frame's
+	// Source and returns its type details. Returns nil (no error) when the
+	// offset isn't over a resolvable symbol.
+	TypeInfo(id TargetID, offset int) (*TypeInfo, error)
 }

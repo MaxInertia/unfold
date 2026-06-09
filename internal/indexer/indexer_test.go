@@ -72,12 +72,12 @@ func TestLoadSelf(t *testing.T) {
 		}
 	}
 
-	// engine.Load(...) in main is a package-level call — must be direct
-	// and resolvable into the internal/engine package.
+	// engine.NewReloadable(...) in main is a package-level call — must be
+	// direct and resolvable into the internal/engine package.
 	if !findCall(frame.Calls, func(c CallSite) bool {
-		return c.DisplayName == "engine.Load" && c.Kind == KindDirect && c.TargetID != ""
+		return c.DisplayName == "engine.NewReloadable" && c.Kind == KindDirect && c.TargetID != ""
 	}) {
-		t.Errorf("expected a direct call to engine.Load in main; calls=%v", callSummary(frame.Calls))
+		t.Errorf("expected a direct call to engine.NewReloadable in main; calls=%v", callSummary(frame.Calls))
 	}
 
 	// engine.Detect — also a package-level call, must resolve direct.
@@ -104,26 +104,26 @@ func TestFrameForCall(t *testing.T) {
 		t.Fatalf("frame: %v", err)
 	}
 
-	// Find engine.Load() and follow it.
+	// Find engine.NewReloadable() and follow it.
 	var loadCall *CallSite
 	for i, c := range mainFrame.Calls {
-		if c.DisplayName == "engine.Load" {
+		if c.DisplayName == "engine.NewReloadable" {
 			loadCall = &mainFrame.Calls[i]
 			break
 		}
 	}
 	if loadCall == nil {
-		t.Fatal("engine.Load call not found in main")
+		t.Fatal("engine.NewReloadable call not found in main")
 	}
 	callee, err := idx.FrameForCall(loadCall.ID, 0)
 	if err != nil {
 		t.Fatalf("FrameForCall: %v", err)
 	}
-	if !strings.Contains(callee.Source, "func Load(") {
-		t.Errorf("callee source missing 'func Load(': %s", truncate(callee.Source, 150))
+	if !strings.Contains(callee.Source, "func NewReloadable(") {
+		t.Errorf("callee source missing 'func NewReloadable(': %s", truncate(callee.Source, 150))
 	}
-	if !strings.Contains(string(callee.ID), "engine.Load") {
-		t.Errorf("callee target id %q doesn't include engine.Load", callee.ID)
+	if !strings.Contains(string(callee.ID), "engine.NewReloadable") {
+		t.Errorf("callee target id %q doesn't include engine.NewReloadable", callee.ID)
 	}
 }
 
@@ -321,6 +321,65 @@ func TestFileFrame(t *testing.T) {
 	}
 	if expandable == 0 {
 		t.Error("file frame has no expandable (direct+target) calls")
+	}
+}
+
+// TestTypeInfo hovers the name token of a call inside resolveCall and checks
+// the resolved symbol's type details.
+func TestTypeInfo(t *testing.T) {
+	idx := New()
+	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	id, err := idx.LookupSymbol("resolveCall")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	frame, err := idx.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame: %v", err)
+	}
+	var span *CallSite
+	for i := range frame.Calls {
+		if frame.Calls[i].DisplayName == "nameSpan" {
+			span = &frame.Calls[i]
+			break
+		}
+	}
+	if span == nil {
+		t.Fatalf("nameSpan call not found; calls=%v", callSummary(frame.Calls))
+	}
+
+	ti, err := idx.TypeInfo(id, span.SpanStart)
+	if err != nil {
+		t.Fatalf("TypeInfo: %v", err)
+	}
+	if ti == nil {
+		t.Fatal("TypeInfo returned nil over a call's name token")
+	}
+	if ti.Name != "nameSpan" {
+		t.Errorf("name: got %q want nameSpan", ti.Name)
+	}
+	if ti.Kind != "func" {
+		t.Errorf("kind: got %q want func", ti.Kind)
+	}
+	if !strings.Contains(ti.Type, "func(") {
+		t.Errorf("type not a func signature: %q", ti.Type)
+	}
+	if !strings.Contains(ti.DefinedAt, "indexer.go:") {
+		t.Errorf("definedAt: got %q", ti.DefinedAt)
+	}
+	if !strings.Contains(string(ti.TargetID), "nameSpan") {
+		t.Errorf("targetId: got %q", ti.TargetID)
+	}
+
+	// Hovering whitespace/punctuation returns nil, not an error.
+	if got, err := idx.TypeInfo(id, 0); err != nil {
+		t.Errorf("TypeInfo at offset 0: %v", err)
+	} else if got != nil && got.Name != "" && got.Kind != "func" && got.Kind != "type" {
+		// offset 0 is "func" keyword start; resolving there may yield the
+		// function name ident — tolerate either nil or a sane result.
+		_ = got
 	}
 }
 

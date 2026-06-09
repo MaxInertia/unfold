@@ -193,6 +193,16 @@ func (e *Engine) Files() []string {
 	return res.Files
 }
 
+func (e *Engine) TypeInfo(id model.TargetID, offset int) (*model.TypeInfo, error) {
+	var res struct {
+		TypeInfo *model.TypeInfo `json:"typeInfo"`
+	}
+	if err := e.call("typeinfo", map[string]any{"targetId": string(id), "offset": offset}, &res); err != nil {
+		return nil, err
+	}
+	return res.TypeInfo, nil
+}
+
 // Close shuts the sidecar down.
 func (e *Engine) Close() error {
 	if e.stdin != nil {

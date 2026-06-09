@@ -2,7 +2,7 @@
 
 export type TargetID = string;
 export type CallID = string;
-export type CallKind = "direct" | "interface" | "indirect";
+export type CallKind = "direct" | "interface" | "indirect" | "fanout";
 
 export interface CallSite {
   id: CallID;
@@ -13,11 +13,20 @@ export interface CallSite {
   targetId?: TargetID; // present for direct calls
   candidates?: Candidate[]; // present for interface calls with known impls
   goroutine?: boolean; // call is launched with the `go` keyword
+  receivers?: Receiver[]; // present for fan-out calls (all of them run)
+  fanoutKind?: string; // e.g. "subscribers"
 }
 
 export interface Candidate {
   targetId: TargetID;
   label: string;
+}
+
+export interface Receiver {
+  targetId: TargetID;
+  label: string;
+  provenance?: string;
+  confidence?: string; // "high" | "tentative"
 }
 
 export interface Frame {
@@ -36,4 +45,13 @@ export interface SearchResult {
   label: string;
   file: string;
   line: number;
+}
+
+export interface TypeInfo {
+  kind: string;
+  name: string;
+  type: string;
+  definedAt?: string; // "<file>:<line>"
+  doc?: string;
+  targetId?: TargetID; // present when the symbol is a function we can open
 }

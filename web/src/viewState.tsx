@@ -17,6 +17,10 @@ import type { CallID } from "./types";
 export interface FrameSlice {
   folds: [number, number][]; // [start, end] inclusive line indices
   expansions: Record<CallID, FrameSlice & { choice: number }>;
+  // Fan-out calls: a record exists per call whose receiver list is open;
+  // each expanded receiver index maps to its own nested slice. Many can be
+  // open at once (unlike `expansions`, one child per call).
+  fanouts?: Record<CallID, Record<number, FrameSlice>>;
 }
 
 export type FramePath = { callId: CallID; choice: number }[];
@@ -26,6 +30,14 @@ export type FramePath = { callId: CallID; choice: number }[];
 // view. The empty path (root frame) maps to "".
 export function pathKey(path: FramePath): string {
   return path.map((p) => `${p.callId}#${p.choice}`).join(">");
+}
+
+export function isFanoutOpen(slice: FrameSlice, callId: CallID): boolean {
+  return !!slice.fanouts?.[callId];
+}
+
+export function expandedReceivers(slice: FrameSlice, callId: CallID): number[] {
+  return Object.keys(slice.fanouts?.[callId] ?? {}).map(Number);
 }
 
 export const emptySlice: FrameSlice = Object.freeze({
@@ -39,6 +51,12 @@ interface ViewStoreCtx {
   expand: (path: FramePath, callId: CallID, choice: number) => void;
   setChoice: (path: FramePath, callId: CallID, choice: number) => void;
   collapse: (path: FramePath, callId: CallID) => void;
+  // Fan-out calls: open/close the receiver list, and expand/collapse each
+  // receiver (many can be open at once).
+  openFanout: (path: FramePath, callId: CallID) => void;
+  closeFanout: (path: FramePath, callId: CallID) => void;
+  expandReceiver: (path: FramePath, callId: CallID, index: number) => void;
+  collapseReceiver: (path: FramePath, callId: CallID, index: number) => void;
   // Subscribe so consumers re-render when their slice changes.
   subscribe: (listener: () => void) => () => void;
   // Currently-selected root symbol (also tracked in the URL hash).
@@ -67,7 +85,10 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
   const getSlice = useCallback((path: FramePath): FrameSlice => {
     let cur: FrameSlice = rootRef.current;
     for (const step of path) {
-      const next = cur.expansions[step.callId];
+      const fanout = cur.fanouts?.[step.callId]?.[step.choice];
+      const expansion = cur.expansions[step.callId];
+      const next =
+        fanout ?? (expansion && expansion.choice === step.choice ? expansion : undefined);
       if (!next) return emptySlice;
       cur = next;
     }
@@ -133,6 +154,53 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
     [updatePath],
   );
 
+  const openFanout = useCallback(
+    (path: FramePath, callId: CallID) => {
+      updatePath(path, (s) =>
+        s.fanouts?.[callId] ? s : { ...s, fanouts: { ...s.fanouts, [callId]: {} } },
+      );
+    },
+    [updatePath],
+  );
+
+  const closeFanout = useCallback(
+    (path: FramePath, callId: CallID) => {
+      updatePath(path, (s) => {
+        if (!s.fanouts?.[callId]) return s;
+        const next = { ...s.fanouts };
+        delete next[callId];
+        return { ...s, fanouts: next };
+      });
+    },
+    [updatePath],
+  );
+
+  const expandReceiver = useCallback(
+    (path: FramePath, callId: CallID, index: number) => {
+      updatePath(path, (s) => ({
+        ...s,
+        fanouts: {
+          ...s.fanouts,
+          [callId]: { ...(s.fanouts?.[callId] ?? {}), [index]: emptySlice },
+        },
+      }));
+    },
+    [updatePath],
+  );
+
+  const collapseReceiver = useCallback(
+    (path: FramePath, callId: CallID, index: number) => {
+      updatePath(path, (s) => {
+        const cur = s.fanouts?.[callId];
+        if (!cur || !(index in cur)) return s;
+        const next = { ...cur };
+        delete next[index];
+        return { ...s, fanouts: { ...s.fanouts, [callId]: next } };
+      });
+    },
+    [updatePath],
+  );
+
   const subscribe = useCallback((listener: () => void) => {
     listeners.current.add(listener);
     return () => {
@@ -158,8 +226,34 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
   }, [notify]);
 
   const ctx = useMemo<ViewStoreCtx>(
-    () => ({ getSlice, setFolds, expand, setChoice, collapse, subscribe, symbol, setSymbol }),
-    [getSlice, setFolds, expand, setChoice, collapse, subscribe, symbol, setSymbol],
+    () => ({
+      getSlice,
+      setFolds,
+      expand,
+      setChoice,
+      collapse,
+      openFanout,
+      closeFanout,
+      expandReceiver,
+      collapseReceiver,
+      subscribe,
+      symbol,
+      setSymbol,
+    }),
+    [
+      getSlice,
+      setFolds,
+      expand,
+      setChoice,
+      collapse,
+      openFanout,
+      closeFanout,
+      expandReceiver,
+      collapseReceiver,
+      subscribe,
+      symbol,
+      setSymbol,
+    ],
   );
 
   return <ViewStoreContext.Provider value={ctx}>{children}</ViewStoreContext.Provider>;
@@ -187,6 +281,21 @@ function mutate(
 ): FrameSlice {
   if (path.length === 0) return updater(root);
   const [head, ...rest] = path;
+
+  // Fan-out receiver child?
+  const fanoutChild = root.fanouts?.[head.callId]?.[head.choice];
+  if (fanoutChild) {
+    const newChild = mutate(fanoutChild, rest, updater);
+    if (newChild === fanoutChild) return root;
+    return {
+      ...root,
+      fanouts: {
+        ...root.fanouts,
+        [head.callId]: { ...root.fanouts![head.callId], [head.choice]: newChild },
+      },
+    };
+  }
+
   const child = root.expansions[head.callId];
   if (!child) return root;
   const newChild = mutate(child, rest, updater);
@@ -231,5 +340,9 @@ function writeHash(symbol: string | null, tree: FrameSlice): void {
 }
 
 function hasState(slice: FrameSlice): boolean {
-  return slice.folds.length > 0 || Object.keys(slice.expansions).length > 0;
+  return (
+    slice.folds.length > 0 ||
+    Object.keys(slice.expansions).length > 0 ||
+    Object.keys(slice.fanouts ?? {}).length > 0
+  );
 }

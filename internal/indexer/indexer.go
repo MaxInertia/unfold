@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MaxInertia/unfold/internal/model"
+	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -51,6 +52,30 @@ func utf16Offset(b []byte, byteOffset int) int {
 	return n
 }
 
+// byteOffsetForUTF16 is the inverse of utf16Offset: it maps a UTF-16 code-unit
+// offset (what the frontend sends) back to a byte offset in b.
+func byteOffsetForUTF16(b []byte, u16 int) int {
+	n := 0
+	for i := 0; i < len(b); {
+		if n >= u16 {
+			return i
+		}
+		r, size := utf8.DecodeRune(b[i:])
+		if r == utf8.RuneError && size <= 1 {
+			n++
+			i++
+			continue
+		}
+		if r > 0xFFFF {
+			n += 2
+		} else {
+			n++
+		}
+		i += size
+	}
+	return len(b)
+}
+
 // The wire types live in internal/model so every engine emits the same
 // JSON shapes. These aliases keep the indexer's call sites terse and let
 // existing callers/tests continue to reference indexer.Frame etc. For the
@@ -64,6 +89,7 @@ type (
 	CallSite     = model.CallSite
 	Candidate    = model.Candidate
 	SearchResult = model.SearchResult
+	TypeInfo     = model.TypeInfo
 )
 
 const (
@@ -608,6 +634,139 @@ func (i *Indexer) readFile(path string) ([]byte, error) {
 	}
 	i.fileBytes[path] = b
 	return b, nil
+}
+
+// TypeInfo resolves the identifier at a UTF-16 offset into the frame's source
+// and reports its type details. Returns nil (no error) when the offset isn't
+// over a resolvable identifier.
+func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
+	var (
+		srcBase  int // byte offset in the file where the frame source starts
+		fileName string
+		astFile  *ast.File
+		pkg      *packages.Package
+	)
+	if path, ok := strings.CutPrefix(string(id), "file:"); ok {
+		astFile, pkg = i.astFileFor(path)
+		fileName = path
+	} else {
+		i.mu.RLock()
+		fi, ok := i.funcs[id]
+		i.mu.RUnlock()
+		if !ok {
+			return nil, fmt.Errorf("unknown target %q", id)
+		}
+		start := i.fset.Position(fi.decl.Pos())
+		srcBase, fileName, pkg = start.Offset, start.Filename, fi.pkg
+		astFile = fileContaining(fi.decl, fi.pkg)
+	}
+	if astFile == nil || pkg == nil || pkg.TypesInfo == nil {
+		return nil, nil
+	}
+
+	buf, err := i.readFile(fileName)
+	if err != nil {
+		return nil, err
+	}
+	if srcBase > len(buf) {
+		return nil, nil
+	}
+	abs := srcBase + byteOffsetForUTF16(buf[srcBase:], offset)
+
+	tf := i.fset.File(astFile.Pos())
+	if tf == nil || abs < 0 || abs > tf.Size() {
+		return nil, nil
+	}
+	pos := tf.Pos(abs)
+
+	enclosing, _ := astutil.PathEnclosingInterval(astFile, pos, pos)
+	var ident *ast.Ident
+	for _, n := range enclosing {
+		if id2, ok := n.(*ast.Ident); ok {
+			ident = id2
+			break
+		}
+	}
+	if ident == nil {
+		return nil, nil
+	}
+	obj := pkg.TypesInfo.ObjectOf(ident)
+	if obj == nil {
+		return nil, nil
+	}
+
+	ti := &TypeInfo{
+		Name: ident.Name,
+		Kind: objKind(obj),
+		Type: types.TypeString(obj.Type(), types.RelativeTo(pkg.Types)),
+	}
+	if obj.Pos().IsValid() {
+		dp := i.fset.Position(obj.Pos())
+		ti.DefinedAt = fmt.Sprintf("%s:%d", dp.Filename, dp.Line)
+	}
+	if fn, ok := obj.(*types.Func); ok {
+		// Only expose TargetID for functions we actually indexed — otherwise
+		// the hover card would offer "open" on a stdlib/dependency func that
+		// LookupSymbol can't resolve, yielding a dead link. (The TS engine
+		// gates this the same way.)
+		fullName := TargetID(fn.FullName())
+		i.mu.RLock()
+		if dfi, ok := i.funcs[fullName]; ok {
+			ti.TargetID = fullName
+			if dfi.decl.Doc != nil {
+				ti.Doc = strings.TrimSpace(dfi.decl.Doc.Text())
+			}
+		}
+		i.mu.RUnlock()
+	}
+	return ti, nil
+}
+
+// astFileFor finds the parsed file and its package for a given path.
+func (i *Indexer) astFileFor(path string) (*ast.File, *packages.Package) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	for _, pkg := range i.pkgs {
+		for _, f := range pkg.Syntax {
+			if i.fset.Position(f.Pos()).Filename == path {
+				return f, pkg
+			}
+		}
+	}
+	return nil, nil
+}
+
+func fileContaining(node ast.Node, pkg *packages.Package) *ast.File {
+	for _, f := range pkg.Syntax {
+		if f.Pos() <= node.Pos() && node.Pos() < f.End() {
+			return f
+		}
+	}
+	return nil
+}
+
+func objKind(obj types.Object) string {
+	switch o := obj.(type) {
+	case *types.Var:
+		if o.IsField() {
+			return "field"
+		}
+		return "var"
+	case *types.Func:
+		return "func"
+	case *types.TypeName:
+		return "type"
+	case *types.Const:
+		return "const"
+	case *types.PkgName:
+		return "package"
+	case *types.Label:
+		return "label"
+	case *types.Builtin:
+		return "builtin"
+	default:
+		return "symbol"
+	}
 }
 
 // FrameForCall returns a Frame for the chosen target of the given call.

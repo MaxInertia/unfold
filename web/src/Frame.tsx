@@ -1,10 +1,17 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Root as HastRoot } from "hast";
-import { fetchBodyByCall } from "./api";
+import { fetchBodyByCall, fetchTypeInfo, openInEditor } from "./api";
 import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
-import type { CallID, CallSite, Frame as FrameT } from "./types";
-import { pathKey, useFrameSlice, useViewStore, type FramePath } from "./viewState";
+import type { CallID, CallSite, Frame as FrameT, TypeInfo } from "./types";
+import {
+  expandedReceivers,
+  isFanoutOpen,
+  pathKey,
+  useFrameSlice,
+  useViewStore,
+  type FramePath,
+} from "./viewState";
 import { useBookmarks } from "./bookmarks";
 
 export interface FoldRange {
@@ -28,7 +35,79 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   const [loadedChildren, setLoadedChildren] = useState<Map<CallID, FrameT>>(new Map());
   const [loading, setLoading] = useState<Set<CallID>>(new Set());
   const [errors, setErrors] = useState<Map<CallID, string>>(new Map());
+  // Fan-out receiver frames, keyed by `${callId}#${receiverIndex}` (a fan-out
+  // call can have many receivers open at once, unlike a normal expansion which
+  // has a single child). Errors share the same composite key.
+  const [fanoutChildren, setFanoutChildren] = useState<Map<string, FrameT>>(new Map());
+  const [fanoutErrors, setFanoutErrors] = useState<Map<string, string>>(new Map());
+  const fanoutLoading = useRef<Set<string>>(new Set());
   const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
+  const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
+  const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0 });
+
+  // UTF-16 offset of each line's start in the source, for hover→offset mapping.
+  const lineStarts = useMemo(() => {
+    const starts = [0];
+    for (let i = 0; i < frame.source.length; i++) {
+      if (frame.source.charCodeAt(i) === 10) starts.push(i + 1);
+    }
+    return starts;
+  }, [frame.source]);
+
+  function offsetAtPoint(clientX: number, clientY: number): number | null {
+    const caret = caretFromPoint(clientX, clientY);
+    if (!caret) return null;
+    const startEl =
+      caret.node.nodeType === Node.TEXT_NODE
+        ? caret.node.parentElement
+        : (caret.node as Element);
+    const lineSpan = startEl?.closest(".line") as HTMLElement | null;
+    const row = startEl?.closest(".line-row") as HTMLElement | null;
+    if (!lineSpan || !row) return null;
+    const lineIdx = Number(row.getAttribute("data-line-idx"));
+    if (!Number.isFinite(lineIdx)) return null;
+    const measure = document.createRange();
+    measure.setStart(lineSpan, 0);
+    try {
+      measure.setEnd(caret.node, caret.offset);
+    } catch {
+      return null;
+    }
+    return (lineStarts[lineIdx] ?? 0) + measure.toString().length;
+  }
+
+  function onSourceMouseMove(e: React.MouseEvent) {
+    if (selection) return; // don't fight a line selection
+    const off = offsetAtPoint(e.clientX, e.clientY);
+    if (off == null || off === hoverRef.current.offset) return;
+    hoverRef.current.offset = off;
+    const x = e.clientX;
+    const y = e.clientY;
+    window.clearTimeout(hoverRef.current.showTimer);
+    hoverRef.current.showTimer = window.setTimeout(() => {
+      fetchTypeInfo(frame.id, off)
+        .then((info) => setTypeCard(info ? { x, y, info } : null))
+        .catch(() => setTypeCard(null));
+    }, 250);
+  }
+
+  function onSourceMouseLeave() {
+    window.clearTimeout(hoverRef.current.showTimer);
+    hoverRef.current.offset = -1;
+    hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+  }
+
+  function openDefinition(info: TypeInfo) {
+    setTypeCard(null);
+    if (info.targetId) {
+      store.setSymbol(info.targetId);
+      return;
+    }
+    const at = info.definedAt;
+    if (!at) return;
+    const i = at.lastIndexOf(":");
+    if (i > 0) openInEditor(at.slice(0, i), Number(at.slice(i + 1)) || 1).catch(() => {});
+  }
 
   // Fetch any expanded children we don't have loaded yet, and prune any
   // we've loaded but the slice no longer expands.
@@ -89,6 +168,57 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slice.expansions]);
 
+  // Fetch the body of each expanded fan-out receiver, and prune frames for
+  // receivers that have since been collapsed. Each receiver resolves to its
+  // own frame via FrameForCall(callId, receiverIndex).
+  useEffect(() => {
+    const wanted: { key: string; callId: CallID; index: number }[] = [];
+    for (const callId of Object.keys(slice.fanouts ?? {}) as CallID[]) {
+      for (const index of expandedReceivers(slice, callId)) {
+        wanted.push({ key: `${callId}#${index}`, callId, index });
+      }
+    }
+    const wantedKeys = new Set(wanted.map((w) => w.key));
+    setFanoutChildren((current) => {
+      let mutated = false;
+      const next = new Map(current);
+      for (const k of next.keys()) {
+        if (!wantedKeys.has(k)) {
+          next.delete(k);
+          mutated = true;
+        }
+      }
+      return mutated ? next : current;
+    });
+
+    let alive = true;
+    for (const w of wanted) {
+      if (fanoutChildren.has(w.key) || fanoutLoading.current.has(w.key)) continue;
+      fanoutLoading.current.add(w.key);
+      fetchBodyByCall(w.callId, w.index)
+        .then((child) => {
+          fanoutLoading.current.delete(w.key);
+          if (!alive) return;
+          setFanoutChildren((m) => new Map(m).set(w.key, child));
+          setFanoutErrors((m) => {
+            if (!m.has(w.key)) return m;
+            const n = new Map(m);
+            n.delete(w.key);
+            return n;
+          });
+        })
+        .catch((err: Error) => {
+          fanoutLoading.current.delete(w.key);
+          if (!alive) return;
+          setFanoutErrors((m) => new Map(m).set(w.key, err.message));
+        });
+    }
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slice.fanouts]);
+
   // Highlight source whenever the frame changes.
   useEffect(() => {
     let alive = true;
@@ -128,6 +258,15 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   }, [selection]);
 
   function toggleCall(call: CallSite) {
+    if (call.kind === "fanout") {
+      if ((call.receivers?.length ?? 0) === 0) return;
+      if (isFanoutOpen(slice, call.id)) {
+        store.closeFanout(path, call.id);
+      } else {
+        store.openFanout(path, call.id);
+      }
+      return;
+    }
     if (call.kind === "indirect") return;
     if (call.kind === "interface" && (call.candidates?.length ?? 0) === 0) return;
     if (call.kind === "direct" && !call.targetId) return;
@@ -137,6 +276,13 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     } else {
       store.expand(path, call.id, 0);
     }
+  }
+
+  function expandAllReceivers(call: CallSite) {
+    const open = new Set(expandedReceivers(slice, call.id));
+    (call.receivers ?? []).forEach((_, i) => {
+      if (!open.has(i)) store.expandReceiver(path, call.id, i);
+    });
   }
 
   function chooseImpl(call: CallSite, choice: number) {
@@ -196,7 +342,9 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     domProps: Record<string, unknown>,
   ): ReactNode {
     const isLoading = loading.has(call.id);
-    const isExpanded = !!slice.expansions[call.id];
+    const isExpanded =
+      !!slice.expansions[call.id] ||
+      (call.kind === "fanout" && isFanoutOpen(slice, call.id));
     const cls = [
       domProps.className as string | undefined,
       isExpanded ? "expanded" : "",
@@ -228,11 +376,92 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     );
   }
 
+  // Renders the receiver list for an open fan-out call: every receiver runs
+  // when the producer fires, so they're shown as siblings (not a single-choice
+  // switch). Each can be expanded into its own inline frame independently.
+  function renderFanout(call: CallSite): ReactNode {
+    const receivers = call.receivers ?? [];
+    const open = new Set(expandedReceivers(slice, call.id));
+    const allOpen = receivers.length > 0 && open.size === receivers.length;
+    return (
+      <div key={`fan:${call.id}`} className="fanout">
+        <div className="fanout-head">
+          <span className="fanout-title">
+            {call.fanoutKind ?? "receivers"} · {receivers.length}
+          </span>
+          {receivers.length > 1 && (
+            <button
+              className="fanout-expand-all"
+              onClick={() => (allOpen ? collapseAllReceivers(call) : expandAllReceivers(call))}
+            >
+              {allOpen ? "collapse all" : "expand all"}
+            </button>
+          )}
+          <button className="fanout-close" onClick={() => store.closeFanout(path, call.id)}>
+            ✕
+          </button>
+        </div>
+        <ul className="fanout-list">
+          {receivers.map((r, i) => {
+            const isOpen = open.has(i);
+            const key = `${call.id}#${i}`;
+            const child = fanoutChildren.get(key);
+            const err = fanoutErrors.get(key);
+            const childPath: FramePath = [...path, { callId: call.id, choice: i }];
+            return (
+              <li key={i} className="fanout-receiver">
+                <button
+                  className={`fanout-row${isOpen ? " open" : ""}`}
+                  onClick={() =>
+                    isOpen
+                      ? store.collapseReceiver(path, call.id, i)
+                      : store.expandReceiver(path, call.id, i)
+                  }
+                >
+                  <span className="fanout-twisty">{isOpen ? "▾" : "▸"}</span>
+                  <span className="fanout-label">{r.label}</span>
+                  {r.confidence === "tentative" && (
+                    <span className="fanout-badge" title="resolved heuristically">
+                      tentative
+                    </span>
+                  )}
+                  {r.provenance && <span className="fanout-prov">{r.provenance}</span>}
+                </button>
+                {isOpen && child && (
+                  <div className="fanout-body">
+                    <Frame
+                      frame={child}
+                      path={childPath}
+                      onClose={() => store.collapseReceiver(path, call.id, i)}
+                    />
+                  </div>
+                )}
+                {isOpen && err && <div className="call-error">expand failed: {err}</div>}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  }
+
+  function collapseAllReceivers(call: CallSite) {
+    for (const i of expandedReceivers(slice, call.id)) {
+      store.collapseReceiver(path, call.id, i);
+    }
+  }
+
   function renderLineExtras(lineIdx: number): ReactNode {
     const extras: ReactNode[] = [];
     const calls = lineCallsCache.get(lineIdx);
     if (!calls) return null;
     for (const call of calls) {
+      if (call.kind === "fanout") {
+        if (isFanoutOpen(slice, call.id)) {
+          extras.push(renderFanout(call));
+        }
+        continue;
+      }
       const want = slice.expansions[call.id];
       const child = loadedChildren.get(call.id);
       if (want && child) {
@@ -320,9 +549,14 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           {bookmarks.isBookmarked(frame.id) ? "★" : "☆"}
         </button>
         <span className="frame-title">{frameTitle(frame)}</span>
-        <span className="frame-loc">
+        <button
+          type="button"
+          className="frame-loc frame-loc--link"
+          title="open in editor"
+          onClick={() => openInEditor(frame.file, frame.startLine).catch(() => {})}
+        >
           {shortPath(frame.file)}:{frame.startLine}
-        </span>
+        </button>
         {onClose && (
           <button className="frame-close" onClick={onClose} aria-label="collapse">
             ×
@@ -349,7 +583,11 @@ export function Frame({ frame, path, onClose }: FrameProps) {
       )}
       <div className="frame-body">
         {hast ? (
-          <div className="frame-source">
+          <div
+            className="frame-source"
+            onMouseMove={onSourceMouseMove}
+            onMouseLeave={onSourceMouseLeave}
+          >
             {renderHast({
               hast,
               source: frame.source,
@@ -365,6 +603,31 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           <div className="frame-loading">loading…</div>
         )}
       </div>
+      {typeCard && (
+        <div
+          className="type-card"
+          style={{ left: typeCard.x + 12, top: typeCard.y + 16 }}
+          onMouseEnter={() => window.clearTimeout(hoverRef.current.hideTimer)}
+          onMouseLeave={() => setTypeCard(null)}
+        >
+          <div className="type-card-head">
+            <span className="type-card-kind">{typeCard.info.kind}</span>
+            <span className="type-card-name">{typeCard.info.name}</span>
+          </div>
+          {typeCard.info.type && <div className="type-card-type">{typeCard.info.type}</div>}
+          {typeCard.info.doc && <div className="type-card-doc">{typeCard.info.doc}</div>}
+          {typeCard.info.definedAt && (
+            <button
+              type="button"
+              className="type-card-loc"
+              onClick={() => openDefinition(typeCard.info)}
+              title={typeCard.info.targetId ? "open as root frame" : "open in editor"}
+            >
+              {shortDefined(typeCard.info.definedAt)}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -445,6 +708,31 @@ function lineForOffset(source: string, offset: number): number {
 
 function frameTitle(frame: FrameT): string {
   return frame.title && frame.title.trim() ? frame.title : prettyName(frame.id);
+}
+
+// Cross-browser caret position from screen coordinates (for hover→offset).
+function caretFromPoint(x: number, y: number): { node: Node; offset: number } | null {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  if (doc.caretRangeFromPoint) {
+    const r = doc.caretRangeFromPoint(x, y);
+    return r ? { node: r.startContainer, offset: r.startOffset } : null;
+  }
+  if (doc.caretPositionFromPoint) {
+    const p = doc.caretPositionFromPoint(x, y);
+    return p ? { node: p.offsetNode, offset: p.offset } : null;
+  }
+  return null;
+}
+
+function shortDefined(at: string): string {
+  const i = at.lastIndexOf(":");
+  const file = i > 0 ? at.slice(0, i) : at;
+  const line = i > 0 ? at.slice(i + 1) : "";
+  const base = file.slice(file.lastIndexOf("/") + 1);
+  return line ? `${base}:${line}` : base;
 }
 
 function prettyName(id: string): string {
