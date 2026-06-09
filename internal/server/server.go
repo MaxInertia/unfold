@@ -91,32 +91,38 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing required query param: file")
 		return
 	}
-	if !s.fileIsIndexed(file) {
+	resolved, ok := s.resolveIndexedFile(file)
+	if !ok {
 		writeError(w, http.StatusForbidden, "file is not part of the indexed project")
 		return
 	}
-	if err := openInEditor(file, q.Get("line")); err != nil {
+	if err := openInEditor(resolved, q.Get("line")); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// fileIsIndexed reports whether file resolves to one of the project's indexed
-// source files. This is the containment check that keeps /api/open from
-// opening (and thereby exfiltrating into the editor) arbitrary host files.
-func (s *Server) fileIsIndexed(file string) bool {
+// resolveIndexedFile reports whether file resolves to one of the project's
+// indexed source files and, if so, returns that file's canonical indexed
+// path. This is the containment check that keeps /api/open from opening (and
+// thereby exfiltrating into the editor) arbitrary host files.
+//
+// The caller hands the *returned* path — not its own query string — to the
+// editor, so what gets opened is exactly the file that passed containment,
+// not whatever un-normalized form (e.g. with ../ segments) reached the API.
+func (s *Server) resolveIndexedFile(file string) (string, bool) {
 	abs, err := filepath.Abs(file)
 	if err != nil {
-		return false
+		return "", false
 	}
 	abs = filepath.Clean(abs)
 	for _, f := range s.engine.Files() {
-		if filepath.Clean(f) == abs {
-			return true
+		if c := filepath.Clean(f); c == abs {
+			return c, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // sameOrigin rejects cross-origin browser requests. It prefers the Fetch
