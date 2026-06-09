@@ -260,6 +260,7 @@ function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [busy, setBusy] = useState(false);
+  const [focused, setFocused] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -295,14 +296,23 @@ function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
         onKeyDown={(e) => {
           if (e.key === "Enter" && results[0]) onPick(results[0].targetId);
         }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         autoFocus
       />
       {busy && <span className="picker-busy">…</span>}
-      {results.length > 0 && (
+      {focused && results.length > 0 && (
         <ul className="picker-results">
           {results.map((r) => (
             <li key={r.targetId}>
-              <button onClick={() => onPick(r.targetId)} className="picker-pick">
+              {/* preventDefault on mousedown keeps focus on the input so the
+                  blur (which hides the dropdown) doesn't fire before this click
+                  registers and the pick is lost. */}
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onPick(r.targetId)}
+                className="picker-pick"
+              >
                 <span className="picker-label">{r.label}</span>
                 <span className="picker-loc">
                   {r.file.split("/").slice(-2).join("/")}:{r.line}
