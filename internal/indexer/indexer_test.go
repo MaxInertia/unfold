@@ -406,3 +406,74 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+
+// TestGoroutineLaunch verifies that a call launched with the `go` keyword is
+// flagged Goroutine=true while an ordinary call in the same body is not.
+func TestGoroutineLaunch(t *testing.T) {
+	dir, err := filepath.Abs("testdata/goroutines")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := New()
+	if err := idx.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	id, err := idx.LookupSymbol("launch")
+	if err != nil {
+		t.Fatalf("LookupSymbol(launch): %v", err)
+	}
+	frame, err := idx.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame: %v", err)
+	}
+
+	assertGoroutineFlags(t, frame)
+
+	// Same flags must hold in the whole-file view (fileFrame propagates the
+	// flag from the shared callInfo).
+	fileFrame, err := idx.Frame(TargetID("file:" + filepath.Join(dir, "main.go")))
+	if err != nil {
+		t.Fatalf("Frame(file:): %v", err)
+	}
+	assertGoroutineFlags(t, fileFrame)
+}
+
+// assertGoroutineFlags checks the goroutine flags on a frame that contains
+// the goroutines fixture's launch body: `go worker()` is flagged, while the
+// ordinary `blocking()` and the deferred `cleanup()` are not. The anonymous
+// `go func(){…}()` has no named call site, so it must not appear at all.
+func assertGoroutineFlags(t *testing.T, frame *Frame) {
+	t.Helper()
+	flags := map[string]int{} // displayName -> count
+	var worker, blocking, cleanup *CallSite
+	for i := range frame.Calls {
+		c := &frame.Calls[i]
+		flags[c.DisplayName]++
+		switch c.DisplayName {
+		case "worker":
+			worker = c
+		case "blocking":
+			blocking = c
+		case "cleanup":
+			cleanup = c
+		}
+	}
+
+	if worker == nil || blocking == nil || cleanup == nil {
+		t.Fatalf("missing expected call sites: %v", flags)
+	}
+	// The anonymous goroutine body has no named call, so there must be
+	// exactly one worker call site (the `go worker()`), not two.
+	if flags["worker"] != 1 {
+		t.Errorf("worker call sites = %d, want 1", flags["worker"])
+	}
+	if !worker.Goroutine {
+		t.Errorf("worker() is launched with `go`; want Goroutine=true")
+	}
+	if blocking.Goroutine {
+		t.Errorf("blocking() is an ordinary call; want Goroutine=false")
+	}
+	if cleanup.Goroutine {
+		t.Errorf("cleanup() is deferred, not a goroutine; want Goroutine=false")
+	}
+}

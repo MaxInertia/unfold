@@ -142,6 +142,7 @@ type callInfo struct {
 	candidates  []Candidate // interface candidates (in stable order)
 	displayName string
 	pos, end    token.Pos
+	goroutine   bool // call is launched with the `go` keyword
 }
 
 // New returns a fresh, empty indexer.
@@ -220,17 +221,26 @@ func (i *Indexer) Load(dir, pattern string) error {
 		if fi.decl.Body == nil {
 			continue
 		}
+		// goLaunched collects the CallExpr that are the operand of a `go`
+		// statement. ast.Inspect visits a node before its children, so a
+		// GoStmt is always seen before its own Call — the set is populated
+		// by the time we resolve that CallExpr below.
+		goLaunched := make(map[*ast.CallExpr]bool)
 		ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
-			ce, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+			switch node := n.(type) {
+			case *ast.GoStmt:
+				goLaunched[node.Call] = true
+			case *ast.CallExpr:
+				ci := i.resolveCall(fi, node)
+				if ci == nil {
+					return true
+				}
+				if goLaunched[node] {
+					ci.goroutine = true
+				}
+				fi.calls = append(fi.calls, ci)
+				i.callsByID[ci.id] = ci
 			}
-			ci := i.resolveCall(fi, ce)
-			if ci == nil {
-				return true
-			}
-			fi.calls = append(fi.calls, ci)
-			i.callsByID[ci.id] = ci
 			return true
 		})
 	}
@@ -507,6 +517,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 			Kind:        c.kind,
 			TargetID:    c.target,
 			Candidates:  c.candidates,
+			Goroutine:   c.goroutine,
 		})
 	}
 
@@ -594,6 +605,7 @@ func (i *Indexer) fileFrame(path string) (*Frame, error) {
 			Kind:        c.kind,
 			TargetID:    c.target,
 			Candidates:  c.candidates,
+			Goroutine:   c.goroutine,
 		})
 	}
 

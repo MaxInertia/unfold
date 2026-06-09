@@ -62,6 +62,12 @@ type CallSite struct {
 	// default chosen when no choice is supplied.
 	Candidates []Candidate `json:"candidates,omitempty"`
 
+	// Goroutine is true when this call is launched asynchronously with the
+	// `go` keyword (Go's `go f()`). It's orthogonal to Kind — a goroutine
+	// launch is still a direct/interface/indirect call to its target — and
+	// lets the frontend flag concurrency boundaries when reading a call path.
+	Goroutine bool `json:"goroutine,omitempty"`
+
 	// Receivers lists the targets a fan-out call reaches (all of them run,
 	// unlike Candidates where one is chosen). Set only for kind="fanout".
 	// FrameForCall(id, choice) selects Receivers[choice].
