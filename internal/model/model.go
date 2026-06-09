@@ -21,6 +21,7 @@ const (
 	KindDirect    CallKind = "direct"    // resolved to one specific function
 	KindInterface CallKind = "interface" // dispatched through an interface; Candidates enumerates impls
 	KindIndirect  CallKind = "indirect"  // through a function value, builtin, or otherwise unresolvable
+	KindFanout    CallKind = "fanout"    // one site reaches many receivers (all run); Receivers enumerates them
 )
 
 // Frame is the unit the frontend renders: a function's source plus the
@@ -60,6 +61,22 @@ type CallSite struct {
 	// Empty for direct and indirect calls. The first candidate is the
 	// default chosen when no choice is supplied.
 	Candidates []Candidate `json:"candidates,omitempty"`
+
+	// Receivers lists the targets a fan-out call reaches (all of them run,
+	// unlike Candidates where one is chosen). Set only for kind="fanout".
+	// FrameForCall(id, choice) selects Receivers[choice].
+	Receivers  []Receiver `json:"receivers,omitempty"`
+	FanoutKind string     `json:"fanoutKind,omitempty"` // e.g. "subscribers"
+}
+
+// Receiver is one target reached by a fan-out call (e.g. a subscriber of an
+// observable). Unlike Candidate, fan-out receivers all run; Provenance and
+// Confidence reflect that fan-out resolution is heuristic.
+type Receiver struct {
+	TargetID   TargetID `json:"targetId"`
+	Label      string   `json:"label"`
+	Provenance string   `json:"provenance,omitempty"` // e.g. "subscribe at app.ts:42"
+	Confidence string   `json:"confidence,omitempty"` // "high" | "tentative"
 }
 
 // Candidate is one concrete implementation of an interface method, used to

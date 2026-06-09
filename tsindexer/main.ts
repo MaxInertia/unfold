@@ -35,7 +35,14 @@ import {
 
 // ---- wire types (mirror internal/model) ----
 
-type CallKind = "direct" | "interface" | "indirect";
+type CallKind = "direct" | "interface" | "indirect" | "fanout";
+
+interface Receiver {
+  targetId: string;
+  label: string;
+  provenance?: string;
+  confidence?: string;
+}
 
 interface CallSite {
   id: string;
@@ -45,6 +52,8 @@ interface CallSite {
   kind: CallKind;
   targetId?: string;
   candidates?: { targetId: string; label: string }[];
+  receivers?: Receiver[];
+  fanoutKind?: string;
 }
 
 interface Frame {
@@ -87,6 +96,8 @@ interface CallInfo {
   kind: CallKind;
   target?: string;
   candidates?: { targetId: string; label: string }[];
+  receivers?: Receiver[];
+  fanoutKind?: string;
 }
 
 // A synthetic frame for an Angular component template.
@@ -136,7 +147,8 @@ class TSEngine {
 
     this.registerTargets();
     this.buildImplementers();
-    this.indexCalls();
+    // Function frames are built lazily on first frame() request (and cached),
+    // which also bounds fan-out reference searches to frames the user views.
     this.indexTemplates();
     this.loaded = true;
     return { funcs: this.funcs.size };
@@ -291,11 +303,6 @@ class TSEngine {
 
   // Pass 2: walk each target's body, resolve call sites, populate
   // callsById. Frames are built (and cached) here too.
-  private indexCalls() {
-    for (const fi of this.funcs.values()) {
-      fi.frame = this.buildFrame(fi);
-    }
-  }
 
   private buildFrame(fi: FuncInfo): Frame {
     const sf = fi.decl.getSourceFile();
@@ -342,10 +349,15 @@ class TSEngine {
       kind: info.kind,
       targetId: info.target,
       candidates: info.candidates,
+      receivers: info.receivers,
+      fanoutKind: info.fanoutKind,
     };
   }
 
   private classify(expr: TNode): CallInfo {
+    const fan = this.fanoutFor(expr);
+    if (fan) return fan;
+
     const nameNode = callNameNode(expr);
     let sym = nameNode?.getSymbol();
     if (sym) {
@@ -382,6 +394,128 @@ class TSEngine {
     if (isFunctionLike(norm)) return { kind: "direct" };
 
     return { kind: "indirect" };
+  }
+
+  // Fan-out detection: a `subject.next(v)` / `emitter.emit(v)` on an RxJS
+  // Subject-family or Angular EventEmitter reaches every `.subscribe()` site.
+  // Returns null for any non-fan-out call (the cheap gate is the type check).
+  private fanoutFor(expr: TNode): CallInfo | null {
+    if (!Node.isPropertyAccessExpression(expr)) return null;
+    const method = expr.getName();
+    if (method !== "next" && method !== "emit") return null;
+    const receiver = expr.getExpression();
+    let sym;
+    try {
+      sym = receiver.getType().getSymbol();
+    } catch {
+      return null;
+    }
+    const typeName = sym?.getName() ?? "";
+    if (!/^(Subject|BehaviorSubject|ReplaySubject|AsyncSubject|EventEmitter)$/.test(typeName)) {
+      return null;
+    }
+    // Only the real RxJS / Angular types — not a user class named "Subject".
+    // Require rxjs/@angular-core to be a path *segment* (a directory) of the
+    // declaring file, matching how both packages actually resolve
+    // (node_modules/rxjs/…, node_modules/@angular/core/…). A trailing "."
+    // is intentionally NOT accepted, so a user's own file literally named
+    // rxjs.ts — or a dir like src/rxjs-helpers/ — doesn't false-positive.
+    const origin = sym?.getDeclarations()?.[0]?.getSourceFile().getFilePath() ?? "";
+    if (!/(^|[/\\])(rxjs|@angular[/\\]core)([/\\]|$)/.test(origin)) return null;
+
+    return { kind: "fanout", fanoutKind: "subscribers", receivers: this.resolveSubscribers(receiver) };
+  }
+
+  // Find every `.subscribe(cb)` on the same observable symbol and turn each
+  // callback into a receiver. Uses the language service's reference search.
+  private resolveSubscribers(receiver: TNode): Receiver[] {
+    const refSource = Node.isIdentifier(receiver)
+      ? receiver
+      : Node.isPropertyAccessExpression(receiver)
+        ? receiver.getNameNode()
+        : undefined;
+    if (!refSource) return [];
+    let refs: TNode[] = [];
+    try {
+      refs = (refSource as unknown as { findReferencesAsNodes: () => TNode[] }).findReferencesAsNodes();
+    } catch {
+      return [];
+    }
+
+    const out: Receiver[] = [];
+    const seen = new Set<string>();
+    for (const ref of refs) {
+      let access = ref.getParent();
+      // `this.events.subscribe(...)`: the ref is the `.name` of the inner
+      // `this.events` access, so `.subscribe` is one level up. Climb past the
+      // access whose name *is* this ref. (A module-level `events.subscribe`
+      // ref is the access's `.expression`, not its `.name`, so we don't climb.)
+      if (
+        access &&
+        Node.isPropertyAccessExpression(access) &&
+        access.getName() !== "subscribe" &&
+        access.getNameNode() === ref
+      ) {
+        access = access.getParent();
+      }
+      if (!access || !Node.isPropertyAccessExpression(access) || access.getName() !== "subscribe") continue;
+      const call = access.getParent();
+      if (!call || !Node.isCallExpression(call)) continue;
+      const arg = call.getArguments()[0];
+      if (!arg) continue;
+      const cb = this.callbackNode(arg);
+      if (!cb) continue;
+      const tid = this.registerCallback(cb);
+      if (seen.has(tid)) continue;
+      seen.add(tid);
+      out.push({
+        targetId: tid,
+        label: this.subscriberLabel(call),
+        provenance: `subscribe at ${call.getSourceFile().getBaseName()}:${call.getStartLineNumber()}`,
+        confidence: "high",
+      });
+    }
+    out.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+    return out;
+  }
+
+  // The function body a subscribe argument runs: an inline arrow/function, a
+  // named function reference, or the `next` member of an observer object.
+  private callbackNode(arg: TNode): TNode | undefined {
+    if (Node.isArrowFunction(arg) || Node.isFunctionExpression(arg)) return arg;
+    if (Node.isIdentifier(arg)) {
+      const d = arg.getSymbol()?.getDeclarations()?.[0];
+      if (d && isFunctionLike(normalizeDecl(d))) return normalizeDecl(d);
+    }
+    if (Node.isObjectLiteralExpression(arg)) {
+      const next = arg.getProperty("next");
+      if (next && Node.isPropertyAssignment(next)) {
+        const v = next.getInitializer();
+        if (v && (Node.isArrowFunction(v) || Node.isFunctionExpression(v))) return v;
+      }
+    }
+    return undefined;
+  }
+
+  // Register a subscribe callback (often an inline arrow) as a target so it can
+  // be framed like any other function.
+  private registerCallback(node: TNode): string {
+    const id = targetId(node);
+    if (!this.funcs.has(id)) this.funcs.set(id, { id, name: "subscriber", decl: node });
+    return id;
+  }
+
+  private subscriberLabel(call: TNode): string {
+    let node: TNode | undefined = call.getParent();
+    while (node) {
+      const named = node as { getName?: () => string | undefined };
+      if ((Node.isMethodDeclaration(node) || Node.isFunctionDeclaration(node)) && named.getName?.()) {
+        return `${named.getName()}()`;
+      }
+      if (Node.isClassDeclaration(node) && named.getName?.()) return named.getName()!;
+      node = node.getParent();
+    }
+    return `${call.getSourceFile().getBaseName()}:${call.getStartLineNumber()}`;
   }
 
   // Enumerate the concrete-method candidates for an interface/abstract
@@ -456,7 +590,15 @@ class TSEngine {
     const source = sf.getFullText();
 
     const calls: CallSite[] = [];
-    for (const fi of this.funcs.values()) {
+    const seen = new Set<string>();
+    // Snapshot the funcs: classify() below resolves fan-out receivers, which
+    // registerCallback()s new subscriber functions into this.funcs — a live
+    // Map iterator would then walk those too. The `seen` set is the real
+    // guard against duplicates: a subscribe callback is itself a registered
+    // func nested inside its enclosing function, so its inner calls would
+    // otherwise be emitted twice (once per containing function). Call ids are
+    // position-based, so the same physical call dedupes cleanly.
+    for (const fi of [...this.funcs.values()]) {
       if (fi.decl.getSourceFile().getFilePath() !== path) continue;
       const body = bodyNode(fi.decl);
       if (!body) continue;
@@ -465,7 +607,15 @@ class TSEngine {
         const nameNode = callNameNode(expr);
         if (!nameNode) continue;
         const id = `${path}:${call.getStart()}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        // Persist so a call expanded straight from the file view resolves
+        // through frameForCall, which looks up callsById. Without this, a call
+        // whose enclosing function frame was never built (the file view shows
+        // every function's calls without building their frames) would throw
+        // "unknown call" on expand. resolveCall caches the same way.
         const info = this.callsById.get(id) ?? this.classify(expr);
+        this.callsById.set(id, info);
         calls.push({
           id,
           spanStart: nameNode.getStart(), // file-relative (base 0)
@@ -474,6 +624,8 @@ class TSEngine {
           kind: info.kind,
           targetId: info.target,
           candidates: info.candidates,
+          receivers: info.receivers,
+          fanoutKind: info.fanoutKind,
         });
       }
     }
@@ -504,6 +656,12 @@ class TSEngine {
       if (cands.length === 0) throw new Error("no candidate implementations found for interface call");
       const i = choice < 0 || choice >= cands.length ? 0 : choice;
       return this.frame(cands[i].targetId);
+    }
+    if (info.kind === "fanout") {
+      const recs = info.receivers ?? [];
+      if (recs.length === 0) throw new Error("no receivers for fan-out call");
+      const i = choice < 0 || choice >= recs.length ? 0 : choice;
+      return this.frame(recs[i].targetId);
     }
     throw new Error(`call is ${info.kind}; not expandable`);
   }
