@@ -22,6 +22,8 @@ interface RenderCtx {
   ) => ReactNode;
   renderLineGutter: (idx: number) => ReactNode;
   renderFoldPlaceholder: (startLine: number, endLine: number) => ReactNode;
+  // Extra class for a line's row (e.g. diff tinting); "" / undefined = none.
+  lineClass: (idx: number) => string | undefined;
 }
 
 export interface RenderOptions {
@@ -37,6 +39,7 @@ export interface RenderOptions {
   ) => ReactNode;
   renderLineGutter: (idx: number) => ReactNode;
   renderFoldPlaceholder: (startLine: number, endLine: number) => ReactNode;
+  lineClass?: (idx: number) => string | undefined;
 }
 
 export function renderHast(opts: RenderOptions): ReactNode {
@@ -58,6 +61,7 @@ export function renderHast(opts: RenderOptions): ReactNode {
     renderCallSpan: opts.renderCallSpan,
     renderLineGutter: opts.renderLineGutter,
     renderFoldPlaceholder: opts.renderFoldPlaceholder,
+    lineClass: opts.lineClass ?? (() => undefined),
   };
   return walk(opts.hast, ctx, "r");
 }
@@ -141,8 +145,13 @@ function walkCode(node: Element, ctx: RenderCtx, key: string): ReactNode {
       const lineChildren = child.children.map((c, ci) =>
         walk(c, ctx, `${key}.${i}.${ci}`),
       );
+      const extraClass = ctx.lineClass(lineIdx);
       out.push(
-        <div className="line-row" key={`row:${lineIdx}`} data-line-idx={lineIdx}>
+        <div
+          className={`line-row${extraClass ? ` ${extraClass}` : ""}`}
+          key={`row:${lineIdx}`}
+          data-line-idx={lineIdx}
+        >
           {ctx.renderLineGutter(lineIdx)}
           <span {...lineProps}>{lineChildren}</span>
         </div>,

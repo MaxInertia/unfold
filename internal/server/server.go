@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MaxInertia/unfold/internal/diff"
 	"github.com/MaxInertia/unfold/internal/model"
 )
 
@@ -25,6 +26,7 @@ type Server struct {
 	engine model.Engine
 	static fs.FS
 	target string
+	differ *diff.Differ // nil = diff mode off
 
 	// Connected /api/events subscribers, notified when the engine reindexes.
 	mu      sync.Mutex
@@ -42,6 +44,18 @@ func New(engine model.Engine) *Server {
 
 // SetTarget records the indexer pattern (e.g. "./...") for the /api/health response.
 func (s *Server) SetTarget(target string) { s.target = target }
+
+// SetDiffer enables diff annotations on returned frames, comparing against the
+// base engine d wraps. Nil leaves diff mode off.
+func (s *Server) SetDiffer(d *diff.Differ) { s.differ = d }
+
+// writeFrame attaches diff info (when diff mode is on) and writes the frame.
+func (s *Server) writeFrame(w http.ResponseWriter, frame *model.Frame) {
+	if s.differ != nil {
+		s.differ.Annotate(frame)
+	}
+	writeJSON(w, http.StatusOK, frame)
+}
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -248,7 +262,11 @@ func openInEditor(file, line string) error {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "target": s.target})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"target": s.target,
+		"diff":   s.differ != nil,
+	})
 }
 
 // GET /api/files — the indexed source files, for the file tree.
@@ -273,7 +291,7 @@ func (s *Server) handleSymbol(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, frame)
+	s.writeFrame(w, frame)
 }
 
 // GET /api/body?targetId=<id>  OR  /api/body?callId=<id>[&choice=<int>]
@@ -293,7 +311,7 @@ func (s *Server) handleBody(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, frame)
+		s.writeFrame(w, frame)
 	case callID != "":
 		choice := 0
 		if v := q.Get("choice"); v != "" {
@@ -306,7 +324,7 @@ func (s *Server) handleBody(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, frame)
+		s.writeFrame(w, frame)
 	default:
 		writeError(w, http.StatusBadRequest, "missing query param: targetId or callId")
 	}
