@@ -14,6 +14,8 @@ import {
 } from "./viewState";
 import { useBookmarks } from "./bookmarks";
 import { CallersPanel } from "./Callers";
+import { depthColor } from "./StickyHeaders";
+import { useSettings } from "./settings";
 
 export interface FoldRange {
   start: number;
@@ -44,6 +46,8 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   const fanoutLoading = useRef<Set<string>>(new Set());
   const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
   const [callersOpen, setCallersOpen] = useState(false);
+  const settings = useSettings();
+  const depth = path.length;
   const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
   const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0 });
 
@@ -547,7 +551,10 @@ export function Frame({ frame, path, onClose }: FrameProps) {
 
   return (
     <div
-      className="frame"
+      className={`frame${settings.depthRails ? " frame--railed" : ""}`}
+      // The rail color doubles as the header accent; same palette as the
+      // pinned sticky-header stack so both cues read as one system.
+      style={{ "--depth-color": depthColor(depth) } as React.CSSProperties}
       data-frame-key={pathKey(path)}
       // Read by StickyHeaders to render the pinned call-chain stack.
       data-frame-title={frameTitle(frame)}
@@ -571,6 +578,11 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           {bookmarks.isBookmarked(frame.id) ? "★" : "☆"}
         </button>
         <span className="frame-title">{frameTitle(frame)}</span>
+        {settings.depthRuler && (
+          <span className="frame-depth" title={`nesting depth ${depth}`}>
+            {depth}
+          </span>
+        )}
         {frame.diff && frame.diff.status !== "unchanged" && (
           <span
             className={`frame-diff-badge frame-diff-badge--${frame.diff.status}`}
