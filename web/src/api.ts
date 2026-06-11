@@ -1,4 +1,4 @@
-import type { CallID, Frame, SearchResult, TargetID, TypeInfo } from "./types";
+import type { CallID, Frame, SearchResult, TargetID, TypeInfo, Usage } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -38,6 +38,12 @@ export async function search(q: string, limit = 25): Promise<SearchResult[]> {
 export async function fetchFiles(): Promise<string[]> {
   const res = await getJSON<{ files: string[] }>("/api/files");
   return res.files ?? [];
+}
+
+export async function fetchUsages(targetId: TargetID): Promise<Usage[]> {
+  const url = `/api/usages?targetId=${encodeURIComponent(targetId)}`;
+  const res = await getJSON<{ usages: Usage[] }>(url);
+  return res.usages ?? [];
 }
 
 export async function fetchTypeInfo(targetId: TargetID, offset: number): Promise<TypeInfo | null> {

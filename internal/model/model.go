@@ -112,6 +112,46 @@ type SearchResult struct {
 	Line     int      `json:"line"`
 }
 
+// UsageKind classifies how a target is referenced at a usage site.
+type UsageKind string
+
+const (
+	// UsageCall is a direct call to the target.
+	UsageCall UsageKind = "call"
+	// UsageInterface is a call dispatched through an interface that the
+	// target implements — execution *may* reach the target.
+	UsageInterface UsageKind = "interface"
+	// UsageRef is a non-call reference: the target used as a value
+	// (passed as a callback, stored in a field, ...).
+	UsageRef UsageKind = "ref"
+)
+
+// Usage is one place a target is referenced, with enough context for the
+// frontend to render an excerpt strip and to splice the caller above the
+// current view (re-rooting on Caller and expanding CallID with Choice
+// reproduces this usage as an inline expansion).
+type Usage struct {
+	// CallID identifies the call site when the usage is an expandable call
+	// the engine indexed. Empty for kind "ref".
+	CallID CallID `json:"callId,omitempty"`
+	// Choice is the candidate index that selects the target at that call
+	// site (the FrameForCall choice). 0 for direct calls; for interface
+	// calls it is the target's index in the call's Candidates.
+	Choice int `json:"choice,omitempty"`
+
+	Caller      TargetID  `json:"caller"`      // enclosing function
+	CallerTitle string    `json:"callerTitle"` // display name of the caller
+	File        string    `json:"file"`
+	Line        int       `json:"line"` // 1-based file line of the usage
+	Kind        UsageKind `json:"kind"`
+
+	// Excerpt is a few source lines around the usage, clamped to the
+	// caller's body. ExcerptLine is the 1-based file line of its first line
+	// (so the usage line within the excerpt is Line - ExcerptLine).
+	Excerpt     string `json:"excerpt"`
+	ExcerptLine int    `json:"excerptLine"`
+}
+
 // Engine is the query surface the HTTP server depends on. It is the seam
 // that lets unfold support multiple languages: the server is constructed
 // with an Engine and never references a concrete indexer. Construction and
@@ -134,4 +174,8 @@ type Engine interface {
 	// Source and returns its type details. Returns nil (no error) when the
 	// offset isn't over a resolvable symbol.
 	TypeInfo(id TargetID, offset int) (*TypeInfo, error)
+	// Usages returns the places the target is referenced inside indexed
+	// function bodies: direct calls, interface-dispatched calls that may
+	// reach it, and value references. Sorted by file then line.
+	Usages(id TargetID) ([]Usage, error)
 }

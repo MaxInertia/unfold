@@ -47,6 +47,21 @@ export interface SearchResult {
   line: number;
 }
 
+// One place a target is referenced (mirrors model.Usage). callId + choice
+// reproduce the usage as an inline expansion via FrameForCall, which is how
+// "splice the caller above" re-roots the view.
+export interface Usage {
+  callId?: CallID; // empty for kind "ref"
+  choice?: number; // candidate index selecting the target at that call
+  caller: TargetID; // enclosing function
+  callerTitle: string;
+  file: string;
+  line: number; // 1-based file line of the usage
+  kind: "call" | "interface" | "ref";
+  excerpt: string; // context lines, clamped to the caller's body
+  excerptLine: number; // 1-based file line of excerpt's first line
+}
+
 export interface TypeInfo {
   kind: string;
   name: string;

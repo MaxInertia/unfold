@@ -120,6 +120,11 @@ type Indexer struct {
 	// Built once during Load.
 	interfaceImpls map[string][]types.Type
 
+	// usagesByTarget is the reverse of the call-site index: for each target,
+	// the places it's referenced (direct calls, interface calls that may
+	// dispatch to it, and value references). Built once during Load.
+	usagesByTarget map[TargetID][]*usageInfo
+
 	// fileBytes caches the raw source of files whose functions we've
 	// produced frames for, so we don't re-read on every /body request.
 	fileBytesMu sync.Mutex
@@ -143,6 +148,15 @@ type callInfo struct {
 	displayName string
 	pos, end    token.Pos
 	goroutine   bool // call is launched with the `go` keyword
+}
+
+// usageInfo is one reverse-index entry: a place a target is referenced.
+type usageInfo struct {
+	call   *callInfo // the call site; nil for value references
+	choice int       // candidate index selecting the target at that call
+	parent TargetID  // enclosing function
+	kind   model.UsageKind
+	pos    token.Pos // the usage's name token
 }
 
 // New returns a fresh, empty indexer.
@@ -187,6 +201,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.funcs = make(map[TargetID]*funcInfo)
 	i.callsByID = make(map[CallID]*callInfo)
 	i.interfaceImpls = buildInterfaceImpls(pkgs)
+	i.usagesByTarget = make(map[TargetID][]*usageInfo)
 
 	// Pass 1: register every FuncDecl as a target.
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
@@ -216,7 +231,9 @@ func (i *Indexer) Load(dir, pattern string) error {
 		}
 	})
 
-	// Pass 2: walk each function body, resolve call sites.
+	// Pass 2: walk each function body, resolve call sites. Idents that name
+	// an indexed function but are not a call's name token are recorded as
+	// value references (the function passed around as a value).
 	for _, fi := range i.funcs {
 		if fi.decl.Body == nil {
 			continue
@@ -224,13 +241,18 @@ func (i *Indexer) Load(dir, pattern string) error {
 		// goLaunched collects the CallExpr that are the operand of a `go`
 		// statement. ast.Inspect visits a node before its children, so a
 		// GoStmt is always seen before its own Call — the set is populated
-		// by the time we resolve that CallExpr below.
+		// by the time we resolve that CallExpr below. callNames works the
+		// same way: a CallExpr is visited before the Ident that names it.
 		goLaunched := make(map[*ast.CallExpr]bool)
+		callNames := make(map[*ast.Ident]bool)
 		ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.GoStmt:
 				goLaunched[node.Call] = true
 			case *ast.CallExpr:
+				if name := nameIdent(node.Fun); name != nil {
+					callNames[name] = true
+				}
 				ci := i.resolveCall(fi, node)
 				if ci == nil {
 					return true
@@ -240,12 +262,75 @@ func (i *Indexer) Load(dir, pattern string) error {
 				}
 				fi.calls = append(fi.calls, ci)
 				i.callsByID[ci.id] = ci
+			case *ast.Ident:
+				if callNames[node] {
+					return true
+				}
+				obj, ok := fi.pkg.TypesInfo.Uses[node].(*types.Func)
+				if !ok {
+					return true
+				}
+				tid := TargetID(obj.FullName())
+				if _, known := i.funcs[tid]; known {
+					i.usagesByTarget[tid] = append(i.usagesByTarget[tid], &usageInfo{
+						parent: fi.id,
+						kind:   model.UsageRef,
+						pos:    node.Pos(),
+					})
+				}
 			}
 			return true
 		})
 	}
 
+	// Reverse index over call sites: a direct call references its target; an
+	// interface call references every candidate it may dispatch to (Choice
+	// records the candidate's index so the frontend can reproduce this usage
+	// as an expansion via FrameForCall).
+	for _, c := range i.callsByID {
+		switch c.kind {
+		case KindDirect:
+			if _, known := i.funcs[c.target]; known {
+				i.usagesByTarget[c.target] = append(i.usagesByTarget[c.target], &usageInfo{
+					call:   c,
+					parent: c.parent,
+					kind:   model.UsageCall,
+					pos:    c.pos,
+				})
+			}
+		case KindInterface:
+			for j, cand := range c.candidates {
+				i.usagesByTarget[cand.TargetID] = append(i.usagesByTarget[cand.TargetID], &usageInfo{
+					call:   c,
+					choice: j,
+					parent: c.parent,
+					kind:   model.UsageInterface,
+					pos:    c.pos,
+				})
+			}
+		}
+	}
+
 	return nil
+}
+
+// nameIdent returns the identifier that names a call's function — the same
+// token nameSpan spans — or nil when there is none (IIFE, conversions).
+func nameIdent(fun ast.Expr) *ast.Ident {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		return f
+	case *ast.SelectorExpr:
+		return f.Sel
+	case *ast.IndexExpr:
+		return nameIdent(f.X)
+	case *ast.IndexListExpr:
+		return nameIdent(f.X)
+	case *ast.ParenExpr:
+		return nameIdent(f.X)
+	default:
+		return nil
+	}
 }
 
 func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
@@ -804,6 +889,73 @@ func (i *Indexer) FrameForCall(id CallID, choice int) (*Frame, error) {
 // ErrNoCandidates is returned by FrameForCall when an interface call has
 // no known concrete implementations in the loaded package set.
 var ErrNoCandidates = fmt.Errorf("no candidate implementations found for interface call")
+
+// Usages returns the places the target is referenced inside indexed
+// function bodies, sorted by file then line. Excerpts are a few lines of
+// context around the usage, clamped to the enclosing function's body.
+func (i *Indexer) Usages(id TargetID) ([]model.Usage, error) {
+	i.mu.RLock()
+	if _, ok := i.funcs[id]; !ok {
+		i.mu.RUnlock()
+		return nil, fmt.Errorf("unknown target %q", id)
+	}
+	infos := i.usagesByTarget[id]
+	out := make([]model.Usage, 0, len(infos))
+	for _, u := range infos {
+		parent, ok := i.funcs[u.parent]
+		if !ok {
+			continue
+		}
+		pos := i.fset.Position(u.pos)
+		usage := model.Usage{
+			Choice:      u.choice,
+			Caller:      u.parent,
+			CallerTitle: goTitle(parent.obj),
+			File:        pos.Filename,
+			Line:        pos.Line,
+			Kind:        u.kind,
+		}
+		if u.call != nil {
+			usage.CallID = u.call.id
+		}
+		usage.Excerpt, usage.ExcerptLine = i.excerpt(
+			pos.Filename,
+			pos.Line,
+			i.fset.Position(parent.decl.Pos()).Line,
+			i.fset.Position(parent.decl.End()).Line,
+		)
+		out = append(out, usage)
+	}
+	i.mu.RUnlock()
+
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].File != out[b].File {
+			return out[a].File < out[b].File
+		}
+		if out[a].Line != out[b].Line {
+			return out[a].Line < out[b].Line
+		}
+		return out[a].Kind < out[b].Kind
+	})
+	return out, nil
+}
+
+// excerpt returns up to two lines of context either side of line, clamped
+// to [bodyStart, bodyEnd] (the enclosing function), plus the 1-based file
+// line the excerpt starts at.
+func (i *Indexer) excerpt(file string, line, bodyStart, bodyEnd int) (string, int) {
+	buf, err := i.readFile(file)
+	if err != nil {
+		return "", 0
+	}
+	lines := strings.Split(string(buf), "\n")
+	start := max(line-2, max(bodyStart, 1))
+	end := min(line+2, min(bodyEnd, len(lines)))
+	if start > end {
+		return "", 0
+	}
+	return strings.Join(lines[start-1:end], "\n"), start
+}
 
 // LookupSymbol resolves a symbol name (qualified or unqualified) to a
 // target. If multiple match, the first lexicographic FullName wins.

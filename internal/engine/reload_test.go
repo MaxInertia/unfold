@@ -43,6 +43,7 @@ func (f *closerEngine) FrameForCall(model.CallID, int) (*model.Frame, error) {
 func (f *closerEngine) Search(string, int) []model.SearchResult               { return nil }
 func (f *closerEngine) Files() []string                                       { return nil }
 func (f *closerEngine) TypeInfo(model.TargetID, int) (*model.TypeInfo, error) { return nil, nil }
+func (f *closerEngine) Usages(model.TargetID) ([]model.Usage, error)          { return nil, nil }
 
 // TestReloadableNoCallAfterClose drives readers against a Reloadable while a
 // swapper repeatedly replaces and Closes the engine the way Reload does. The

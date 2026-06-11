@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Frame } from "./Frame";
 import { CallTree } from "./CallTree";
+import { CallersTree } from "./CallersTree";
 import { FileTree } from "./FileTree";
 import { fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
@@ -33,7 +34,7 @@ function AppShell() {
   const [treeCollapsed, setTreeCollapsed] = useState(
     () => localStorage.getItem(TREE_COLLAPSED_KEY) === "1",
   );
-  const [sidebarTab, setSidebarTab] = useState<"files" | "calls">("calls");
+  const [sidebarTab, setSidebarTab] = useState<"files" | "calls" | "callers">("calls");
   const [reindexed, setReindexed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
@@ -150,6 +151,14 @@ function AppShell() {
                   </button>
                   <button
                     type="button"
+                    className={`tree-tab${sidebarTab === "callers" ? " tree-tab--active" : ""}`}
+                    onClick={() => setSidebarTab("callers")}
+                    title="who calls the focused function — expand to walk toward entry points"
+                  >
+                    callers
+                  </button>
+                  <button
+                    type="button"
                     className="tree-collapse"
                     onClick={() => setTreeCollapsed(true)}
                     title="collapse panel"
@@ -161,10 +170,14 @@ function AppShell() {
                 <div className="tree-body">
                   {sidebarTab === "files" ? (
                     <FileTree onOpen={(id) => store.setSymbol(id)} />
-                  ) : rootFrame ? (
-                    <CallTree rootFrame={rootFrame} />
+                  ) : !rootFrame ? (
+                    <p className="tree-placeholder">
+                      Pick a function to see its {sidebarTab === "callers" ? "callers" : "call tree"}.
+                    </p>
+                  ) : sidebarTab === "callers" ? (
+                    <CallersTree key={rootFrame.id} rootFrame={rootFrame} />
                   ) : (
-                    <p className="tree-placeholder">Pick a function to see its call tree.</p>
+                    <CallTree rootFrame={rootFrame} />
                   )}
                 </div>
               </div>
@@ -197,10 +210,13 @@ function AppShell() {
               underlined call site to expand its body inline; interface calls
               surface a dropdown to pick which implementation to view. The
               call tree on the left mirrors what you expand — click a node to
-              unfold it here and there at once. Click a line number to start a
-              selection, shift-click another to extend, then "fold" to collapse
-              the range. URL hash carries your view — reload preserves it, and
-              the link is shareable.
+              unfold it here and there at once. "▲ callers" in a frame header
+              lists where that function is used; pick one to splice the caller
+              above (the callers sidebar tab walks whole chains toward entry
+              points). Click a line number to start a selection, shift-click
+              another to extend, then "fold" to collapse the range. URL hash
+              carries your view — reload preserves it, and the link is
+              shareable.
             </p>
           )}
         </div>
