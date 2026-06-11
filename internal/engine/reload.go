@@ -109,3 +109,9 @@ func (r *Reloadable) TypeInfo(id model.TargetID, offset int) (*model.TypeInfo, e
 	defer r.mu.RUnlock()
 	return r.cur.TypeInfo(id, offset)
 }
+
+func (r *Reloadable) Usages(id model.TargetID) ([]model.Usage, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cur.Usages(id)
+}

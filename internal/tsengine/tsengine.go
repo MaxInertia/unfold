@@ -203,6 +203,16 @@ func (e *Engine) TypeInfo(id model.TargetID, offset int) (*model.TypeInfo, error
 	return res.TypeInfo, nil
 }
 
+func (e *Engine) Usages(id model.TargetID) ([]model.Usage, error) {
+	var res struct {
+		Usages []model.Usage `json:"usages"`
+	}
+	if err := e.call("usages", map[string]any{"targetId": string(id)}, &res); err != nil {
+		return nil, err
+	}
+	return res.Usages, nil
+}
+
 // Close shuts the sidecar down.
 func (e *Engine) Close() error {
 	if e.stdin != nil {

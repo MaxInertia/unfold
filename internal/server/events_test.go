@@ -24,6 +24,7 @@ func (stubEngine) Files() []string                         { return nil }
 func (stubEngine) TypeInfo(model.TargetID, int) (*model.TypeInfo, error) {
 	return nil, nil
 }
+func (stubEngine) Usages(model.TargetID) ([]model.Usage, error) { return nil, nil }
 
 // TestEventsReload connects to /api/events and asserts that NotifyReload
 // pushes a "reload" event to the subscriber.

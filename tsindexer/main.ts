@@ -83,6 +83,18 @@ interface TypeInfoOut {
   targetId?: string;
 }
 
+interface Usage {
+  callId?: string;
+  choice?: number;
+  caller: string;
+  callerTitle: string;
+  file: string;
+  line: number;
+  kind: "call" | "interface" | "ref";
+  excerpt: string;
+  excerptLine: number;
+}
+
 // A registered call target: a function-like declaration we can show a body
 // for. `decl` is the node whose text becomes the frame source.
 interface FuncInfo {
@@ -723,6 +735,133 @@ class TSEngine {
     return out;
   }
 
+  // The places a target is referenced inside registered function bodies,
+  // via the language service's reference search. A reference whose parent
+  // is a call it names becomes kind "call" (or "interface" when dispatch
+  // goes through an interface/abstract method); anything else is a value
+  // reference. References inside Angular template HTML are not covered
+  // (templates aren't TS AST nodes).
+  usages(id: string): Usage[] {
+    if (!this.loaded) throw new Error("project not loaded");
+    const fi = this.funcs.get(id);
+    if (!fi) throw new Error(`unknown target ${JSON.stringify(id)}`);
+
+    // Anchor the search on the declaration's name node; anonymous targets
+    // (inline subscribe callbacks) have no name to find references for.
+    const nameNode = (fi.decl as { getNameNode?: () => TNode | undefined }).getNameNode?.();
+    if (!nameNode) return [];
+    let refs: TNode[] = [];
+    try {
+      refs = (nameNode as unknown as { findReferencesAsNodes: () => TNode[] }).findReferencesAsNodes();
+    } catch {
+      return [];
+    }
+
+    const out: Usage[] = [];
+    const seen = new Set<string>();
+    for (const ref of refs) {
+      const sf = ref.getSourceFile();
+      if (sf.isInNodeModules() || sf.isDeclarationFile()) continue;
+      // Skip declaration name nodes: the target's own declaration, sibling
+      // implementations of the same interface member, and the interface's
+      // method signature (the language service groups them all as
+      // references). A PropertyAccessExpression's name node is a real
+      // usage, so only declaration forms are filtered.
+      const refParent = ref.getParent();
+      if (
+        refParent &&
+        (Node.isMethodDeclaration(refParent) ||
+          Node.isMethodSignature(refParent) ||
+          Node.isFunctionDeclaration(refParent) ||
+          Node.isFunctionExpression(refParent) ||
+          Node.isVariableDeclaration(refParent) ||
+          Node.isPropertyDeclaration(refParent) ||
+          Node.isPropertySignature(refParent)) &&
+        (refParent as { getNameNode?: () => TNode | undefined }).getNameNode?.() === ref
+      ) {
+        continue;
+      }
+      const caller = this.enclosingFunc(ref);
+      if (!caller) continue; // reference outside any indexed function body
+      const dedupe = `${sf.getFilePath()}:${ref.getStart()}`;
+      if (seen.has(dedupe)) continue;
+      seen.add(dedupe);
+
+      const usage: Usage = {
+        caller: caller.id,
+        callerTitle: caller.name,
+        file: sf.getFilePath(),
+        line: ref.getStartLineNumber(),
+        kind: "ref",
+        excerpt: "",
+        excerptLine: 0,
+      };
+
+      // Is this reference the name of a call? `foo()` → ref is the callee
+      // ident; `x.foo()` → ref is the property-access name node.
+      const call = this.callFor(ref);
+      if (call) {
+        const expr = call.getExpression();
+        const callId = `${sf.getFilePath()}:${call.getStart()}`;
+        // Persist the classification so expanding this usage's call site
+        // resolves through frameForCall (same pattern as fileFrame).
+        const info = this.callsById.get(callId) ?? this.classify(expr);
+        this.callsById.set(callId, info);
+        if (info.kind === "direct" && info.target === id) {
+          usage.kind = "call";
+          usage.callId = callId;
+          usage.choice = 0;
+        } else if (info.kind === "interface") {
+          const idx = (info.candidates ?? []).findIndex((c) => c.targetId === id);
+          if (idx >= 0) {
+            usage.kind = "interface";
+            usage.callId = callId;
+            usage.choice = idx;
+          }
+        }
+      }
+
+      [usage.excerpt, usage.excerptLine] = excerptAround(
+        sf.getFullText(),
+        usage.line,
+        caller.decl.getStartLineNumber(),
+        caller.decl.getEndLineNumber(),
+      );
+      out.push(usage);
+    }
+
+    out.sort((a, b) =>
+      a.file !== b.file ? (a.file < b.file ? -1 : 1) : a.line - b.line,
+    );
+    return out;
+  }
+
+  // The innermost registered function whose declaration encloses node.
+  private enclosingFunc(node: TNode): FuncInfo | undefined {
+    let cur: TNode | undefined = node.getParent();
+    while (cur) {
+      const fi = this.funcs.get(targetId(cur));
+      if (fi) return fi;
+      cur = cur.getParent();
+    }
+    return undefined;
+  }
+
+  // The CallExpression that `ref` names, or undefined when the reference
+  // isn't a call's name token.
+  private callFor(ref: TNode): CallExpression | undefined {
+    let expr: TNode | undefined = ref;
+    const parent = ref.getParent();
+    if (parent && Node.isPropertyAccessExpression(parent) && parent.getNameNode() === ref) {
+      expr = parent;
+    }
+    const call = expr?.getParent();
+    if (call && Node.isCallExpression(call) && call.getExpression() === expr) {
+      return call;
+    }
+    return undefined;
+  }
+
   search(query: string, limit: number): SearchResult[] {
     if (!this.loaded) return [];
     const q = query.toLowerCase();
@@ -812,6 +951,21 @@ function collectTemplateCalls(html: string, fileForDiag: string): TplCall[] {
 
 function targetId(node: TNode): string {
   return `${node.getSourceFile().getFilePath()}#${node.getStart()}`;
+}
+
+// Up to two lines of context either side of line (1-based), clamped to
+// [bodyStart, bodyEnd]. Returns the excerpt and its 1-based first line.
+function excerptAround(
+  fullText: string,
+  line: number,
+  bodyStart: number,
+  bodyEnd: number,
+): [string, number] {
+  const lines = fullText.split("\n");
+  const start = Math.max(line - 2, Math.max(bodyStart, 1));
+  const end = Math.min(line + 2, Math.min(bodyEnd, lines.length));
+  if (start > end) return ["", 0];
+  return [lines.slice(start - 1, end).join("\n"), start];
 }
 
 // Resolve a heritage clause (`implements X` / `extends X`) to the interface
@@ -951,6 +1105,8 @@ function handle(method: string, params: Record<string, unknown>): unknown {
       return { files: engine.files() };
     case "typeinfo":
       return { typeInfo: engine.typeInfo(String(params.targetId ?? ""), Number(params.offset ?? 0)) };
+    case "usages":
+      return { usages: engine.usages(String(params.targetId ?? "")) };
     default:
       throw new Error(`unknown method ${JSON.stringify(method)}`);
   }

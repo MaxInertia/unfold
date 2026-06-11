@@ -13,6 +13,7 @@ import {
   type FramePath,
 } from "./viewState";
 import { useBookmarks } from "./bookmarks";
+import { CallersPanel } from "./Callers";
 
 export interface FoldRange {
   start: number;
@@ -42,6 +43,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   const [fanoutErrors, setFanoutErrors] = useState<Map<string, string>>(new Map());
   const fanoutLoading = useRef<Set<string>>(new Set());
   const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
+  const [callersOpen, setCallersOpen] = useState(false);
   const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
   const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0 });
 
@@ -549,6 +551,16 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           {bookmarks.isBookmarked(frame.id) ? "★" : "☆"}
         </button>
         <span className="frame-title">{frameTitle(frame)}</span>
+        {!frame.id.startsWith("file:") && (
+          <button
+            type="button"
+            className={`frame-callers${callersOpen ? " frame-callers--open" : ""}`}
+            onClick={() => setCallersOpen((v) => !v)}
+            title="show callers — pick one to splice it above (re-roots the view)"
+          >
+            ▲ callers
+          </button>
+        )}
         <button
           type="button"
           className="frame-loc frame-loc--link"
@@ -563,6 +575,9 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           </button>
         )}
       </header>
+      {callersOpen && (
+        <CallersPanel frame={frame} path={path} onClose={() => setCallersOpen(false)} />
+      )}
       {hasSelection && (
         <div className="frame-selectbar">
           <span className="frame-selectbar-info">
