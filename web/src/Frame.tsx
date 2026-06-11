@@ -70,6 +70,12 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     const lineSpan = startEl?.closest(".line") as HTMLElement | null;
     const row = startEl?.closest(".line-row") as HTMLElement | null;
     if (!lineSpan || !row) return null;
+    // caretFromPoint snaps to the *nearest* text position, so a pointer in
+    // the blank area right of a line (or on an empty line) still yields an
+    // offset and would pop the type card. Only accept the hit when the
+    // pointer is horizontally inside the line's actual text.
+    const textRect = lineSpan.getBoundingClientRect();
+    if (clientX < textRect.left || clientX > textRect.right) return null;
     const lineIdx = Number(row.getAttribute("data-line-idx"));
     if (!Number.isFinite(lineIdx)) return null;
     const measure = document.createRange();
@@ -85,7 +91,15 @@ export function Frame({ frame, path, onClose }: FrameProps) {
   function onSourceMouseMove(e: React.MouseEvent) {
     if (selection) return; // don't fight a line selection
     const off = offsetAtPoint(e.clientX, e.clientY);
-    if (off == null || off === hoverRef.current.offset) return;
+    if (off == null) {
+      // Not over text (blank area beside/below a line): cancel any pending
+      // lookup and fade the card, same as leaving the source entirely.
+      window.clearTimeout(hoverRef.current.showTimer);
+      hoverRef.current.offset = -1;
+      hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+      return;
+    }
+    if (off === hoverRef.current.offset) return;
     hoverRef.current.offset = off;
     const x = e.clientX;
     const y = e.clientY;
