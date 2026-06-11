@@ -1,5 +1,5 @@
 import { useCallFrame } from "./frameCache";
-import type { CallSite, Frame as FrameT } from "./types";
+import type { CallSite, Frame as FrameT, TargetID } from "./types";
 import {
   pathKey,
   useFrameSlice,
@@ -31,14 +31,24 @@ function RootNode({ rootFrame }: { rootFrame: FrameT }) {
         <span className="tree-twisty">▾</span>
         <span className="tree-label">{prettyFn(rootFrame.id)}</span>
       </div>
-      <FrameChildren frame={rootFrame} path={[]} />
+      <FrameChildren frame={rootFrame} path={[]} chain={[rootFrame.id]} />
     </li>
   );
 }
 
 // FrameChildren renders a frame's call sites as the child nodes of the
-// tree node that owns that frame.
-function FrameChildren({ frame, path }: { frame: FrameT; path: FramePath }) {
+// tree node that owns that frame. `chain` is the target ids from the root
+// down to (and including) this frame — calls resolving back into it are
+// recursive and badged ↻.
+function FrameChildren({
+  frame,
+  path,
+  chain,
+}: {
+  frame: FrameT;
+  path: FramePath;
+  chain: TargetID[];
+}) {
   if (frame.calls.length === 0) {
     return (
       <ul className="tree-list">
@@ -49,7 +59,7 @@ function FrameChildren({ frame, path }: { frame: FrameT; path: FramePath }) {
   return (
     <ul className="tree-list">
       {frame.calls.map((call) => (
-        <CallNode key={call.id} call={call} parentPath={path} />
+        <CallNode key={call.id} call={call} parentPath={path} chain={chain} />
       ))}
     </ul>
   );
@@ -58,9 +68,11 @@ function FrameChildren({ frame, path }: { frame: FrameT; path: FramePath }) {
 function CallNode({
   call,
   parentPath,
+  chain,
 }: {
   call: CallSite;
   parentPath: FramePath;
+  chain: TargetID[];
 }) {
   const store = useViewStore();
   const slice = useFrameSlice(parentPath);
@@ -87,6 +99,12 @@ function CallNode({
   }
 
   const badge = kindBadge(call);
+  const recursive =
+    call.kind === "direct"
+      ? !!call.targetId && chain.includes(call.targetId)
+      : call.kind === "interface"
+        ? (call.candidates ?? []).some((c) => chain.includes(c.targetId))
+        : false;
   return (
     <li className={`tree-node tree-node--${call.kind}`}>
       <div
@@ -106,9 +124,17 @@ function CallNode({
         <span className="tree-label" onClick={onLabel}>
           {call.displayName || "(call)"}
         </span>
+        {recursive && (
+          <span
+            className="tree-kind tree-kind--recursive"
+            title="recursive — this function is already in the chain above"
+          >
+            ↻
+          </span>
+        )}
         {badge && <span className={`tree-kind tree-kind--${call.kind}`}>{badge}</span>}
       </div>
-      {isExpanded && <ExpandedChild call={call} childPath={childPath} />}
+      {isExpanded && <ExpandedChild call={call} childPath={childPath} chain={chain} />}
     </li>
   );
 }
@@ -116,9 +142,11 @@ function CallNode({
 function ExpandedChild({
   call,
   childPath,
+  chain,
 }: {
   call: CallSite;
   childPath: FramePath;
+  chain: TargetID[];
 }) {
   const choice = childPath[childPath.length - 1].choice;
   const { frame, loading, error } = useCallFrame(call.id, choice);
@@ -137,7 +165,7 @@ function ExpandedChild({
     );
   }
   if (!frame) return null;
-  return <FrameChildren frame={frame} path={childPath} />;
+  return <FrameChildren frame={frame} path={childPath} chain={[...chain, frame.id]} />;
 }
 
 // --- helpers ---

@@ -86,6 +86,19 @@ func TestLoadSelf(t *testing.T) {
 	}) {
 		t.Errorf("expected a direct call to engine.Detect in main; calls=%v", callSummary(frame.Calls))
 	}
+
+	// External marking: stdlib targets are flagged (bulk expansion skips
+	// them); main-module targets are not.
+	if !findCall(frame.Calls, func(c CallSite) bool {
+		return c.DisplayName == "flag.Parse" && c.External
+	}) {
+		t.Errorf("expected flag.Parse to be marked external; calls=%v", callSummary(frame.Calls))
+	}
+	if !findCall(frame.Calls, func(c CallSite) bool {
+		return c.DisplayName == "engine.Detect" && !c.External
+	}) {
+		t.Error("engine.Detect (main module) must not be marked external")
+	}
 }
 
 // TestFrameForCall verifies that following a direct call from main lands

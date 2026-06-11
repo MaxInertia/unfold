@@ -13,6 +13,7 @@ export interface CallSite {
   targetId?: TargetID; // present for direct calls
   candidates?: Candidate[]; // present for interface calls with known impls
   goroutine?: boolean; // call is launched with the `go` keyword
+  external?: boolean; // target is stdlib/dependency; bulk expansion skips it
   receivers?: Receiver[]; // present for fan-out calls (all of them run)
   fanoutKind?: string; // e.g. "subscribers"
 }

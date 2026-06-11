@@ -603,6 +603,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 			TargetID:    c.target,
 			Candidates:  c.candidates,
 			Goroutine:   c.goroutine,
+			External:    c.kind == KindDirect && i.isExternal(c.target),
 		})
 	}
 
@@ -659,6 +660,24 @@ func (i *Indexer) Files() []string {
 	return out
 }
 
+// isExternal reports whether a direct target's package lives outside the
+// main module (stdlib or a dependency). Such calls are still expandable,
+// but the frontend's bulk "+1 level" skips them. (The TS engine never sets
+// this: it only registers project files, so external calls already carry
+// no target.)
+func (i *Indexer) isExternal(id TargetID) bool {
+	if id == "" {
+		return false
+	}
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	fi, ok := i.funcs[id]
+	if !ok {
+		return false
+	}
+	return fi.pkg == nil || fi.pkg.Module == nil || !fi.pkg.Module.Main
+}
+
 // fileFrame builds a Frame for a whole file: the full source plus every call
 // site across all of the file's functions, with offsets relative to the file
 // start. The call IDs match those produced during indexing, so expanding a
@@ -691,6 +710,7 @@ func (i *Indexer) fileFrame(path string) (*Frame, error) {
 			TargetID:    c.target,
 			Candidates:  c.candidates,
 			Goroutine:   c.goroutine,
+			External:    c.kind == KindDirect && i.isExternal(c.target),
 		})
 	}
 

@@ -83,6 +83,12 @@ type CallSite struct {
 	// lets the frontend flag concurrency boundaries when reading a call path.
 	Goroutine bool `json:"goroutine,omitempty"`
 
+	// External is true when the resolved target lives outside the main
+	// module (stdlib or a dependency). Still expandable by clicking, but
+	// bulk "+1 level" expansion skips externals so a project trace isn't
+	// buried under library bodies.
+	External bool `json:"external,omitempty"`
+
 	// Receivers lists the targets a fan-out call reaches (all of them run,
 	// unlike Candidates where one is chosen). Set only for kind="fanout".
 	// FrameForCall(id, choice) selects Receivers[choice].

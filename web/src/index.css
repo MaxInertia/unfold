@@ -1590,3 +1590,38 @@ body.resizing {
 .app--indent .fanout-body {
   margin-left: 1.25rem;
 }
+
+/* Frame header tools — "+1 level" / "collapse all" bulk expansion controls. */
+.frame-tool {
+  font: inherit;
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.05rem 0.45rem;
+  cursor: pointer;
+  flex: none;
+}
+
+.frame-tool:hover {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+/* Recursive call sites — the target is already an ancestor frame in the
+   view. Expansion stays possible (opt-in), but bulk "+1 level" skips them. */
+.call-site--recursive {
+  border-bottom-style: dashed;
+}
+
+.recursive-badge {
+  color: var(--goroutine-fg);
+  font-size: 0.85em;
+  margin-right: 0.15em;
+}
+
+.tree-kind--recursive {
+  color: var(--goroutine-fg);
+}
