@@ -532,7 +532,13 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     : 0;
 
   return (
-    <div className="frame" data-frame-key={pathKey(path)}>
+    <div
+      className="frame"
+      data-frame-key={pathKey(path)}
+      // Read by StickyHeaders to render the pinned call-chain stack.
+      data-frame-title={frameTitle(frame)}
+      data-frame-loc={`${shortPath(frame.file)}:${frame.startLine}`}
+    >
       <header className="frame-header">
         <button
           type="button"

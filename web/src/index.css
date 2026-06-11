@@ -1335,3 +1335,62 @@ body.resizing {
   padding: 0 0.25rem;
   font-size: 0.68rem;
 }
+
+/* Sticky headers — the pinned call-chain stack (see StickyHeaders.tsx).
+   Heights here must match HEADER_H in the component. */
+.sticky-stack {
+  position: fixed;
+  top: 0;
+  z-index: 40;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
+
+.sticky-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  height: 28px;
+  padding: 0 0.8rem 0 0;
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: none;
+  border-bottom: 1px solid var(--card-border);
+  cursor: pointer;
+}
+
+.sticky-header:hover {
+  background: var(--call-bg);
+}
+
+.sticky-header--gap {
+  color: var(--muted);
+  font-size: 0.72rem;
+  cursor: default;
+  padding-left: 1.2rem;
+}
+
+.sticky-rail {
+  width: 4px;
+  height: 100%;
+  flex: none;
+}
+
+.sticky-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sticky-loc {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  flex: none;
+}
