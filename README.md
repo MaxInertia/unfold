@@ -6,6 +6,54 @@ When reading code that's heavily decomposed (DI, layered services, lots of small
 
 See [`PLAN.md`](./PLAN.md) for architecture, scope, and phasing.
 
+## Usages / callers
+
+Unfolding follows execution *downward*; the usages feature is the reverse
+direction. **▲ callers** in any frame header lists where that function is
+referenced; picking one re-roots the view so the caller reads as spliced
+above (the frame you clicked from keeps its expansion state, nested at the
+picked call site). The **callers** sidebar tab is the same data as an
+inverted tree: expand to walk toward entry points, click a node to load the
+whole chain as one pre-unfolded view.
+
+Three usage kinds:
+
+- `call` — a direct call to the function.
+- `iface` — a call through an interface the function's receiver implements;
+  execution *may* dispatch here. Re-rooting through one selects the right
+  implementation in the impl switcher automatically.
+- `ref` — a value reference: the function is passed or stored as a value
+  (`apply(myFunc)`, `mux.HandleFunc("/x", s.handler)`), not called at that
+  site.
+
+### Known limitations
+
+- **A `ref` can't be a link in a spliced chain.** Inline expansion splices a
+  body at a *call site*; a value reference has no call site — nothing
+  executes on that line, the function value just flows somewhere. So picking
+  a `ref` opens its enclosing function as a bare new root (your current
+  expansion subtree can't nest into it), and in the callers tree, loading a
+  chain that passes *through* a `ref` link drops everything below the ref:
+  the view shows the outer chain but not the function you started from.
+  The tree still shows ref edges because they answer "where does this
+  reach" — but they're data-flow edges, not control-flow edges.
+- **Only references inside indexed function bodies are found.** Package-level
+  initializers (`var handler = myFunc`) and struct literal defaults at
+  package scope aren't walked.
+- **TypeScript**: references inside Angular template HTML aren't covered
+  (templates aren't TS AST nodes); `new Foo()` doesn't count as a usage of
+  the class (constructors aren't frames); a usage inside an inline
+  `subscribe` callback is attributed to the registered subscriber
+  pseudo-target, so the caller label reads "subscriber" rather than the
+  enclosing method.
+- **Recursion isn't cycle-guarded.** A self-recursive function lists itself
+  as a caller and the tree can be expanded indefinitely (expansion is
+  user-driven, so this is the same behavior as IDE call hierarchies).
+- **Interface usages enumerate possibilities, not certainties.** A concrete
+  method's usage list includes every interface call site that *could*
+  dispatch to it within the loaded package set, including sites that only
+  ever dispatch to a different implementation at runtime.
+
 ## Stack
 
 - **Indexer**: Go (`go/packages` + `go/types`)
