@@ -3,6 +3,7 @@ import { Frame } from "./Frame";
 import { CallTree } from "./CallTree";
 import { CallersTree } from "./CallersTree";
 import { FileTree } from "./FileTree";
+import { StickyHeaders } from "./StickyHeaders";
 import { fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
@@ -202,6 +203,7 @@ function AppShell() {
               {/* Remount the whole frame tree on reindex so every expanded
                   child refetches; the expansion intent persists in the store. */}
               <Frame key={revision} frame={rootFrame} path={[]} />
+              <StickyHeaders />
             </div>
           )}
           {!rootFrame && !loading && !error && (
