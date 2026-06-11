@@ -85,6 +85,11 @@ function CallerNode({ usage, chain }: { usage: Usage; chain: Usage[] }) {
   const store = useViewStore();
   const [open, setOpen] = useState(false);
   const nextChain = [...chain, usage];
+  const isRef = !usage.callId;
+  // A value reference somewhere between the focused symbol and this node:
+  // splicing stops at that link, so loading this chain yields a partial view
+  // (the focused symbol itself won't be in it).
+  const throughRef = chain.some((u) => !u.callId);
 
   // Load the chain pre-unfolded: innermost is the focused symbol's current
   // subtree, then each chain link wraps it at its call site.
@@ -95,20 +100,39 @@ function CallerNode({ usage, chain }: { usage: Usage; chain: Usage[] }) {
     store.setView(usage.caller, tree);
   }
 
+  const labelTitle = isRef
+    ? "value reference, not a call — clicking opens this function bare"
+    : throughRef
+      ? "this chain passes through a value reference — loads only the links above it (the focused function can't be spliced through a ref)"
+      : "load this chain as one pre-unfolded view";
+
   return (
     <li className={`tree-node tree-node--${usage.kind}`}>
       <div
         className="tree-row tree-row--expandable"
         onClick={() => setOpen((v) => !v)}
-        title={`${usage.file}:${usage.line} — click the name to load this chain as the view`}
+        title={`${usage.file}:${usage.line}`}
       >
         <span className="tree-twisty">{open ? "▾" : "▸"}</span>
-        <span className="tree-label" onClick={openChain}>
+        <span
+          className={`tree-label${isRef ? " tree-label--ref" : ""}`}
+          onClick={openChain}
+          title={labelTitle}
+        >
+          {isRef && <span className="tree-ref-glyph">⤳ </span>}
           {usage.callerTitle}
         </span>
         {usage.kind !== "call" && (
           <span className={`tree-kind tree-kind--${usage.kind}`}>
             {kindLabel(usage.kind)}
+          </span>
+        )}
+        {throughRef && (
+          <span
+            className="tree-kind tree-kind--partial"
+            title="loading from here gives a partial chain — a value reference below this node breaks the splice"
+          >
+            partial
           </span>
         )}
       </div>

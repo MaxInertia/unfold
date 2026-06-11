@@ -36,7 +36,10 @@ Three usage kinds:
   chain that passes *through* a `ref` link drops everything below the ref:
   the view shows the outer chain but not the function you started from.
   The tree still shows ref edges because they answer "where does this
-  reach" — but they're data-flow edges, not control-flow edges.
+  reach" — but they're data-flow edges, not control-flow edges. The UI
+  marks the difference: ref entries are dashed/italic with a ⤳ glyph and an
+  "opens bare" note, and tree nodes whose chain passes through a ref carry
+  a "partial" badge.
 - **Only references inside indexed function bodies are found.** Package-level
   initializers (`var handler = myFunc`) and struct literal defaults at
   package scope aren't walked.

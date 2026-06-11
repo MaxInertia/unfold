@@ -113,15 +113,16 @@ function UsageStrip({
 }) {
   const hotLine = usage.line - usage.excerptLine;
   const lines = usage.excerpt ? usage.excerpt.split("\n") : [];
+  const isRef = usage.kind === "ref";
   return (
-    <li className="caller">
+    <li className={`caller${isRef ? " caller--ref" : ""}`}>
       <button
         type="button"
         className="caller-strip"
         onClick={onPick}
         title={
-          usage.kind === "ref"
-            ? "value reference — opens the caller as the new root"
+          isRef
+            ? "value reference, not a call — opens the caller bare (this frame can't be spliced into it)"
             : "make this caller the root; this frame stays expanded at the call site"
         }
       >
@@ -130,6 +131,7 @@ function UsageStrip({
           <span className={`caller-kind caller-kind--${usage.kind}`}>
             {kindLabel(usage.kind)}
           </span>
+          {isRef && <span className="caller-noslice">⤳ not a call · opens bare</span>}
           {inView && <span className="caller-kind caller-kind--inview">in view</span>}
           <span className="caller-loc">
             {shortPath(usage.file)}:{usage.line}

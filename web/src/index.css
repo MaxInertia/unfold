@@ -1300,3 +1300,38 @@ body.resizing {
 .tree-kind--ref {
   color: var(--goroutine-fg);
 }
+
+/* Value references — visually distinct from call sites everywhere they
+   appear, since they can't be spliced through (data-flow, not control-flow). */
+.caller--ref .caller-strip {
+  border-left: 3px dashed var(--goroutine-border);
+}
+
+.caller--ref .caller-excerpt-line--hot {
+  background: var(--goroutine-bg);
+  box-shadow: inset 2px 0 0 var(--goroutine-fg);
+}
+
+.caller-noslice {
+  color: var(--goroutine-fg);
+  font-size: 0.72rem;
+}
+
+.tree-label--ref {
+  font-style: italic;
+  text-decoration: underline dashed var(--goroutine-border);
+  text-underline-offset: 3px;
+}
+
+.tree-ref-glyph {
+  color: var(--goroutine-fg);
+  font-style: normal;
+}
+
+.tree-kind--partial {
+  color: var(--muted);
+  border: 1px dashed var(--card-border);
+  border-radius: 4px;
+  padding: 0 0.25rem;
+  font-size: 0.68rem;
+}
