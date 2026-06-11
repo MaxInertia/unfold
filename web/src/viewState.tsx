@@ -51,6 +51,10 @@ interface ViewStoreCtx {
   expand: (path: FramePath, callId: CallID, choice: number) => void;
   setChoice: (path: FramePath, callId: CallID, choice: number) => void;
   collapse: (path: FramePath, callId: CallID) => void;
+  // Bulk controls: expand several calls in one update ("+1 level"), and
+  // collapse a frame's whole subtree (expansions + fanouts; folds stay).
+  expandMany: (path: FramePath, callIds: CallID[]) => void;
+  clearChildren: (path: FramePath) => void;
   // Fan-out calls: open/close the receiver list, and expand/collapse each
   // receiver (many can be open at once).
   openFanout: (path: FramePath, callId: CallID) => void;
@@ -168,6 +172,31 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
     [updatePath],
   );
 
+  const clearChildren = useCallback(
+    (path: FramePath) => {
+      updatePath(path, (s) => {
+        if (Object.keys(s.expansions).length === 0 && !s.fanouts) return s;
+        // Keep folds — they're this frame's own state, not its subtree.
+        return { folds: s.folds, expansions: {} };
+      });
+    },
+    [updatePath],
+  );
+
+  const expandMany = useCallback(
+    (path: FramePath, callIds: CallID[]) => {
+      if (callIds.length === 0) return;
+      updatePath(path, (s) => {
+        const expansions = { ...s.expansions };
+        for (const id of callIds) {
+          expansions[id] = { folds: [], expansions: {}, choice: 0 };
+        }
+        return { ...s, expansions };
+      });
+    },
+    [updatePath],
+  );
+
   const openFanout = useCallback(
     (path: FramePath, callId: CallID) => {
       updatePath(path, (s) =>
@@ -246,6 +275,8 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       expand,
       setChoice,
       collapse,
+      expandMany,
+      clearChildren,
       openFanout,
       closeFanout,
       expandReceiver,
@@ -261,6 +292,8 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       expand,
       setChoice,
       collapse,
+      expandMany,
+      clearChildren,
       openFanout,
       closeFanout,
       expandReceiver,

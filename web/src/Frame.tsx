@@ -3,7 +3,7 @@ import type { Root as HastRoot } from "hast";
 import { fetchBodyByCall, fetchTypeInfo, openInEditor } from "./api";
 import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
-import type { CallID, CallSite, Frame as FrameT, TypeInfo } from "./types";
+import type { CallID, CallSite, Frame as FrameT, TargetID, TypeInfo } from "./types";
 import {
   expandedReceivers,
   isFanoutOpen,
@@ -26,9 +26,13 @@ interface FrameProps {
   frame: FrameT;
   path: FramePath;
   onClose?: () => void;
+  // Target ids of the frames above this one in the view (root first).
+  // A call site whose target appears here (or is this frame itself) is
+  // recursive: expanding it would re-open a function already on screen.
+  ancestors?: TargetID[];
 }
 
-export function Frame({ frame, path, onClose }: FrameProps) {
+export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
   const store = useViewStore();
   const slice = useFrameSlice(path);
   const bookmarks = useBookmarks();
@@ -277,6 +281,46 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [selection]);
 
+  // The recursion chain for calls inside this frame: every frame above
+  // plus this one. A call resolving back into it is marked ↻.
+  const chainIds = useMemo(() => new Set([...ancestors, frame.id]), [ancestors, frame.id]);
+
+  function isRecursive(call: CallSite): boolean {
+    if (call.kind === "direct") return !!call.targetId && chainIds.has(call.targetId);
+    if (call.kind === "interface") {
+      return (call.candidates ?? []).some((c) => chainIds.has(c.targetId));
+    }
+    return false;
+  }
+
+  function isExpandableCall(call: CallSite): boolean {
+    if (call.kind === "direct") return !!call.targetId;
+    if (call.kind === "interface") return (call.candidates?.length ?? 0) > 0;
+    return false; // indirect never; fanout has its own receiver semantics
+  }
+
+  // "+1 level": expand every project call in this frame that isn't already
+  // expanded — skipping recursive ones (they'd re-open an ancestor) and
+  // external ones (a trace shouldn't drown in stdlib/dependency bodies).
+  // Both stay individually clickable.
+  const expandableNow = useMemo(
+    () =>
+      frame.calls
+        .filter(
+          (c) =>
+            isExpandableCall(c) &&
+            !c.external &&
+            !isRecursive(c) &&
+            !slice.expansions[c.id],
+        )
+        .map((c) => c.id),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [frame.calls, slice.expansions, chainIds],
+  );
+
+  const childCount =
+    Object.keys(slice.expansions).length + Object.keys(slice.fanouts ?? {}).length;
+
   function toggleCall(call: CallSite) {
     if (call.kind === "fanout") {
       if ((call.receivers?.length ?? 0) === 0) return;
@@ -365,11 +409,13 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     const isExpanded =
       !!slice.expansions[call.id] ||
       (call.kind === "fanout" && isFanoutOpen(slice, call.id));
+    const recursive = isRecursive(call);
     const cls = [
       domProps.className as string | undefined,
       isExpanded ? "expanded" : "",
       isLoading ? "loading" : "",
       call.goroutine ? "call-site--goroutine" : "",
+      recursive ? "call-site--recursive" : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -389,6 +435,19 @@ export function Frame({ frame, path, onClose }: FrameProps) {
             aria-label="launched as a goroutine"
           >
             ⚡
+          </span>
+        )}
+        {recursive && (
+          <span
+            className="recursive-badge"
+            title={
+              call.kind === "interface"
+                ? "may recurse — a candidate implementation is already in this view's chain"
+                : "recursive — this function is already in this view's chain (expand manually if you want another round)"
+            }
+            aria-label="recursive call"
+          >
+            ↻
           </span>
         )}
         {children}
@@ -453,6 +512,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
                       frame={child}
                       path={childPath}
                       onClose={() => store.collapseReceiver(path, call.id, i)}
+                      ancestors={[...ancestors, frame.id]}
                     />
                   </div>
                 )}
@@ -495,6 +555,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
             childPath={childPath}
             onChoose={(c) => chooseImpl(call, c)}
             onClose={() => closeChild(call.id)}
+            ancestors={[...ancestors, frame.id]}
           />,
         );
       }
@@ -619,6 +680,26 @@ export function Frame({ frame, path, onClose }: FrameProps) {
             ▲ callers
           </button>
         )}
+        {expandableNow.length > 0 && (
+          <button
+            type="button"
+            className="frame-tool"
+            onClick={() => store.expandMany(path, expandableNow)}
+            title={`expand all ${expandableNow.length} unexpanded project calls in this frame one level (recursive and stdlib/dependency calls are skipped)`}
+          >
+            +1 level
+          </button>
+        )}
+        {childCount > 0 && (
+          <button
+            type="button"
+            className="frame-tool"
+            onClick={() => store.clearChildren(path)}
+            title="collapse everything expanded inside this frame"
+          >
+            collapse all
+          </button>
+        )}
         <button
           type="button"
           className="frame-loc frame-loc--link"
@@ -713,6 +794,7 @@ interface InlineChildProps {
   childPath: FramePath;
   onChoose: (choice: number) => void;
   onClose: () => void;
+  ancestors: TargetID[];
 }
 
 function InlineChild({
@@ -722,6 +804,7 @@ function InlineChild({
   childPath,
   onChoose,
   onClose,
+  ancestors,
 }: InlineChildProps) {
   const candidates = call.candidates ?? [];
   const showSwitcher = call.kind === "interface" && candidates.length > 1;
@@ -742,7 +825,7 @@ function InlineChild({
           </span>
         </div>
       )}
-      <Frame frame={childFrame} path={childPath} onClose={onClose} />
+      <Frame frame={childFrame} path={childPath} onClose={onClose} ancestors={ancestors} />
     </div>
   );
 }
