@@ -200,13 +200,21 @@ body.resizing {
 
 .picker-results {
   list-style: none;
-  margin: 0.4rem 0 0;
+  margin: 0;
   padding: 0;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: 6px;
   max-height: 320px;
   overflow-y: auto;
+  /* Float as a dropdown anchored to .picker (position: relative) so results
+     overlay the content below instead of pushing it down. */
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .picker-results li + li {
