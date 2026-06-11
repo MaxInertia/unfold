@@ -21,7 +21,12 @@ func RunGreeter(g Greeter, name string) {
 	fmt.Println(msg)
 }
 
+func apply(f func(Greeter, string), g Greeter, name string) {
+	f(g, name)
+}
+
 func main() {
 	RunGreeter(English{}, "world")
 	RunGreeter(French{}, "monde")
+	apply(RunGreeter, English{}, "le monde")
 }

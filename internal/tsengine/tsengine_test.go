@@ -110,6 +110,77 @@ func TestGreeterFixture(t *testing.T) {
 	}
 
 	t.Run("utf16-offsets", testUTF16Offsets(e))
+	t.Run("usages", testUsages(e))
+}
+
+// testUsages exercises the reverse reference search: runGreeter is called
+// twice from main, and English.greet is reached only through the Greeter
+// interface dispatch inside runGreeter.
+func testUsages(e *Engine) func(*testing.T) {
+	return func(t *testing.T) {
+		runID, err := e.LookupSymbol("runGreeter")
+		if err != nil {
+			t.Fatalf("LookupSymbol(runGreeter): %v", err)
+		}
+		usages, err := e.Usages(runID)
+		if err != nil {
+			t.Fatalf("Usages(runGreeter): %v", err)
+		}
+		calls := 0
+		for _, u := range usages {
+			if u.Kind != "call" {
+				t.Errorf("runGreeter usage kind: got %q want call (%+v)", u.Kind, u)
+				continue
+			}
+			calls++
+			if u.CallerTitle != "main" {
+				t.Errorf("caller title: got %q want main", u.CallerTitle)
+			}
+			if u.CallID == "" || u.Excerpt == "" || u.ExcerptLine == 0 {
+				t.Errorf("usage missing callId/excerpt: %+v", u)
+				continue
+			}
+			fr, err := e.FrameForCall(u.CallID, u.Choice)
+			if err != nil {
+				t.Errorf("FrameForCall(usage): %v", err)
+			} else if fr.ID != runID {
+				t.Errorf("usage round-trip: got %s want %s", fr.ID, runID)
+			}
+		}
+		if calls != 2 {
+			t.Errorf("runGreeter call usages: got %d want 2 (%+v)", calls, usages)
+		}
+
+		// English.greet: one interface usage from runGreeter whose choice
+		// selects English among the candidates.
+		greetID, err := e.LookupSymbol("English.greet")
+		if err != nil {
+			t.Fatalf("LookupSymbol(English.greet): %v", err)
+		}
+		gUsages, err := e.Usages(greetID)
+		if err != nil {
+			t.Fatalf("Usages(English.greet): %v", err)
+		}
+		if len(gUsages) != 1 {
+			t.Fatalf("English.greet usages: got %d want 1 (%+v)", len(gUsages), gUsages)
+		}
+		gu := gUsages[0]
+		if gu.Kind != "interface" || gu.CallerTitle != "runGreeter" {
+			t.Errorf("interface usage: got kind=%q caller=%q", gu.Kind, gu.CallerTitle)
+		}
+		fr, err := e.FrameForCall(gu.CallID, gu.Choice)
+		if err != nil {
+			t.Fatalf("FrameForCall(interface usage): %v", err)
+		}
+		if fr.ID != greetID {
+			t.Errorf("interface usage resolves to %s want %s", fr.ID, greetID)
+		}
+
+		// Unknown target errors.
+		if _, err := e.Usages(model.TargetID("nope")); err == nil {
+			t.Error("Usages(unknown) should error")
+		}
+	}
 }
 
 // testUTF16Offsets verifies call spans are UTF-16 string indices (matching

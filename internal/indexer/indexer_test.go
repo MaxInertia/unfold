@@ -207,6 +207,115 @@ func TestInterfaceCandidates(t *testing.T) {
 	}
 }
 
+// TestUsages exercises the reverse-call index on the diapp fixture:
+// RunGreeter is called directly twice and referenced once as a value (the
+// apply(RunGreeter, ...) argument); English.Greet is reachable only through
+// the Greeter interface dispatch inside RunGreeter.
+func TestUsages(t *testing.T) {
+	dir, err := filepath.Abs("testdata/diapp")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	idx := New()
+	if err := idx.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	runID, err := idx.LookupSymbol("RunGreeter")
+	if err != nil {
+		t.Fatalf("LookupSymbol(RunGreeter): %v", err)
+	}
+	usages, err := idx.Usages(runID)
+	if err != nil {
+		t.Fatalf("Usages(RunGreeter): %v", err)
+	}
+
+	calls, refs := 0, 0
+	for _, u := range usages {
+		if !strings.HasSuffix(string(u.Caller), "main") {
+			t.Errorf("usage caller: got %s, want ...main", u.Caller)
+		}
+		if u.CallerTitle != "main" {
+			t.Errorf("caller title: got %q, want main", u.CallerTitle)
+		}
+		switch u.Kind {
+		case "call":
+			calls++
+			if u.CallID == "" {
+				t.Error("call usage missing callId")
+			}
+			// Expanding the usage's call site must land back on RunGreeter.
+			fr, err := idx.FrameForCall(u.CallID, u.Choice)
+			if err != nil {
+				t.Errorf("FrameForCall(%s, %d): %v", u.CallID, u.Choice, err)
+			} else if fr.ID != runID {
+				t.Errorf("usage round-trip: got %s, want %s", fr.ID, runID)
+			}
+		case "ref":
+			refs++
+			if u.CallID != "" {
+				t.Errorf("ref usage should have no callId, got %s", u.CallID)
+			}
+		default:
+			t.Errorf("unexpected usage kind %q", u.Kind)
+		}
+		if u.Excerpt == "" || u.ExcerptLine == 0 {
+			t.Errorf("usage at %s:%d has empty excerpt", u.File, u.Line)
+			continue
+		}
+		rel := u.Line - u.ExcerptLine
+		exLines := strings.Split(u.Excerpt, "\n")
+		if rel < 0 || rel >= len(exLines) {
+			t.Errorf("usage line %d outside excerpt starting at %d (%d lines)", u.Line, u.ExcerptLine, len(exLines))
+		} else if !strings.Contains(exLines[rel], "RunGreeter") {
+			t.Errorf("excerpt line %q doesn't mention RunGreeter", exLines[rel])
+		}
+	}
+	if calls != 2 || refs != 1 {
+		t.Errorf("RunGreeter usages: got %d calls + %d refs, want 2 + 1 (all: %+v)", calls, refs, usages)
+	}
+
+	// English.Greet is only reached through the interface dispatch in
+	// RunGreeter; the usage must carry the candidate index that picks it.
+	// Method FullNames look like "(pkg/path.English).Greet".
+	var greetID TargetID
+	for id := range idx.funcs {
+		if strings.HasSuffix(string(id), "English).Greet") {
+			greetID = id
+			break
+		}
+	}
+	if greetID == "" {
+		t.Fatal("English.Greet target not found")
+	}
+	gUsages, err := idx.Usages(greetID)
+	if err != nil {
+		t.Fatalf("Usages(English.Greet): %v", err)
+	}
+	if len(gUsages) != 1 {
+		t.Fatalf("English.Greet usages: got %d, want 1 (%+v)", len(gUsages), gUsages)
+	}
+	gu := gUsages[0]
+	if gu.Kind != "interface" {
+		t.Errorf("kind: got %q, want interface", gu.Kind)
+	}
+	if gu.CallerTitle != "RunGreeter" {
+		t.Errorf("caller title: got %q, want RunGreeter", gu.CallerTitle)
+	}
+	fr, err := idx.FrameForCall(gu.CallID, gu.Choice)
+	if err != nil {
+		t.Fatalf("FrameForCall(interface usage): %v", err)
+	}
+	if fr.ID != greetID {
+		t.Errorf("interface usage choice %d resolves to %s, want %s", gu.Choice, fr.ID, greetID)
+	}
+
+	// Unknown target errors.
+	if _, err := idx.Usages(TargetID("nope")); err == nil {
+		t.Error("Usages(unknown) should error")
+	}
+}
+
 // TestUTF16SpanOffsets verifies call-site span offsets are UTF-16 code-unit
 // indices into Source (what the frontend reads), not UTF-8 byte offsets.
 // resolveCall is a good probe: its comments contain em-dashes (3 bytes, 1

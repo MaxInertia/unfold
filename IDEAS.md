@@ -81,3 +81,34 @@ Today the only way into the code is searching for a symbol. A file tree on the l
 - Scope of the tree: only **indexed** files (ones with symbols unfold knows about) vs the full on-disk directory (needs a filesystem walk + a tracked project root). Indexed-only is simpler and matches what you can actually navigate; full-disk browsing is a bigger, separate feature.
 - Large repos: `/api/files` returning every symbol could be big — fine for v1, paginate / lazy-load per file later if needed.
 - Tabs (Files | Calls) vs stacked collapsible sections — tabs keep height sane when both trees are large.
+
+---
+
+## Depth legibility without indentation (2026-06-11)
+
+With several nested calls expanded it's easy to lose track of what level a given line sits at. Indentation encodes depth in horizontal space, which doesn't scale past a few levels. Replace it with three composable cues — sticky stacked headers, depth rails, and a depth ruler — plus a small settings modal to toggle the optional ones.
+
+### Sketch
+
+**Depth source.** Already available: every rendered frame knows its `FramePath` (`viewState.tsx`), so depth = `path.length`. No backend work anywhere in this feature.
+
+**1. Sticky stacked headers (always on — this is the core fix).** As you scroll into a frame, its `frame-header` pins to the top of the viewport; nested frames stack their headers beneath it. At any scroll position the pinned stack reads as the live call chain (`handleRequest → authorize → checkToken`); clicking a stuck header scrolls back to that frame. Implementation: `position: sticky` on `.frame-header` with `top: calc(depth * headerHeight)` set via a `--depth` CSS custom property on `.frame` (`Frame.tsx:547` already has the wrapper div; add `style={{ "--depth": path.length }}`). Sticky positioning needs the headers' scroll container to be the page scroller and no `overflow: hidden` ancestors between frame and scroller — audit `index.css` for that; it's the one likely gotcha. Cap the stack height (e.g. max 6 stuck headers, then compress older ones to title-only slivers) so deep chains don't eat the viewport.
+
+**2. Depth rails (toggleable, default on).** A fixed-width gutter at the left edge of the root frame with one thin colored lane per active depth level — bracket-pair-colorization, but for frames. Code stays at column 0 at every depth; only the gutter grows (~3px/lane). Implementation: each `.frame` draws its own full-height lane via a `border-left` or `::before` strip, colored from a cycling palette keyed off `--depth`; nested frames' lanes sit side by side naturally if each level adds one lane of left padding. Rail colors must match the accent color of the corresponding stuck header so the two cues read as one system.
+
+**3. Depth ruler (toggleable, default off).** The left margin shows the numeric depth per frame (or a dot column), like a ruler. Cheap once `--depth` exists: a small `.frame-depth` element in the header and/or gutter rendering `path.length`. Explicit rather than ambient; some readers will want the number.
+
+**Settings surface.** First user-facing options surface, so build the pattern to last:
+
+- `web/src/settings.tsx` — store mirroring `bookmarks.tsx` (localStorage + subscribe). Global key (`unfold.settings`), *not* per-project — these are reader preferences, not project state. Shape: `{ depthRails: boolean, depthRuler: boolean, indentMode: "rails" | "indent" }` with room to grow.
+- Gear icon in the top bar (`App.tsx`) opens a **right-side panel** (preferred over a modal — it doesn't block the code view, so you see toggles take effect live; mirrors the left sidebar's chrome and the existing resize pattern). A modal presentation could itself become a setting (`settingsUi: "panel" | "modal"`) — both render the same toggle-list component, only the container differs — but defer that until someone wants it; panel-only keeps v1 honest.
+- `indentMode` keeps classic indentation available as an option rather than a dead branch: the rails gutter degrades into indentation by swapping one constant (lane width ≈ 3px → one indent unit) — same CSS mechanism, different number.
+
+**Files.** All frontend: `Frame.tsx` (`--depth`, sticky header, ruler element), `index.css` (sticky rules, rails, palette, settings panel), new `settings.tsx`, `App.tsx` (gear + panel).
+
+### Open questions
+
+- Stuck-header stack cap: compress old levels to slivers vs scroll the stack vs hard cap with "+3 more"?
+- Palette: fixed cycle of N colors (repeats at depth N+1) vs hue rotation? Fixed cycle is more distinguishable; rotation never collides. Either way needs a dark/light pair.
+- Does clicking a stuck header scroll to the frame top, or collapse that frame (close-button semantics)? Scroll is safer; collapse is tempting but destructive mid-read.
+- Hover-to-highlight-enclosing-chain (variation 3 from the brainstorm) layers cleanly on top of rails later — same `--depth` plumbing. Defer or bundle?

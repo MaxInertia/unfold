@@ -51,6 +51,7 @@ func (s stubEngine) FrameForCall(model.CallID, int) (*model.Frame, error)  { ret
 func (s stubEngine) Search(string, int) []model.SearchResult               { return nil }
 func (s stubEngine) Files() []string                                       { return nil }
 func (s stubEngine) TypeInfo(model.TargetID, int) (*model.TypeInfo, error) { return nil, nil }
+func (s stubEngine) Usages(model.TargetID) ([]model.Usage, error)          { return nil, nil }
 
 type sentinel string
 

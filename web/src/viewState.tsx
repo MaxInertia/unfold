@@ -62,6 +62,10 @@ interface ViewStoreCtx {
   // Currently-selected root symbol (also tracked in the URL hash).
   symbol: string | null;
   setSymbol: (s: string | null) => void;
+  // Replace the whole view atomically: new root symbol AND a prebuilt slice
+  // tree. Used to re-root onto a caller (the old view nests inside the new
+  // root at the caller's call site) and to load a pre-unfolded caller chain.
+  setView: (symbol: string | null, tree: FrameSlice) => void;
 }
 
 const ViewStoreContext = createContext<ViewStoreCtx | null>(null);
@@ -81,6 +85,16 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
   const setSymbol = useCallback((s: string | null) => {
     setSymbolState(s);
   }, []);
+
+  const setView = useCallback(
+    (s: string | null, tree: FrameSlice) => {
+      rootRef.current = tree;
+      setSymbolState(s);
+      notify();
+      writeHash(s, tree);
+    },
+    [notify],
+  );
 
   const getSlice = useCallback((path: FramePath): FrameSlice => {
     let cur: FrameSlice = rootRef.current;
@@ -239,6 +253,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       subscribe,
       symbol,
       setSymbol,
+      setView,
     }),
     [
       getSlice,
@@ -253,6 +268,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       subscribe,
       symbol,
       setSymbol,
+      setView,
     ],
   );
 

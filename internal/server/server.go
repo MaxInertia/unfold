@@ -65,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/typeinfo", s.handleTypeInfo)
+	mux.HandleFunc("/api/usages", s.handleUsages)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))
@@ -151,6 +152,25 @@ func (s *Server) handleTypeInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	// ti may be nil (offset not over a symbol) — that's a valid empty result.
 	writeJSON(w, http.StatusOK, map[string]any{"typeInfo": ti})
+}
+
+// GET /api/usages?targetId=<id> — the places the target is referenced
+// (callers, interface dispatches that may reach it, value references).
+func (s *Server) handleUsages(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("targetId")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing required query param: targetId")
+		return
+	}
+	usages, err := s.engine.Usages(model.TargetID(id))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if usages == nil {
+		usages = []model.Usage{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"usages": usages})
 }
 
 // POST /api/open?file=<abs-path>&line=<n> — opens the file in the configured

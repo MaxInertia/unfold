@@ -80,6 +80,43 @@ func TestEndpoints(t *testing.T) {
 		getStatus(t, ts.URL+"/api/body?targetId=x&callId=y", http.StatusBadRequest)
 	})
 
+	t.Run("usages", func(t *testing.T) {
+		// NewReloadable is called from cmd/cli's main — at least one caller.
+		var main indexer.Frame
+		getJSON(t, ts.URL+"/api/symbol?name=NewReloadable", http.StatusOK, &main)
+		var resp struct {
+			Usages []struct {
+				CallID      string `json:"callId"`
+				Caller      string `json:"caller"`
+				CallerTitle string `json:"callerTitle"`
+				Kind        string `json:"kind"`
+				Excerpt     string `json:"excerpt"`
+			} `json:"usages"`
+		}
+		getJSON(t, ts.URL+"/api/usages?targetId="+url.QueryEscape(string(main.ID)), http.StatusOK, &resp)
+		if len(resp.Usages) == 0 {
+			t.Fatal("expected at least one usage of NewReloadable")
+		}
+		found := false
+		for _, u := range resp.Usages {
+			if u.Kind == "call" && u.CallerTitle == "main" && u.CallID != "" &&
+				strings.Contains(u.Excerpt, "NewReloadable") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no call usage from main with excerpt; got %+v", resp.Usages)
+		}
+	})
+
+	t.Run("usages-missing-param", func(t *testing.T) {
+		getStatus(t, ts.URL+"/api/usages", http.StatusBadRequest)
+	})
+
+	t.Run("usages-unknown-target", func(t *testing.T) {
+		getStatus(t, ts.URL+"/api/usages?targetId=__nope__", http.StatusNotFound)
+	})
+
 	t.Run("search", func(t *testing.T) {
 		var resp struct {
 			Results []indexer.SearchResult `json:"results"`
