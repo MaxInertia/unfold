@@ -1443,3 +1443,150 @@ body.resizing {
   font-size: 0.72rem;
   flex: none;
 }
+
+/* Settings — gear in the app header, right-side panel (not a modal, so the
+   code view stays visible and toggles take effect live). */
+.app-header {
+  position: relative;
+}
+
+.app-settings {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font: inherit;
+  font-size: 1.05rem;
+  line-height: 1;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.2rem 0.45rem;
+}
+
+.app-settings:hover,
+.app-settings--open {
+  color: var(--accent);
+  border-color: var(--card-border);
+  background: var(--call-bg);
+}
+
+.settings-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 300px;
+  z-index: 60;
+  background: var(--card-bg);
+  border-left: 1px solid var(--card-border);
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.15);
+  overflow-y: auto;
+  font-size: 0.85rem;
+}
+
+.settings-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.settings-title {
+  font-weight: 600;
+  text-transform: lowercase;
+  color: var(--muted);
+}
+
+.settings-close {
+  margin-left: auto;
+  font: inherit;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.settings-close:hover {
+  color: var(--fg);
+}
+
+.settings-section {
+  padding: 0.6rem 0.9rem;
+}
+
+.settings-section-title {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.4rem;
+}
+
+.settings-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.35rem 0;
+  cursor: pointer;
+}
+
+.settings-row input[type="checkbox"] {
+  margin-top: 0.2rem;
+}
+
+.settings-row--select {
+  flex-direction: column;
+  cursor: default;
+}
+
+.settings-row--select select {
+  font: inherit;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.15rem 0.3rem;
+  align-self: flex-start;
+}
+
+.settings-label {
+  display: block;
+}
+
+.settings-desc {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* Depth rails — one colored lane per nesting level. Each frame draws its
+   own left border; nested frames start just right of their parent's, so
+   lanes stack side by side (~3px per level) with code at full width. */
+.frame--railed {
+  border-left: 3px solid var(--depth-color, var(--card-border));
+}
+
+/* Depth ruler — numeric nesting depth in the frame header. */
+.frame-depth {
+  font-size: 0.68rem;
+  color: var(--depth-color, var(--muted));
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  flex: none;
+}
+
+/* Classic indent mode — restores a per-level horizontal offset. */
+.app--indent .inline-child {
+  margin-left: 1.25rem;
+}
+
+.app--indent .fanout-body {
+  margin-left: 1.25rem;
+}

@@ -4,6 +4,8 @@ import { CallTree } from "./CallTree";
 import { CallersTree } from "./CallersTree";
 import { FileTree } from "./FileTree";
 import { StickyHeaders } from "./StickyHeaders";
+import { SettingsPanel } from "./SettingsPanel";
+import { useSettings } from "./settings";
 import { fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
@@ -37,6 +39,8 @@ function AppShell() {
   );
   const [sidebarTab, setSidebarTab] = useState<"files" | "calls" | "callers">("calls");
   const [reindexed, setReindexed] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settings = useSettings();
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
@@ -109,11 +113,25 @@ function AppShell() {
   }, []);
 
   return (
-    <div className={`app${treeCollapsed ? " app--tree-collapsed" : ""}`}>
+    <div
+      className={`app${treeCollapsed ? " app--tree-collapsed" : ""}${
+        settings.indentMode === "indent" ? " app--indent" : ""
+      }`}
+    >
       <header className="app-header">
         <h1>unfold</h1>
         {target && <span className="app-target">target: <code>{target}</code></span>}
+        <button
+          type="button"
+          className={`app-settings${settingsOpen ? " app-settings--open" : ""}`}
+          onClick={() => setSettingsOpen((v) => !v)}
+          title="settings"
+          aria-label="toggle settings"
+        >
+          ⚙
+        </button>
       </header>
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {reindexed && <div className="app-toast">reindexed · view refreshed</div>}
       <div className="app-main">
         <aside
