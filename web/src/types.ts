@@ -38,6 +38,13 @@ export interface Frame {
   endLine: number;
   source: string;
   calls: CallSite[];
+  diff?: FrameDiff; // present only in --diff-base mode
+}
+
+// How a frame differs from the diff base (see --diff-base).
+export interface FrameDiff {
+  status: "added" | "modified" | "unchanged";
+  addedLines?: number[]; // 0-based indices into source of new/changed lines
 }
 
 export interface SearchResult {

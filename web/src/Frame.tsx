@@ -531,6 +531,20 @@ export function Frame({ frame, path, onClose }: FrameProps) {
     ? Math.abs(selection.head - selection.anchor) + 1
     : 0;
 
+  // Diff tinting: a whole "added" frame tints every line; a "modified" frame
+  // tints only its changed lines (0-based indices from the backend).
+  const diff = frame.diff;
+  const addedSet =
+    diff?.status === "modified" && diff.addedLines?.length
+      ? new Set(diff.addedLines)
+      : null;
+  const lineClass: ((idx: number) => string | undefined) | undefined =
+    diff?.status === "added"
+      ? () => "line-row--added"
+      : addedSet
+        ? (idx) => (addedSet.has(idx) ? "line-row--added" : undefined)
+        : undefined;
+
   return (
     <div className="frame" data-frame-key={pathKey(path)}>
       <header className="frame-header">
@@ -551,6 +565,18 @@ export function Frame({ frame, path, onClose }: FrameProps) {
           {bookmarks.isBookmarked(frame.id) ? "★" : "☆"}
         </button>
         <span className="frame-title">{frameTitle(frame)}</span>
+        {frame.diff && frame.diff.status !== "unchanged" && (
+          <span
+            className={`frame-diff-badge frame-diff-badge--${frame.diff.status}`}
+            title={
+              frame.diff.status === "added"
+                ? "new on this branch (not in the diff base)"
+                : "changed on this branch"
+            }
+          >
+            {frame.diff.status}
+          </span>
+        )}
         {!frame.id.startsWith("file:") && (
           <button
             type="button"
@@ -612,6 +638,7 @@ export function Frame({ frame, path, onClose }: FrameProps) {
               renderLineGutter,
               renderFoldPlaceholder,
               lineAction,
+              lineClass,
             })}
           </div>
         ) : (

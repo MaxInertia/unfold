@@ -316,6 +316,47 @@ body.resizing {
   min-width: 0;
 }
 
+/* Diff mode (--diff-base): tint added/changed lines and accent their gutter. */
+.line-row--added {
+  background: rgba(46, 160, 67, 0.16);
+}
+
+.line-row--added > .line-num {
+  box-shadow: inset 2px 0 0 rgba(46, 160, 67, 0.8);
+  opacity: 0.85;
+}
+
+/* Diff status badge on the frame header. */
+.frame-diff-badge {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  padding: 0.04rem 0.4rem;
+  border-radius: 999px;
+}
+
+.frame-diff-badge--added {
+  color: #1a7f37;
+  background: rgba(46, 160, 67, 0.16);
+  border: 1px solid rgba(46, 160, 67, 0.45);
+}
+
+.frame-diff-badge--modified {
+  color: #9a6700;
+  background: rgba(212, 167, 44, 0.18);
+  border: 1px solid rgba(212, 167, 44, 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  .frame-diff-badge--added {
+    color: #56d364;
+  }
+  .frame-diff-badge--modified {
+    color: #e3b341;
+  }
+}
+
 .line-num {
   flex: 0 0 auto;
   width: 3.2em;

@@ -43,6 +43,21 @@ type Frame struct {
 	EndLine   int        `json:"endLine"`
 	Source    string     `json:"source"`
 	Calls     []CallSite `json:"calls"`
+	// Diff, when non-nil, describes how this frame's source differs from the
+	// same function in the configured diff base (see --diff-base). Attached by
+	// the server only when a base engine is loaded. Nil = diff mode off.
+	Diff *FrameDiff `json:"diff,omitempty"`
+}
+
+// FrameDiff annotates a Frame with how it differs from the diff base.
+type FrameDiff struct {
+	// Status is "added" (no matching function in the base), "modified" (source
+	// differs), or "unchanged".
+	Status string `json:"status"`
+	// AddedLines holds the 0-based indices into Source of lines that are new or
+	// changed relative to the base (the lines a reviewer should look at). Empty
+	// for "added" (the whole frame is new) and "unchanged".
+	AddedLines []int `json:"addedLines,omitempty"`
 }
 
 // CallSite describes one call inside a function body.

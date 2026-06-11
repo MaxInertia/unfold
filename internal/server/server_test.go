@@ -23,13 +23,16 @@ func TestEndpoints(t *testing.T) {
 	defer ts.Close()
 
 	t.Run("health", func(t *testing.T) {
-		var resp map[string]string
+		var resp map[string]any
 		getJSON(t, ts.URL+"/api/health", http.StatusOK, &resp)
 		if resp["status"] != "ok" {
 			t.Errorf("health status: got %q want ok", resp["status"])
 		}
 		if resp["target"] != "./..." {
 			t.Errorf("target: got %q", resp["target"])
+		}
+		if resp["diff"] != false {
+			t.Errorf("diff: got %v want false (no base engine in this test)", resp["diff"])
 		}
 	})
 

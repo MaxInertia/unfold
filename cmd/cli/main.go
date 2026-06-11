@@ -14,17 +14,20 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MaxInertia/unfold/internal/diff"
 	"github.com/MaxInertia/unfold/internal/engine"
+	"github.com/MaxInertia/unfold/internal/gitbase"
 	"github.com/MaxInertia/unfold/internal/server"
 )
 
 func main() {
 	var (
-		addr   = flag.String("addr", "127.0.0.1:0", "address to bind (default: random free port on localhost)")
-		noOpen = flag.Bool("no-open", false, "don't open the browser")
-		dir    = flag.String("dir", "", "project directory to load from (default: cwd)")
-		lang   = flag.String("lang", "", "force engine language: go|typescript (default: autodetect)")
-		watch  = flag.Bool("watch", true, "reindex automatically when source files change")
+		addr     = flag.String("addr", "127.0.0.1:0", "address to bind (default: random free port on localhost)")
+		noOpen   = flag.Bool("no-open", false, "don't open the browser")
+		dir      = flag.String("dir", "", "project directory to load from (default: cwd)")
+		lang     = flag.String("lang", "", "force engine language: go|typescript (default: autodetect)")
+		watch    = flag.Bool("watch", true, "reindex automatically when source files change")
+		diffBase = flag.String("diff-base", "", "git ref to diff against (e.g. main); frames show what this branch changes vs the merge-base. Go only.")
 	)
 	flag.Parse()
 
@@ -43,6 +46,27 @@ func main() {
 	}
 	defer eng.Close()
 
+	// Optional diff mode: index the merge-base with --diff-base in a throwaway
+	// worktree and annotate frames with what this branch changes.
+	var differ *diff.Differ
+	if *diffBase != "" {
+		if detected != engine.LangGo {
+			log.Printf("diff mode is Go-only for now; ignoring --diff-base for %s", detected)
+		} else if commit, err := gitbase.MergeBase(*dir, *diffBase); err != nil {
+			log.Fatalf("--diff-base %q: %v", *diffBase, err)
+		} else if baseDir, cleanup, err := gitbase.AddWorktree(*dir, commit); err != nil {
+			log.Fatalf("diff base worktree: %v", err)
+		} else {
+			defer cleanup()
+			baseEng, err := engine.Load(detected, baseDir, target)
+			if err != nil {
+				log.Fatalf("diff base index failed: %v", err)
+			}
+			differ = diff.New(baseEng)
+			log.Printf("diff mode: comparing against %.12s (merge-base with %s)", commit, *diffBase)
+		}
+	}
+
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
@@ -51,6 +75,7 @@ func main() {
 
 	srv := server.New(eng)
 	srv.SetTarget(target)
+	srv.SetDiffer(differ)
 	httpServer := &http.Server{Handler: srv.Handler()}
 
 	serverErr := make(chan error, 1)
