@@ -84,9 +84,12 @@ Today the only way into the code is searching for a symbol. A file tree on the l
 
 ---
 
-## Depth legibility without indentation (2026-06-11)
+## Depth legibility without indentation (2026-06-11) — SHIPPED
 
-With several nested calls expanded it's easy to lose track of what level a given line sits at. Indentation encodes depth in horizontal space, which doesn't scale past a few levels. Replace it with three composable cues — sticky stacked headers, depth rails, and a depth ruler — plus a small settings modal to toggle the optional ones.
+All three cues plus the settings surface are in (sticky headers via
+`feat/sticky-headers`; rails, ruler, and the settings panel via
+`feat/depth-rails`). Kept for the design record; the open questions below
+that still matter are tracked inline.
 
 ### Sketch
 
@@ -94,21 +97,14 @@ With several nested calls expanded it's easy to lose track of what level a given
 
 **1. Sticky stacked headers — SHIPPED (feat/sticky-headers).** As you scroll into a frame, a compact copy of its header pins to the top of the viewport; nested frames stack theirs beneath, so the pinned stack reads as the live call chain; clicking one scrolls back to that frame. The original CSS `position: sticky` sketch did NOT survive the audit it called for: `.frame { overflow: hidden }` and `.frame-body { overflow-x: auto }` are scroll containers, so nested headers would pin to their parent frame's box, not the viewport. Shipped as a JS overlay instead (`StickyHeaders.tsx`): walk the frame containment chain from `.app-root-frame` via `getBoundingClientRect`, render a fixed stack aligned to the content column, recompute on scroll/resize/mutation. Chains deeper than 6 collapse the middle into a "⋯ +N" row. Each pinned header carries a depth-colored rail (`depthColor()` exported) — rails (item 2) should reuse the same palette.
 
-**2. Depth rails (toggleable, default on).** A fixed-width gutter at the left edge of the root frame with one thin colored lane per active depth level — bracket-pair-colorization, but for frames. Code stays at column 0 at every depth; only the gutter grows (~3px/lane). Implementation: each `.frame` draws its own full-height lane via a `border-left` or `::before` strip, colored from a cycling palette keyed off `--depth`; nested frames' lanes sit side by side naturally if each level adds one lane of left padding. Rail colors must match the accent color of the corresponding stuck header so the two cues read as one system.
+**2. Depth rails — SHIPPED (feat/depth-rails, default on).** Each `.frame--railed` draws a 3px `border-left` colored by `depthColor(path.length)`; since nested cards aren't indented, the lanes stack side by side automatically — no padding bookkeeping needed. Same palette as the stuck headers.
 
-**3. Depth ruler (toggleable, default off).** The left margin shows the numeric depth per frame (or a dot column), like a ruler. Cheap once `--depth` exists: a small `.frame-depth` element in the header and/or gutter rendering `path.length`. Explicit rather than ambient; some readers will want the number.
+**3. Depth ruler — SHIPPED (feat/depth-rails, default off).** A small `.frame-depth` badge in the frame header rendering `path.length`, tinted with the level's rail color.
 
-**Settings surface.** First user-facing options surface, so build the pattern to last:
+**Settings surface — SHIPPED (feat/depth-rails).** `web/src/settings.tsx` is a global localStorage store (`unfold.settings`, mirroring the `bookmarks.tsx` `useSyncExternalStore` pattern); a gear in the app header opens a right-side panel so toggles take effect on the visible code live. Shape: `{ depthRails, depthRuler, indentMode: "rails" | "indent" }` — classic indentation survives as `indentMode: "indent"`.
 
-- `web/src/settings.tsx` — store mirroring `bookmarks.tsx` (localStorage + subscribe). Global key (`unfold.settings`), *not* per-project — these are reader preferences, not project state. Shape: `{ depthRails: boolean, depthRuler: boolean, indentMode: "rails" | "indent" }` with room to grow.
-- Gear icon in the top bar (`App.tsx`) opens a **right-side panel** (preferred over a modal — it doesn't block the code view, so you see toggles take effect live; mirrors the left sidebar's chrome and the existing resize pattern). A modal presentation could itself become a setting (`settingsUi: "panel" | "modal"`) — both render the same toggle-list component, only the container differs — but defer that until someone wants it; panel-only keeps v1 honest.
-- `indentMode` keeps classic indentation available as an option rather than a dead branch: the rails gutter degrades into indentation by swapping one constant (lane width ≈ 3px → one indent unit) — same CSS mechanism, different number.
+### Still open (follow-up candidates)
 
-**Files.** All frontend: `Frame.tsx` (`--depth`, sticky header, ruler element), `index.css` (sticky rules, rails, palette, settings panel), new `settings.tsx`, `App.tsx` (gear + panel).
-
-### Open questions
-
-- Stuck-header stack cap: compress old levels to slivers vs scroll the stack vs hard cap with "+3 more"?
-- Palette: fixed cycle of N colors (repeats at depth N+1) vs hue rotation? Fixed cycle is more distinguishable; rotation never collides. Either way needs a dark/light pair.
-- Does clicking a stuck header scroll to the frame top, or collapse that frame (close-button semantics)? Scroll is safer; collapse is tempting but destructive mid-read.
-- Hover-to-highlight-enclosing-chain (variation 3 from the brainstorm) layers cleanly on top of rails later — same `--depth` plumbing. Defer or bundle?
+- Palette: shipped as a fixed 6-color cycle (repeats at depth 7). Revisit if deep traces make collisions confusing; needs a dedicated dark-theme pair if contrast complaints show up.
+- Hover-to-highlight-enclosing-chain (variation 3 from the brainstorm) layers cleanly on top of rails — same depth plumbing. Deferred.
+- A modal presentation for settings as itself a setting (`settingsUi: "panel" | "modal"`) — deferred until someone wants it.
