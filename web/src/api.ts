@@ -1,4 +1,4 @@
-import type { CallID, Frame, SearchResult, TargetID, TypeInfo, Usage } from "./types";
+import type { CallID, Frame, Note, SearchResult, TargetID, TypeInfo, Usage } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -50,6 +50,37 @@ export async function fetchTypeInfo(targetId: TargetID, offset: number): Promise
   const url = `/api/typeinfo?targetId=${encodeURIComponent(targetId)}&offset=${offset}`;
   const res = await getJSON<{ typeInfo: TypeInfo | null }>(url);
   return res.typeInfo ?? null;
+}
+
+export async function fetchNotes(): Promise<Note[]> {
+  const res = await getJSON<{ notes: Note[] }>("/api/notes");
+  return res.notes ?? [];
+}
+
+// Create (no id) or update (with id) a note. POST: mutations are
+// same-origin-guarded server-side, like /api/open.
+export async function saveNote(note: Partial<Note>): Promise<Note> {
+  const res = await fetch("/api/notes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(note),
+  });
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.error) msg = body.error;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(msg);
+  }
+  return res.json() as Promise<Note>;
+}
+
+export async function deleteNote(id: string): Promise<void> {
+  const res = await fetch(`/api/notes?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 }
 
 export async function openInEditor(file: string, line: number): Promise<void> {

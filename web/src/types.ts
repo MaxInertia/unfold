@@ -78,3 +78,22 @@ export interface TypeInfo {
   doc?: string;
   targetId?: TargetID; // present when the symbol is a function we can open
 }
+
+// A note anchored to a source location (mirrors internal/notes). Anchors
+// live in file space, so a note renders in every frame containing its
+// line(s) — function frames and whole-file frames alike.
+export interface NoteAnchor {
+  file: string;
+  kind: "after-line" | "range" | "file-start" | "file-end";
+  startLine?: number; // 1-based; after-line has startLine === endLine
+  endLine?: number;
+  snippet?: string; // anchored line's text at save time, for drift detection
+}
+
+export interface Note {
+  id: string;
+  anchor: NoteAnchor;
+  text: string; // may contain [[SymbolName]] / [[file:path]] references
+  createdAt?: string;
+  updatedAt?: string;
+}

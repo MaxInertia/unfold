@@ -3,7 +3,7 @@ import type { Root as HastRoot } from "hast";
 import { fetchBodyByCall, fetchTypeInfo, openInEditor } from "./api";
 import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
-import type { CallID, CallSite, Frame as FrameT, TargetID, TypeInfo } from "./types";
+import type { CallID, CallSite, Frame as FrameT, Note, NoteAnchor, TargetID, TypeInfo } from "./types";
 import {
   expandedReceivers,
   isFanoutOpen,
@@ -16,6 +16,8 @@ import { useBookmarks } from "./bookmarks";
 import { CallersPanel } from "./Callers";
 import { depthColor } from "./StickyHeaders";
 import { useSettings } from "./settings";
+import { useNotes } from "./notes";
+import { NoteCard, NoteComposer } from "./NotesUI";
 
 export interface FoldRange {
   start: number;
@@ -54,6 +56,72 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
   const depth = path.length;
   const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
   const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0 });
+  const allNotes = useNotes();
+  const [composing, setComposing] = useState<NoteAnchor | null>(null);
+  const isFileFrame = frame.id.startsWith("file:");
+
+  const sourceLines = useMemo(() => frame.source.split("\n"), [frame.source]);
+
+  // Notes anchored inside this frame's line range, keyed by the rendered
+  // line index their card appears after. Anchors live in file space, so
+  // the same note shows in a function frame and the whole-file frame.
+  const notesByLine = useMemo(() => {
+    const m = new Map<number, Note[]>();
+    for (const n of allNotes) {
+      const a = n.anchor;
+      if (a.file !== frame.file) continue;
+      if (a.kind !== "after-line" && a.kind !== "range") continue;
+      const end = a.endLine ?? 0;
+      if (end < frame.startLine || end > frame.endLine) continue;
+      const idx = end - frame.startLine;
+      m.set(idx, [...(m.get(idx) ?? []), n]);
+    }
+    return m;
+  }, [allNotes, frame.file, frame.startLine, frame.endLine]);
+
+  // Lines covered by a range anchor get a subtle tint.
+  const notedLines = useMemo(() => {
+    const s = new Set<number>();
+    for (const n of allNotes) {
+      const a = n.anchor;
+      if (a.file !== frame.file || a.kind !== "range") continue;
+      for (let l = a.startLine ?? 0; l <= (a.endLine ?? 0); l++) {
+        const idx = l - frame.startLine;
+        if (idx >= 0 && idx <= frame.endLine - frame.startLine) s.add(idx);
+      }
+    }
+    return s;
+  }, [allNotes, frame.file, frame.startLine, frame.endLine]);
+
+  const fileStartNotes = isFileFrame
+    ? allNotes.filter((n) => n.anchor.file === frame.file && n.anchor.kind === "file-start")
+    : [];
+  const fileEndNotes = isFileFrame
+    ? allNotes.filter((n) => n.anchor.file === frame.file && n.anchor.kind === "file-end")
+    : [];
+
+  // A note is drifted when its anchored line's text no longer matches the
+  // snapshot taken at save time — the file was edited underneath it.
+  function isDrifted(n: Note): boolean {
+    const a = n.anchor;
+    if (!a.snippet || a.endLine == null) return false;
+    const cur = sourceLines[a.endLine - frame.startLine];
+    return cur === undefined || cur.trim() !== a.snippet.trim();
+  }
+
+  function noteSelection() {
+    if (!selection) return;
+    const lo = Math.min(selection.anchor, selection.head);
+    const hi = Math.max(selection.anchor, selection.head);
+    setComposing({
+      file: frame.file,
+      kind: lo === hi ? "after-line" : "range",
+      startLine: frame.startLine + lo,
+      endLine: frame.startLine + hi,
+      snippet: sourceLines[hi] ?? "",
+    });
+    setSelection(null);
+  }
 
   // UTF-16 offset of each line's start in the source, for hover→offset mapping.
   const lineStarts = useMemo(() => {
@@ -533,8 +601,7 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
 
   function renderLineExtras(lineIdx: number): ReactNode {
     const extras: ReactNode[] = [];
-    const calls = lineCallsCache.get(lineIdx);
-    if (!calls) return null;
+    const calls = lineCallsCache.get(lineIdx) ?? [];
     for (const call of calls) {
       if (call.kind === "fanout") {
         if (isFanoutOpen(slice, call.id)) {
@@ -567,6 +634,18 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
           </div>,
         );
       }
+    }
+    for (const n of notesByLine.get(lineIdx) ?? []) {
+      extras.push(<NoteCard key={`n:${n.id}`} note={n} drifted={isDrifted(n)} />);
+    }
+    if (
+      composing &&
+      (composing.kind === "after-line" || composing.kind === "range") &&
+      (composing.endLine ?? 0) - frame.startLine === lineIdx
+    ) {
+      extras.push(
+        <NoteComposer key="compose" anchor={composing} onDone={() => setComposing(null)} />,
+      );
     }
     return extras.length ? <Fragment key={`extras:${lineIdx}`}>{extras}</Fragment> : null;
   }
@@ -617,12 +696,23 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
     diff?.status === "modified" && diff.addedLines?.length
       ? new Set(diff.addedLines)
       : null;
-  const lineClass: ((idx: number) => string | undefined) | undefined =
+  const diffClass: ((idx: number) => string | undefined) | undefined =
     diff?.status === "added"
       ? () => "line-row--added"
       : addedSet
         ? (idx) => (addedSet.has(idx) ? "line-row--added" : undefined)
         : undefined;
+  // Compose diff tinting with range-note tinting.
+  const lineClass: ((idx: number) => string | undefined) | undefined =
+    diffClass || notedLines.size > 0
+      ? (idx) => {
+          const parts = [
+            diffClass?.(idx),
+            notedLines.has(idx) ? "line-row--noted" : undefined,
+          ].filter(Boolean);
+          return parts.length ? parts.join(" ") : undefined;
+        }
+      : undefined;
 
   return (
     <div
@@ -680,6 +770,26 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
             ▲ callers
           </button>
         )}
+        {isFileFrame && (
+          <>
+            <button
+              type="button"
+              className="frame-tool"
+              onClick={() => setComposing({ file: frame.file, kind: "file-start" })}
+              title="add a note at the top of this file"
+            >
+              note @ top
+            </button>
+            <button
+              type="button"
+              className="frame-tool"
+              onClick={() => setComposing({ file: frame.file, kind: "file-end" })}
+              title="add a note at the end of this file"
+            >
+              note @ end
+            </button>
+          </>
+        )}
         {expandableNow.length > 0 && (
           <button
             type="button"
@@ -727,12 +837,30 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
           </button>
           <button
             type="button"
+            onClick={noteSelection}
+            className="frame-selectbar-fold"
+            title="attach a note to the selected line(s)"
+          >
+            note
+          </button>
+          <button
+            type="button"
             onClick={() => setSelection(null)}
             className="frame-selectbar-cancel"
           >
             cancel
           </button>
           <span className="frame-selectbar-hint">shift-click to extend · esc to cancel</span>
+        </div>
+      )}
+      {isFileFrame && (fileStartNotes.length > 0 || composing?.kind === "file-start") && (
+        <div className="frame-notes">
+          {fileStartNotes.map((n) => (
+            <NoteCard key={n.id} note={n} />
+          ))}
+          {composing?.kind === "file-start" && (
+            <NoteComposer anchor={composing} onDone={() => setComposing(null)} />
+          )}
         </div>
       )}
       <div className="frame-body">
@@ -758,6 +886,16 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
           <div className="frame-loading">loading…</div>
         )}
       </div>
+      {isFileFrame && (fileEndNotes.length > 0 || composing?.kind === "file-end") && (
+        <div className="frame-notes">
+          {fileEndNotes.map((n) => (
+            <NoteCard key={n.id} note={n} />
+          ))}
+          {composing?.kind === "file-end" && (
+            <NoteComposer anchor={composing} onDone={() => setComposing(null)} />
+          )}
+        </div>
+      )}
       {typeCard && (
         <div
           className="type-card"

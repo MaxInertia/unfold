@@ -17,6 +17,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/diff"
 	"github.com/MaxInertia/unfold/internal/engine"
 	"github.com/MaxInertia/unfold/internal/gitbase"
+	"github.com/MaxInertia/unfold/internal/notes"
 	"github.com/MaxInertia/unfold/internal/server"
 )
 
@@ -76,6 +77,8 @@ func main() {
 	srv := server.New(eng)
 	srv.SetTarget(target)
 	srv.SetDiffer(differ)
+	// Notes persist to <dir>/.unfold/notes.json (created on first save).
+	srv.SetNotes(notes.NewStore(*dir))
 	httpServer := &http.Server{Handler: srv.Handler()}
 
 	serverErr := make(chan error, 1)

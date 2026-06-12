@@ -6,6 +6,8 @@ import { FileTree } from "./FileTree";
 import { StickyHeaders } from "./StickyHeaders";
 import { SettingsPanel } from "./SettingsPanel";
 import { useSettings } from "./settings";
+import { NotesList } from "./NotesUI";
+import { loadNotes } from "./notes";
 import { fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
@@ -37,7 +39,7 @@ function AppShell() {
   const [treeCollapsed, setTreeCollapsed] = useState(
     () => localStorage.getItem(TREE_COLLAPSED_KEY) === "1",
   );
-  const [sidebarTab, setSidebarTab] = useState<"files" | "calls" | "callers">("calls");
+  const [sidebarTab, setSidebarTab] = useState<"files" | "calls" | "callers" | "notes">("calls");
   const [reindexed, setReindexed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settings = useSettings();
@@ -110,6 +112,7 @@ function AppShell() {
         setBookmarkProject(h.target ?? null); // namespace bookmarks per project
       })
       .catch(() => {});
+    loadNotes();
   }, []);
 
   return (
@@ -178,6 +181,14 @@ function AppShell() {
                   </button>
                   <button
                     type="button"
+                    className={`tree-tab${sidebarTab === "notes" ? " tree-tab--active" : ""}`}
+                    onClick={() => setSidebarTab("notes")}
+                    title="all notes in this project"
+                  >
+                    notes
+                  </button>
+                  <button
+                    type="button"
                     className="tree-collapse"
                     onClick={() => setTreeCollapsed(true)}
                     title="collapse panel"
@@ -189,6 +200,8 @@ function AppShell() {
                 <div className="tree-body">
                   {sidebarTab === "files" ? (
                     <FileTree onOpen={(id) => store.setSymbol(id)} />
+                  ) : sidebarTab === "notes" ? (
+                    <NotesList />
                   ) : !rootFrame ? (
                     <p className="tree-placeholder">
                       Pick a function to see its {sidebarTab === "callers" ? "callers" : "call tree"}.

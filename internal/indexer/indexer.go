@@ -743,8 +743,13 @@ func (i *Indexer) readFile(path string) ([]byte, error) {
 
 // TypeInfo resolves the identifier at a UTF-16 offset into the frame's source
 // and reports its type details. Returns nil (no error) when the offset isn't
-// over a resolvable identifier.
+// over a resolvable identifier. A negative offset describes the target's own
+// declaration — used by note references, which know a target but no hover
+// position.
 func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
+	if offset < 0 {
+		return i.describeTarget(id)
+	}
 	var (
 		srcBase  int // byte offset in the file where the frame source starts
 		fileName string
@@ -823,6 +828,28 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 			}
 		}
 		i.mu.RUnlock()
+	}
+	return ti, nil
+}
+
+// describeTarget builds the TypeInfo of a target's own declaration.
+func (i *Indexer) describeTarget(id TargetID) (*TypeInfo, error) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	fi, ok := i.funcs[id]
+	if !ok {
+		return nil, nil
+	}
+	ti := &TypeInfo{
+		Kind:     "func",
+		Name:     goTitle(fi.obj),
+		Type:     types.TypeString(fi.obj.Type(), types.RelativeTo(fi.pkg.Types)),
+		TargetID: id,
+	}
+	dp := i.fset.Position(fi.decl.Pos())
+	ti.DefinedAt = fmt.Sprintf("%s:%d", dp.Filename, dp.Line)
+	if fi.decl.Doc != nil {
+		ti.Doc = strings.TrimSpace(fi.decl.Doc.Text())
 	}
 	return ti, nil
 }
