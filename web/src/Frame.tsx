@@ -635,6 +635,37 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
         );
       }
     }
+    // The selection action bar renders right at the selection (after its
+    // last line), not at the frame top — a selection made deep in a long
+    // frame would otherwise have its actions scrolled out of view.
+    if (selection && lineIdx === Math.max(selection.anchor, selection.head)) {
+      extras.push(
+        <div key="selectbar" className="frame-selectbar frame-selectbar--inline">
+          <span className="frame-selectbar-info">
+            {selectionCount} {selectionCount === 1 ? "line" : "lines"} selected
+          </span>
+          <button type="button" onClick={foldSelection} className="frame-selectbar-fold">
+            fold
+          </button>
+          <button
+            type="button"
+            onClick={noteSelection}
+            className="frame-selectbar-fold"
+            title="attach a note to the selected line(s)"
+          >
+            note
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelection(null)}
+            className="frame-selectbar-cancel"
+          >
+            cancel
+          </button>
+          <span className="frame-selectbar-hint">shift-click to extend · esc to cancel</span>
+        </div>,
+      );
+    }
     for (const n of notesByLine.get(lineIdx) ?? []) {
       extras.push(<NoteCard key={`n:${n.id}`} note={n} drifted={isDrifted(n)} />);
     }
@@ -684,7 +715,6 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
     );
   }
 
-  const hasSelection = selection !== null;
   const selectionCount = selection
     ? Math.abs(selection.head - selection.anchor) + 1
     : 0;
@@ -826,32 +856,6 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
       </header>
       {callersOpen && (
         <CallersPanel frame={frame} path={path} onClose={() => setCallersOpen(false)} />
-      )}
-      {hasSelection && (
-        <div className="frame-selectbar">
-          <span className="frame-selectbar-info">
-            {selectionCount} {selectionCount === 1 ? "line" : "lines"} selected
-          </span>
-          <button type="button" onClick={foldSelection} className="frame-selectbar-fold">
-            fold
-          </button>
-          <button
-            type="button"
-            onClick={noteSelection}
-            className="frame-selectbar-fold"
-            title="attach a note to the selected line(s)"
-          >
-            note
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelection(null)}
-            className="frame-selectbar-cancel"
-          >
-            cancel
-          </button>
-          <span className="frame-selectbar-hint">shift-click to extend · esc to cancel</span>
-        </div>
       )}
       {isFileFrame && (fileStartNotes.length > 0 || composing?.kind === "file-start") && (
         <div className="frame-notes">
