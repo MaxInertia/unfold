@@ -446,6 +446,72 @@ func TestFileFrame(t *testing.T) {
 	}
 }
 
+// TestTypeDefinition verifies the hover card expands a named type's shape:
+// interface methods for interfaces, fields for structs, nothing for types
+// whose name already says it all.
+func TestTypeDefinition(t *testing.T) {
+	dir, err := filepath.Abs("testdata/diapp")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	idx := New()
+	if err := idx.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	runID, err := idx.LookupSymbol("RunGreeter")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	frame, err := idx.Frame(runID)
+	if err != nil {
+		t.Fatalf("Frame: %v", err)
+	}
+
+	// Hover the `g` parameter — its type is the Greeter interface, so the
+	// card must show the methods, not just the interface's name.
+	off := strings.Index(frame.Source, "g Greeter")
+	if off < 0 {
+		t.Fatal("param not found in RunGreeter source")
+	}
+	ti, err := idx.TypeInfo(runID, off)
+	if err != nil || ti == nil {
+		t.Fatalf("TypeInfo(g): ti=%v err=%v", ti, err)
+	}
+	if !strings.HasPrefix(ti.Definition, "interface {") ||
+		!strings.Contains(ti.Definition, "Greet(name string) string") {
+		t.Errorf("interface definition: got %q", ti.Definition)
+	}
+
+	// Hover `msg` — a plain string; no definition to expand.
+	off = strings.Index(frame.Source, "msg :=")
+	ti, err = idx.TypeInfo(runID, off)
+	if err != nil || ti == nil {
+		t.Fatalf("TypeInfo(msg): ti=%v err=%v", ti, err)
+	}
+	if ti.Definition != "" {
+		t.Errorf("string should have no definition, got %q", ti.Definition)
+	}
+
+	// Hover the `f` parameter of apply — a func type; the signature lives
+	// in Type already, Definition stays empty.
+	applyID, err := idx.LookupSymbol("apply")
+	if err != nil {
+		t.Fatalf("LookupSymbol(apply): %v", err)
+	}
+	aframe, err := idx.Frame(applyID)
+	if err != nil {
+		t.Fatalf("Frame(apply): %v", err)
+	}
+	off = strings.Index(aframe.Source, "f func")
+	ti, err = idx.TypeInfo(applyID, off)
+	if err != nil || ti == nil {
+		t.Fatalf("TypeInfo(f): ti=%v err=%v", ti, err)
+	}
+	if ti.Definition != "" {
+		t.Errorf("func value should have no definition, got %q", ti.Definition)
+	}
+}
+
 // TestTypeInfo hovers the name token of a call inside resolveCall and checks
 // the resolved symbol's type details.
 func TestTypeInfo(t *testing.T) {

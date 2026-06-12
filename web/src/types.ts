@@ -77,6 +77,7 @@ export interface TypeInfo {
   definedAt?: string; // "<file>:<line>"
   doc?: string;
   targetId?: TargetID; // present when the symbol is a function we can open
+  definition?: string; // expanded type shape (fields/methods), multi-line
 }
 
 // A note anchored to a source location (mirrors internal/notes). Anchors

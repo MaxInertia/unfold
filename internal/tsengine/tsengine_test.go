@@ -111,6 +111,7 @@ func TestGreeterFixture(t *testing.T) {
 
 	t.Run("utf16-offsets", testUTF16Offsets(e))
 	t.Run("usages", testUsages(e))
+	t.Run("type-definition", testTypeDefinition(e))
 }
 
 // testUsages exercises the reverse reference search: runGreeter is called
@@ -179,6 +180,32 @@ func testUsages(e *Engine) func(*testing.T) {
 		// Unknown target errors.
 		if _, err := e.Usages(model.TargetID("nope")); err == nil {
 			t.Error("Usages(unknown) should error")
+		}
+	}
+}
+
+// testTypeDefinition: hovering `g` (typed as the Greeter interface) must
+// expand the interface's members, not just echo the type name.
+func testTypeDefinition(e *Engine) func(*testing.T) {
+	return func(t *testing.T) {
+		runID, err := e.LookupSymbol("runGreeter")
+		if err != nil {
+			t.Fatalf("LookupSymbol(runGreeter): %v", err)
+		}
+		frame, err := e.Frame(runID)
+		if err != nil {
+			t.Fatalf("Frame: %v", err)
+		}
+		off := strings.Index(frame.Source, "g.greet")
+		if off < 0 {
+			t.Fatal("g.greet not found in runGreeter source")
+		}
+		ti, err := e.TypeInfo(runID, off)
+		if err != nil || ti == nil {
+			t.Fatalf("TypeInfo(g): ti=%v err=%v", ti, err)
+		}
+		if !strings.Contains(ti.Definition, "greet(name: string): string") {
+			t.Errorf("interface definition: got %q", ti.Definition)
 		}
 	}
 }

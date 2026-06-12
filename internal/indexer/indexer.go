@@ -806,9 +806,10 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 	}
 
 	ti := &TypeInfo{
-		Name: ident.Name,
-		Kind: objKind(obj),
-		Type: types.TypeString(obj.Type(), types.RelativeTo(pkg.Types)),
+		Name:       ident.Name,
+		Kind:       objKind(obj),
+		Type:       types.TypeString(obj.Type(), types.RelativeTo(pkg.Types)),
+		Definition: typeDefinition(obj.Type(), types.RelativeTo(pkg.Types)),
 	}
 	if obj.Pos().IsValid() {
 		dp := i.fset.Position(obj.Pos())
@@ -830,6 +831,70 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 		i.mu.RUnlock()
 	}
 	return ti, nil
+}
+
+// typeDefinition expands a type's shape when the name alone isn't telling:
+// a named struct's fields, a named interface's methods, or a named alias's
+// underlying type. Pointers are dereferenced first. Returns "" for types
+// whose TypeString already says everything (basics, slices of basics,
+// funcs, unnamed types).
+func typeDefinition(t types.Type, qual types.Qualifier) string {
+	for {
+		if p, ok := t.(*types.Pointer); ok {
+			t = p.Elem()
+			continue
+		}
+		break
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return ""
+	}
+	switch u := named.Underlying().(type) {
+	case *types.Struct:
+		if u.NumFields() == 0 {
+			return "struct{}"
+		}
+		var b strings.Builder
+		b.WriteString("struct {\n")
+		for f := 0; f < u.NumFields(); f++ {
+			field := u.Field(f)
+			b.WriteString("    ")
+			if !field.Embedded() {
+				b.WriteString(field.Name())
+				b.WriteString(" ")
+			}
+			b.WriteString(types.TypeString(field.Type(), qual))
+			b.WriteString("\n")
+		}
+		b.WriteString("}")
+		return b.String()
+	case *types.Interface:
+		if u.NumMethods() == 0 {
+			return "interface{}"
+		}
+		var b strings.Builder
+		b.WriteString("interface {\n")
+		for m := 0; m < u.NumMethods(); m++ {
+			fn := u.Method(m)
+			sig := types.TypeString(fn.Type(), qual)
+			b.WriteString("    ")
+			b.WriteString(fn.Name())
+			b.WriteString(strings.TrimPrefix(sig, "func"))
+			b.WriteString("\n")
+		}
+		b.WriteString("}")
+		return b.String()
+	case *types.Signature:
+		return "" // the Type field already shows the signature
+	default:
+		// Named alias of a basic/slice/map/chan: show what it really is.
+		def := types.TypeString(u, qual)
+		if def == types.TypeString(named, qual) {
+			return ""
+		}
+		return def
+	}
 }
 
 // describeTarget builds the TypeInfo of a target's own declaration.
