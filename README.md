@@ -57,6 +57,28 @@ Three usage kinds:
   dispatch to it within the loaded package set, including sites that only
   ever dispatch to a different implementation at runtime.
 
+## Notes
+
+Anchored annotations over the code you're reading. Select line(s) and hit
+**note** in the selection bar (single line → anchored after that line; a
+multi-line selection → the range is tinted and the note follows it). Whole-
+file frames get **note @ top** / **note @ end**. A note renders in every
+frame containing its lines — anchors live in file space, so the same note
+appears in a function frame and the whole-file view.
+
+Reference code from note text with `[[SymbolName]]` (or a qualified
+`[[Type.Method]]` to disambiguate) and `[[file:path/suffix.go]]`. Symbol
+refs render like call sites, pop the same hover type card (signature,
+doc, defined-at), and open the symbol as the root frame on click; file
+refs open the whole-file view.
+
+Notes persist to `.unfold/notes.json` under the project root — plain,
+pretty-printed JSON that survives the browser and can be committed if you
+want them shared (add `.unfold/` to `.gitignore` if you don't). If an
+anchored line's text changes after an edit, the note shows a **⚠ drifted**
+marker rather than silently pointing at the wrong place. The sidebar's
+**notes** tab lists every note with jump-to.
+
 ## Stack
 
 - **Indexer**: Go (`go/packages` + `go/types`)

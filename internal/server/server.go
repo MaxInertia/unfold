@@ -17,6 +17,7 @@ import (
 
 	"github.com/MaxInertia/unfold/internal/diff"
 	"github.com/MaxInertia/unfold/internal/model"
+	"github.com/MaxInertia/unfold/internal/notes"
 )
 
 //go:embed all:static/dist
@@ -27,6 +28,7 @@ type Server struct {
 	static fs.FS
 	target string
 	differ *diff.Differ // nil = diff mode off
+	notes  *notes.Store // nil = notes disabled
 
 	// Connected /api/events subscribers, notified when the engine reindexes.
 	mu      sync.Mutex
@@ -49,6 +51,9 @@ func (s *Server) SetTarget(target string) { s.target = target }
 // base engine d wraps. Nil leaves diff mode off.
 func (s *Server) SetDiffer(d *diff.Differ) { s.differ = d }
 
+// SetNotes enables the notes API backed by the given store.
+func (s *Server) SetNotes(n *notes.Store) { s.notes = n }
+
 // writeFrame attaches diff info (when diff mode is on) and writes the frame.
 func (s *Server) writeFrame(w http.ResponseWriter, frame *model.Frame) {
 	if s.differ != nil {
@@ -66,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/typeinfo", s.handleTypeInfo)
 	mux.HandleFunc("/api/usages", s.handleUsages)
+	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))
@@ -171,6 +177,54 @@ func (s *Server) handleUsages(w http.ResponseWriter, r *http.Request) {
 		usages = []model.Usage{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"usages": usages})
+}
+
+// /api/notes — list (GET), upsert (POST a Note; empty id creates), delete
+// (DELETE ?id=). Mutations are same-origin-guarded like /api/open: notes
+// write a file under the project root, so a cross-origin page must not be
+// able to trigger them.
+func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
+	if s.notes == nil {
+		writeError(w, http.StatusNotImplemented, "notes are not enabled")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"notes": s.notes.List()})
+	case http.MethodPost:
+		if !sameOrigin(r) {
+			writeError(w, http.StatusForbidden, "cross-origin request rejected")
+			return
+		}
+		var n notes.Note
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&n); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid note: "+err.Error())
+			return
+		}
+		saved, err := s.notes.Upsert(n)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, saved)
+	case http.MethodDelete:
+		if !sameOrigin(r) {
+			writeError(w, http.StatusForbidden, "cross-origin request rejected")
+			return
+		}
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			writeError(w, http.StatusBadRequest, "missing required query param: id")
+			return
+		}
+		if err := s.notes.Delete(id); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "use GET, POST, or DELETE")
+	}
 }
 
 // POST /api/open?file=<abs-path>&line=<n> — opens the file in the configured

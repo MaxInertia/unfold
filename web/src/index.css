@@ -1625,3 +1625,201 @@ body.resizing {
 .tree-kind--recursive {
   color: var(--goroutine-fg);
 }
+
+/* Notes — anchored note cards, the composer, and [[ref]] tokens. */
+.note {
+  margin: 0.35rem 0 0.55rem;
+  border: 1px solid var(--goroutine-border);
+  border-left: 3px solid var(--goroutine-fg);
+  border-radius: 6px;
+  background: var(--goroutine-bg);
+  font-size: 0.85rem;
+}
+
+.note-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+}
+
+.note-label {
+  color: var(--goroutine-fg);
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.note-drifted {
+  color: var(--error);
+}
+
+.note-when {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.note-action {
+  font: inherit;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 0.15rem;
+}
+
+.note-action:hover {
+  color: var(--fg);
+}
+
+.note-body {
+  padding: 0 0.55rem 0.4rem;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.note-ref {
+  cursor: pointer;
+}
+
+.note-ref--pending {
+  color: var(--muted);
+}
+
+.note-ref--unresolved {
+  color: var(--muted);
+  border-bottom: 1px dashed var(--call-border-disabled);
+}
+
+.note-ref-card {
+  position: fixed;
+  display: block;
+}
+
+.type-card-loc-text {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.note--composing {
+  padding: 0.45rem 0.55rem;
+}
+
+.note-input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.85rem;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.35rem 0.45rem;
+  resize: vertical;
+}
+
+.note-compose-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.note-save,
+.note-cancel {
+  font: inherit;
+  font-size: 0.78rem;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--fg);
+  padding: 0.1rem 0.55rem;
+  cursor: pointer;
+}
+
+.note-save {
+  border-color: var(--call-border);
+  color: var(--accent);
+}
+
+.note-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.note-error {
+  color: var(--error);
+  font-size: 0.78rem;
+  margin-top: 0.25rem;
+}
+
+/* Range-anchored lines get a subtle tint, like diff lines but teal. */
+.line-row--noted {
+  background: var(--goroutine-bg);
+}
+
+/* File-level note slots (top/end of whole-file frames). */
+.frame-notes {
+  padding: 0.3rem 0.8rem;
+}
+
+/* Sidebar notes tab. */
+.notes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.2rem 0;
+}
+
+.notes-item + .notes-item {
+  border-top: 1px solid var(--card-border);
+}
+
+.notes-item-open {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.78rem;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+}
+
+.notes-item-open:hover {
+  background: var(--call-bg);
+}
+
+.notes-item-loc {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.notes-item-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The note-ref hover card reuses .type-card styling but is built from
+   spans (it nests inside an inline ref token), so restore block layout
+   and undo the note body's pre-wrap. */
+.note-ref-card {
+  display: block;
+  white-space: normal;
+  cursor: default;
+}
+
+.note-ref-card .type-card-head {
+  display: flex;
+}
+
+.note-ref-card .type-card-type,
+.note-ref-card .type-card-doc {
+  display: block;
+}

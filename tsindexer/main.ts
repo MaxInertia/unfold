@@ -678,9 +678,11 @@ class TSEngine {
     throw new Error(`call is ${info.kind}; not expandable`);
   }
 
-  // Resolve the identifier at a UTF-16 offset into the frame source.
+  // Resolve the identifier at a UTF-16 offset into the frame source. A
+  // negative offset describes the target's own declaration (note refs).
   typeInfo(id: string, offset: number): TypeInfoOut | null {
     if (!this.loaded) return null;
+    if (offset < 0) return this.describeTarget(id);
     let sf;
     let absPos: number;
     if (id.startsWith("file:")) {
@@ -860,6 +862,40 @@ class TSEngine {
       return call;
     }
     return undefined;
+  }
+
+  // The TypeInfo of a target's own declaration: signature, location, doc.
+  private describeTarget(id: string): TypeInfoOut | null {
+    const fi = this.funcs.get(id);
+    if (!fi) return null;
+    const decl = fi.decl;
+    let type = "";
+    try {
+      const sigs = decl.getType().getCallSignatures();
+      if (sigs.length > 0) {
+        const sig = sigs[0];
+        const params = sig
+          .getParameters()
+          .map((p) => p.getDeclarations()[0]?.getText() ?? p.getName())
+          .join(", ");
+        type = `(${params}) => ${sig.getReturnType().getText(decl)}`;
+      } else {
+        type = decl.getType().getText(decl);
+      }
+    } catch {
+      type = "";
+    }
+    const out: TypeInfoOut = {
+      kind: "func",
+      name: fi.name,
+      type,
+      definedAt: `${decl.getSourceFile().getFilePath()}:${decl.getStartLineNumber()}`,
+      targetId: id,
+    };
+    const jsdocs = (decl as { getJsDocs?: () => { getDescription(): string }[] }).getJsDocs?.();
+    const d = jsdocs && jsdocs[0]?.getDescription()?.trim();
+    if (d) out.doc = d;
+    return out;
   }
 
   search(query: string, limit: number): SearchResult[] {

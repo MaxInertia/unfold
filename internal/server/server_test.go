@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/MaxInertia/unfold/internal/indexer"
+	"github.com/MaxInertia/unfold/internal/notes"
 )
 
 // TestEndpoints exercises the API against the unfold module itself.
@@ -19,6 +20,7 @@ func TestEndpoints(t *testing.T) {
 	}
 	srv := New(idx)
 	srv.SetTarget("./...")
+	srv.SetNotes(notes.NewStore(t.TempDir()))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -111,6 +113,71 @@ func TestEndpoints(t *testing.T) {
 
 	t.Run("usages-missing-param", func(t *testing.T) {
 		getStatus(t, ts.URL+"/api/usages", http.StatusBadRequest)
+	})
+
+	t.Run("notes-crud", func(t *testing.T) {
+		// Create.
+		body := `{"anchor":{"file":"/p/a.go","kind":"after-line","startLine":3,"endLine":3,"snippet":"x"},"text":"hello [[NewReloadable]]"}`
+		res, err := http.Post(ts.URL+"/api/notes", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		var saved struct {
+			ID   string `json:"id"`
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&saved); err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("create: status=%d err=%v", res.StatusCode, err)
+		}
+		if saved.ID == "" {
+			t.Fatal("created note has no id")
+		}
+		// List.
+		var list struct {
+			Notes []struct {
+				ID string `json:"id"`
+			} `json:"notes"`
+		}
+		getJSON(t, ts.URL+"/api/notes", http.StatusOK, &list)
+		if len(list.Notes) != 1 || list.Notes[0].ID != saved.ID {
+			t.Fatalf("list: %+v", list)
+		}
+		// Delete.
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/notes?id="+url.QueryEscape(saved.ID), nil)
+		dres, err := http.DefaultClient.Do(req)
+		if err != nil || dres.StatusCode != http.StatusOK {
+			t.Fatalf("delete: status=%v err=%v", dres, err)
+		}
+	})
+
+	t.Run("notes-mutations-reject-cross-origin", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/notes", strings.NewReader("{}"))
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil || res.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-site POST: status=%v err=%v", res, err)
+		}
+	})
+
+	t.Run("typeinfo-describe-target", func(t *testing.T) {
+		var main indexer.Frame
+		getJSON(t, ts.URL+"/api/symbol?name=NewReloadable", http.StatusOK, &main)
+		var resp struct {
+			TypeInfo *indexer.TypeInfo `json:"typeInfo"`
+		}
+		getJSON(t, ts.URL+"/api/typeinfo?targetId="+url.QueryEscape(string(main.ID))+"&offset=-1", http.StatusOK, &resp)
+		if resp.TypeInfo == nil {
+			t.Fatal("typeinfo offset=-1 returned nil")
+		}
+		if resp.TypeInfo.Kind != "func" || resp.TypeInfo.Name != "NewReloadable" {
+			t.Errorf("describe: got kind=%q name=%q", resp.TypeInfo.Kind, resp.TypeInfo.Name)
+		}
+		if !strings.Contains(resp.TypeInfo.Type, "func(") {
+			t.Errorf("describe type missing signature: %q", resp.TypeInfo.Type)
+		}
+		if resp.TypeInfo.TargetID != main.ID {
+			t.Errorf("describe targetId: got %s want %s", resp.TypeInfo.TargetID, main.ID)
+		}
 	})
 
 	t.Run("usages-unknown-target", func(t *testing.T) {
