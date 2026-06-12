@@ -1823,3 +1823,11 @@ body.resizing {
 .note-ref-card .type-card-doc {
   display: block;
 }
+
+/* Inline placement of the selection bar: it renders after the selection's
+   last line, so the actions are always next to what was selected. */
+.frame-selectbar--inline {
+  margin: 0.25rem 0 0.45rem;
+  border: 1px solid var(--call-border);
+  border-radius: 6px;
+}
