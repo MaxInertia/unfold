@@ -10,11 +10,13 @@ import com.intellij.ui.jcef.JBCefBrowser
 import java.awt.Dimension
 
 /**
- * Experiment C — embed a JCEF browser. The "reuse the existing web frontend"
- * path: here it just renders the code as HTML, but this is where unfold's
- * React/Shiki view would be loaded. It won't match the IDE theme/feel and has
- * no native editor behavior — a contrast/fallback. Falls back to the painted
- * renderer if JCEF isn't available.
+ * Experiment C — embed a JCEF browser rendering the callee in a faithful copy
+ * of unfold's web `.frame` card (same structure and palette as
+ * web/src/index.css, plus a prefers-color-scheme dark variant). This is the
+ * "what the web view actually looks like" reference to compare against the
+ * native-themed [EditorInlayRenderer] card: it won't pick up the IDE theme or
+ * give native editor behavior, but it shows the real web styling in place.
+ * Falls back to the painted renderer if JCEF isn't available.
  */
 class JcefRenderer : FrameRenderer {
     override fun render(host: Editor, anchorOffset: Int, callee: Callee): Disposable {
@@ -22,9 +24,10 @@ class JcefRenderer : FrameRenderer {
             return PaintedRenderer().render(host, anchorOffset, callee)
         }
         val browser = JBCefBrowser()
-        browser.loadHTML(html(callee.text))
+        browser.loadHTML(html(callee.title, FrameChrome.location(callee), callee.text))
         val component = browser.component
-        component.preferredSize = Dimension(800, host.lineHeight * (callee.text.count { it == '\n' } + 2))
+        // +3 lines: header row plus the card's vertical padding/border.
+        component.preferredSize = Dimension(800, host.lineHeight * (callee.text.count { it == '\n' } + 3))
 
         val inlay = EditorEmbeddedComponentManager.getInstance().addComponent(
             host as EditorEx,
@@ -44,9 +47,25 @@ class JcefRenderer : FrameRenderer {
         }
     }
 
-    private fun html(code: String): String {
-        val esc = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        return "<!doctype html><html><body style=\"margin:0;background:#1e1e1e;color:#dcdcdc;\">" +
-            "<pre style=\"margin:0;padding:8px;font:13px monospace;\">$esc</pre></body></html>"
+    private fun html(title: String, location: String, code: String): String {
+        fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        val locSpan = if (location.isNotEmpty()) "<span class=\"frame-loc\">${esc(location)}</span>" else ""
+        return """<!doctype html><html><head><meta charset="utf-8"><style>
+            :root{--bg:#fafaf9;--fg:#1c1c1c;--muted:#6b7280;--accent:#2563eb;--card-bg:#fff;--card-border:#e5e7eb;}
+            @media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--card-bg:#161b22;--card-border:#30363d;}}
+            html,body{margin:0;background:var(--bg);color:var(--fg);
+              font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+            .frame{margin:6px;border:1px solid var(--card-border);border-left:3px solid var(--accent);
+              border-radius:8px;background:var(--card-bg);overflow:hidden;}
+            .frame-header{display:flex;align-items:baseline;gap:.8rem;padding:.4rem .7rem;
+              background:rgba(127,127,127,.06);border-bottom:1px solid var(--card-border);font-size:.85em;}
+            .frame-title{font-weight:600;}
+            .frame-loc{margin-left:auto;color:var(--muted);font-size:.8em;}
+            pre{margin:0;padding:.4rem .7rem;white-space:pre;overflow:auto;}
+            </style></head><body>
+            <div class="frame">
+              <div class="frame-header"><span class="frame-title">${esc(title)}</span>$locSpan</div>
+              <pre>${esc(code)}</pre>
+            </div></body></html>"""
     }
 }

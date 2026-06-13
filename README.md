@@ -79,9 +79,23 @@ anchored line's text changes after an edit, the note shows a **⚠ drifted**
 marker rather than silently pointing at the wrong place. The sidebar's
 **notes** tab lists every note with jump-to.
 
+## Repository layout
+
+The Go module (CLI + HTTP server + indexers) is the repo root. Clients and
+sidecars live alongside it as self-contained subprojects:
+
+- `cmd/`, `internal/` — the Go core (CLI, server, Go indexer, diff, notes)
+- `tsindexer/` — the TypeScript indexing sidecar (Bun + ts-morph)
+- `web/` — the React/Vite frontend (embedded into the Go binary at build)
+- `goland-plugin/` — a GoLand/IntelliJ plugin (Kotlin + Gradle) that does the
+  same inline call expansion natively in the IDE. Independent Gradle build;
+  see [`goland-plugin/PLAN.md`](./goland-plugin/PLAN.md). Run a sandbox IDE
+  with `cd goland-plugin && ./gradlew runIde`.
+
 ## Stack
 
 - **Indexer**: Go (`go/packages` + `go/types`)
 - **Server**: Go (HTTP, embeds frontend assets)
 - **Frontend**: Bun + Vite + React + TypeScript, Shiki for syntax highlighting
 - **CLI**: single static Go binary
+- **IDE plugin**: Kotlin + IntelliJ Platform Gradle plugin (GoLand)

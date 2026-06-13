@@ -181,3 +181,33 @@ cap depth).
    makes it look and behave like real code.
 
 See `scaffold-notes.md` for the included starter files and what to fill in.
+
+---
+
+## Web-style frame chrome (2026-06-13)
+
+The inline expander now wraps each frame in card chrome that mirrors unfold's
+web `.frame` (`web/src/index.css`): a header row with the callee title and
+`file:line`, a thin card border, and a 3px depth-colored left rail. Two paths,
+shared by `FrameChrome.kt`:
+
+- **`EditorInlayRenderer` (default, the goal).** The real embedded editor —
+  native semantic colors, hover, go-to-def — now sits inside the card. Chrome
+  colors come from the **active editor color scheme** (`defaultBackground`,
+  `defaultForeground`, `JBColor.border()`, a 6%-foreground header tint), so the
+  card matches the user's IDE theme rather than transplanting the web palette.
+  Structure mirrors the web; colors stay native.
+- **`JcefRenderer` (reference/contrast).** Renders the callee in a faithful copy
+  of the web card via HTML/CSS — the literal web palette with a
+  `prefers-color-scheme` dark variant. Useful to compare the "real web look"
+  against the native-themed card in the same editor.
+
+`FrameChrome.RAIL` mirrors the web `depthColor()` cycle (blue/teal/amber/…) as
+`JBColor` light/dark pairs. Depth is 0 today (one frame per host editor); the
+cycle is in place so nested frames can later stack distinct rails like the web
+sticky-header/rail system does.
+
+**Open:** verifying the native card visually needs `./gradlew runIde` (a GUI
+sandbox) — it compiles against the platform but isn't headlessly screenshotable.
+Nesting/depth tracking, a clickable `file:line` (open in editor), and a
+recursion badge are the natural next parity steps.

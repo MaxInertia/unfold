@@ -71,9 +71,14 @@ class EditorInlayRenderer : FrameRenderer {
             fittedHeight(),
         )
 
+        // Wrap the native editor in web-style card chrome (header with the
+        // callee title + file:line, a thin card border, and a depth-colored
+        // left rail). The card's preferred size = header + this content.
+        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = 0)
+
         var inlay: Inlay<*>? = EditorEmbeddedComponentManager.getInstance().addComponent(
             host as EditorEx,
-            sub.component,
+            card,
             EditorEmbeddedComponentManager.Properties(
                 EditorEmbeddedComponentManager.ResizePolicy.none(),
                 null,
@@ -94,6 +99,7 @@ class EditorInlayRenderer : FrameRenderer {
                 if (sub.component.preferredSize.height != h) {
                     sub.component.preferredSize = Dimension(sub.component.preferredSize.width, h)
                     sub.component.revalidate()
+                    card.revalidate()
                     inlay?.update()
                 }
             },
@@ -130,9 +136,10 @@ class EditorInlayRenderer : FrameRenderer {
             sub.component.preferredSize.width.coerceAtLeast(600),
             host.lineHeight * document.lineCount.coerceAtLeast(1),
         )
+        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = 0)
         val inlay = EditorEmbeddedComponentManager.getInstance().addComponent(
             host as EditorEx,
-            sub.component,
+            card,
             EditorEmbeddedComponentManager.Properties(
                 EditorEmbeddedComponentManager.ResizePolicy.none(), null, true, false, 0, anchorOffset,
             ),
