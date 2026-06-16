@@ -31,6 +31,7 @@ import {
   type CallExpression,
   type ClassDeclaration,
   type Node as TNode,
+  type Type as TsType,
 } from "ts-morph";
 
 // ---- wire types (mirror internal/model) ----
@@ -81,6 +82,7 @@ interface TypeInfoOut {
   definedAt?: string;
   doc?: string;
   targetId?: string;
+  definition?: string; // expanded type shape (members), multi-line
 }
 
 interface Usage {
@@ -725,6 +727,12 @@ class TSEngine {
     const decl = sym?.getDeclarations()?.[0];
 
     const out: TypeInfoOut = { kind: "symbol", name: node.getText(), type };
+    try {
+      const def = this.typeDefinition(node.getType());
+      if (def) out.definition = def;
+    } catch {
+      /* definition is best-effort */
+    }
     if (decl) {
       out.definedAt = `${decl.getSourceFile().getFilePath()}:${decl.getStartLineNumber()}`;
       out.kind = declKind(decl);
@@ -896,6 +904,37 @@ class TSEngine {
     const d = jsdocs && jsdocs[0]?.getDescription()?.trim();
     if (d) out.doc = d;
     return out;
+  }
+
+  // The expanded shape of a type whose name alone isn't telling: one line
+  // per member, from each member's declaration text. Returns "" for types
+  // the `type` string already describes (primitives, callables, arrays,
+  // unions) and for very large types.
+  private typeDefinition(t: TsType): string {
+    if (t.getCallSignatures().length > 0) return "";
+    if (
+      t.isString() ||
+      t.isNumber() ||
+      t.isBoolean() ||
+      t.isLiteral() ||
+      t.isEnum() ||
+      t.isUnion() ||
+      t.isArray() ||
+      t.isAny() ||
+      t.isUnknown()
+    ) {
+      return "";
+    }
+    const props = t.getProperties();
+    if (props.length === 0 || props.length > 24) return "";
+    const lines: string[] = [];
+    for (const p of props) {
+      const d = p.getDeclarations()[0];
+      let text = (d?.getText() ?? p.getName()).split("\n")[0].trim();
+      if (text.length > 100) text = text.slice(0, 97) + "…";
+      lines.push("    " + text);
+    }
+    return "{\n" + lines.join("\n") + "\n}";
   }
 
   search(query: string, limit: number): SearchResult[] {

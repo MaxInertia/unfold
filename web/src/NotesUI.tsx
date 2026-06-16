@@ -134,6 +134,9 @@ function SymbolRef({ name }: { name: string }) {
               <span className="type-card-name">{card.info.name}</span>
             </span>
             {card.info.type && <span className="type-card-type">{card.info.type}</span>}
+            {card.info.definition && (
+              <pre className="type-card-def">{card.info.definition}</pre>
+            )}
             {card.info.doc && <span className="type-card-doc">{card.info.doc}</span>}
             {card.info.definedAt && (
               <span className="type-card-loc-text">{shortDefined(card.info.definedAt)}</span>

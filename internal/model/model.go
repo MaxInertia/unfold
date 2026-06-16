@@ -123,6 +123,11 @@ type TypeInfo struct {
 	DefinedAt string   `json:"definedAt,omitempty"` // "<file>:<line>"
 	Doc       string   `json:"doc,omitempty"`       // leading doc comment, if any
 	TargetID  TargetID `json:"targetId,omitempty"`  // set when the symbol is a function/method we can open
+	// Definition is the expanded shape of the symbol's type when it has
+	// one worth showing — a named struct's fields, a named interface's
+	// methods, or a named alias's underlying type. Multi-line, rendered
+	// preformatted by the frontend. Empty when Type already says it all.
+	Definition string `json:"definition,omitempty"`
 }
 
 // SearchResult is one hit returned from an engine's Search.

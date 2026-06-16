@@ -1831,3 +1831,18 @@ body.resizing {
   border: 1px solid var(--call-border);
   border-radius: 6px;
 }
+
+/* Expanded type shape inside the hover card (struct fields, interface
+   methods, object members). */
+.type-card-def {
+  margin: 0.35rem 0 0;
+  padding: 0.35rem 0.5rem;
+  background: rgba(127, 127, 127, 0.08);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre;
+  overflow: auto;
+  max-height: 16rem;
+}

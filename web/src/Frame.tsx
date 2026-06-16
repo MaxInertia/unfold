@@ -912,6 +912,9 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
             <span className="type-card-name">{typeCard.info.name}</span>
           </div>
           {typeCard.info.type && <div className="type-card-type">{typeCard.info.type}</div>}
+          {typeCard.info.definition && (
+            <pre className="type-card-def">{typeCard.info.definition}</pre>
+          )}
           {typeCard.info.doc && <div className="type-card-doc">{typeCard.info.doc}</div>}
           {typeCard.info.definedAt && (
             <button
