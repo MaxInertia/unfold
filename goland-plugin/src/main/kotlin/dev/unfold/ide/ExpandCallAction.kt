@@ -1,32 +1,37 @@
 package dev.unfold.ide
 
 import com.intellij.codeInsight.hint.HintManager
-import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.ui.popup.JBPopupFactory
-import com.intellij.openapi.util.Disposer
-import com.intellij.openapi.util.Key
 import com.intellij.ui.SimpleListCellRenderer
 
 /**
  * Resolve the Go call under the caret via PSI and render the callee body
  * between the lines with the renderer chosen in settings. Direct calls expand
  * immediately; interface/abstract method calls pop a chooser of the concrete
- * implementations (like unfold's impl switcher). Invoke again to collapse.
+ * implementations (like unfold's impl switcher). Invoke again on the same line
+ * to collapse.
+ *
+ * The action targets whichever editor holds focus — including an embedded frame
+ * editor. Because that editor is a real editor over the callee file, resolving
+ * and expanding a call *inside* a frame nests another frame (one rail color
+ * deeper); collapsing the outer frame collapses the whole subtree. See
+ * [ExpansionController].
  */
 class ExpandCallAction : AnAction() {
 
     override fun actionPerformed(e: AnActionEvent) {
         val editor = e.getData(CommonDataKeys.EDITOR) ?: return
         val project = e.project ?: return
+        val controller = ExpansionController.of(editor, project)
+        val line = editor.document.getLineNumber(editor.caretModel.offset)
 
-        // Toggle off if a frame is already showing.
-        editor.getUserData(FRAME_KEY)?.let { existing ->
-            Disposer.dispose(existing)
-            editor.putUserData(FRAME_KEY, null)
+        // Toggle off if this call site (and anything nested under it) is showing.
+        if (controller.isExpanded(line)) {
+            controller.collapse(line)
             return
         }
 
@@ -36,11 +41,10 @@ class ExpandCallAction : AnAction() {
             return
         }
 
-        val line = editor.document.getLineNumber(editor.caretModel.offset)
         val anchor = editor.document.getLineEndOffset(line)
 
         if (callees.size == 1) {
-            expand(editor, anchor, callees[0])
+            expand(controller, editor, line, anchor, callees[0])
             return
         }
 
@@ -49,17 +53,13 @@ class ExpandCallAction : AnAction() {
             .createPopupChooserBuilder(callees)
             .setTitle("Implementations (${callees.size})")
             .setRenderer(SimpleListCellRenderer.create("") { c -> "${c.title}    ${c.sourceFile?.name ?: ""}" })
-            .setItemChosenCallback { chosen -> expand(editor, anchor, chosen) }
+            .setItemChosenCallback { chosen -> expand(controller, editor, line, anchor, chosen) }
             .createPopup()
             .showInBestPositionFor(e.dataContext)
     }
 
-    private fun expand(editor: Editor, anchor: Int, callee: Callee) {
-        val frame = UnfoldSettings.getInstance().renderer.create().render(editor, anchor, callee)
-        editor.putUserData(FRAME_KEY, frame)
-    }
-
-    companion object {
-        private val FRAME_KEY = Key.create<Disposable?>("unfold.frame")
+    private fun expand(controller: ExpansionController, editor: Editor, line: Int, anchor: Int, callee: Callee) {
+        val renderer = UnfoldSettings.getInstance().renderer
+        controller.expand(line) { depth -> renderer.create().render(editor, anchor, callee, depth) }
     }
 }

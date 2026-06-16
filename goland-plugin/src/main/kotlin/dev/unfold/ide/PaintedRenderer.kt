@@ -1,7 +1,6 @@
 package dev.unfold.ide
 
 import com.goide.GoLanguage
-import com.intellij.openapi.Disposable
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorCustomElementRenderer
 import com.intellij.openapi.editor.Inlay
@@ -20,15 +19,17 @@ import java.awt.Rectangle
  * go-to-def. Good for validating the expand/recurse mechanics.
  */
 class PaintedRenderer : FrameRenderer {
-    override fun render(host: Editor, anchorOffset: Int, callee: Callee): Disposable {
+    // [depth] is unused: the painted block is a flat picture with no card chrome
+    // or rail to color, and being a picture it can't host nested expansions.
+    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame {
         val inlay = host.inlayModel.addBlockElement(
             anchorOffset,
             /* relatesToPrecedingText = */ true,
             /* showAbove = */ false,
             /* priority = */ 0,
             HighlightedCodeRenderer(host, callee),
-        ) ?: return Disposable { }
-        return Disposable { if (inlay.isValid) inlay.dispose() }
+        ) ?: return Frame(innerEditor = null) { }
+        return Frame(innerEditor = null) { if (inlay.isValid) inlay.dispose() }
     }
 }
 

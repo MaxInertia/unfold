@@ -211,3 +211,44 @@ sticky-header/rail system does.
 sandbox) — it compiles against the platform but isn't headlessly screenshotable.
 Nesting/depth tracking, a clickable `file:line` (open in editor), and a
 recursion badge are the natural next parity steps.
+
+---
+
+## Phase 4 — recursion, nesting, depth rails (2026-06-16)
+
+Expanding a call *inside* an expanded frame now nests another frame, one rail
+color deeper; collapsing a frame collapses its whole subtree. Implemented:
+
+- **`ExpansionController`** — the per-editor expansion model, keyed by the
+  document line a call sits on (sibling calls on different lines expand
+  independently; re-invoking on the same line collapses). One controller per
+  editor: the host editor gets depth 0; each embedded frame editor gets its own
+  controller at depth+1, seeded into that editor's user data.
+- **`Frame`** (in `FrameRenderer.kt`) — replaces the bare `Disposable` return.
+  Carries `innerEditor`: the embedded editor a nested expansion can target,
+  non-null only for `EditorInlayRenderer`'s real-file frame (painted/JCEF frames
+  are pictures → null, so they don't nest). `FrameRenderer.render` now takes
+  `depth`, which drives `FrameChrome.wrap`'s rail color (and the JCEF card's
+  accent), so `FrameChrome.RAIL` finally cycles instead of always rendering 0.
+- **Subtree collapse** rides the IntelliJ `Disposer` tree: a frame's child
+  controller is a Disposer child of the frame, and each frame is a child of its
+  controller — so disposing any frame cascades to every frame nested beneath it.
+
+Why nesting falls out cheaply: `PsiResolve.calleesAtCaret` resolves against
+`editor.document`'s PSI file, and the embedded editor is backed by the **real
+callee file's document** — so the same expand action, run with the caret inside
+a frame, resolves and expands against real PSI with no special-casing. The
+action targets `CommonDataKeys.EDITOR`, i.e. whichever editor holds focus.
+
+**Compiles offline against GoLand 2025.3** (`./gradlew clean compileKotlin`).
+
+**Runtime risk to retire with `runIde` (can't be checked headlessly):** whether
+an *embedded* `EditorEx` (created via `createViewer`) can itself host a further
+`EditorEmbeddedComponentManager.addComponent` — i.e. a frame inside a frame.
+Architecturally sound and there's no compile-time blocker, but this is the one
+assumption that needs a live GoLand to confirm. If embedded-in-embedded doesn't
+work, the fallback is to render nested frames as inlays on the *host* editor with
+indentation rather than truly inside the parent frame.
+
+Still open from Phase 5: clickable `file:line`, recursion badge (call already
+expanded higher in the stack), in-frame line folding, keyboard nav, depth cap.

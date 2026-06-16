@@ -1,7 +1,6 @@
 package dev.unfold.ide
 
 import com.goide.GoFileType
-import com.intellij.openapi.Disposable
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.Inlay
@@ -27,12 +26,12 @@ import java.awt.Dimension
  */
 class EditorInlayRenderer : FrameRenderer {
 
-    override fun render(host: Editor, anchorOffset: Int, callee: Callee): Disposable {
+    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame {
         val vf = callee.sourceFile
         val range = callee.range
-        if (vf == null || range == null) return renderDetached(host, anchorOffset, callee)
+        if (vf == null || range == null) return renderDetached(host, anchorOffset, callee, depth)
         val document = FileDocumentManager.getInstance().getDocument(vf)
-            ?: return renderDetached(host, anchorOffset, callee)
+            ?: return renderDetached(host, anchorOffset, callee, depth)
 
         val project = callee.project
         val sub = EditorFactory.getInstance().createViewer(document, project) as EditorEx
@@ -74,7 +73,7 @@ class EditorInlayRenderer : FrameRenderer {
         // Wrap the native editor in web-style card chrome (header with the
         // callee title + file:line, a thin card border, and a depth-colored
         // left rail). The card's preferred size = header + this content.
-        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = 0)
+        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = depth)
 
         var inlay: Inlay<*>? = EditorEmbeddedComponentManager.getInstance().addComponent(
             host as EditorEx,
@@ -106,7 +105,9 @@ class EditorInlayRenderer : FrameRenderer {
             listenerLifetime,
         )
 
-        return Disposable {
+        // The embedded editor is a real editor over the callee file, so it can
+        // host nested expansions — expose it as the frame's inner editor.
+        return Frame(innerEditor = sub) {
             Disposer.dispose(listenerLifetime)
             inlay?.dispose()
             inlay = null
@@ -115,8 +116,8 @@ class EditorInlayRenderer : FrameRenderer {
     }
 
     /** Fallback when the callee has no on-disk file: a detached Go snippet
-     *  (native font + lexer colors, but no semantic analysis). */
-    private fun renderDetached(host: Editor, anchorOffset: Int, callee: Callee): Disposable {
+     *  (native font + lexer colors, but no semantic analysis, so no nesting). */
+    private fun renderDetached(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame {
         val project = callee.project
         val vf = LightVirtualFile("unfold-frame.go", GoFileType.INSTANCE, callee.text)
         val document = EditorFactory.getInstance().createDocument(callee.text)
@@ -136,7 +137,7 @@ class EditorInlayRenderer : FrameRenderer {
             sub.component.preferredSize.width.coerceAtLeast(600),
             host.lineHeight * document.lineCount.coerceAtLeast(1),
         )
-        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = 0)
+        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = depth)
         val inlay = EditorEmbeddedComponentManager.getInstance().addComponent(
             host as EditorEx,
             card,
@@ -144,7 +145,9 @@ class EditorInlayRenderer : FrameRenderer {
                 EditorEmbeddedComponentManager.ResizePolicy.none(), null, true, false, 0, anchorOffset,
             ),
         )
-        return Disposable {
+        // Detached snippet has no PSI file behind it, so nested calls can't
+        // resolve — don't expose an inner editor.
+        return Frame(innerEditor = null) {
             inlay?.dispose()
             EditorFactory.getInstance().releaseEditor(sub)
         }
