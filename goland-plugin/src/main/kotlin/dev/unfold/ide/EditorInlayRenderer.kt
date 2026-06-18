@@ -1,9 +1,11 @@
 package dev.unfold.ide
 
 import com.goide.GoFileType
+import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.Inlay
+import com.intellij.openapi.editor.InlayModel
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.highlighter.EditorHighlighterFactory
 import com.intellij.openapi.editor.event.VisibleAreaListener
@@ -38,6 +40,10 @@ class EditorInlayRenderer : FrameRenderer {
         sub.highlighter = EditorHighlighterFactory.getInstance().createEditorHighlighter(project, vf)
         sub.backgroundColor = host.colorsScheme.defaultBackground
         sub.setBorder(null)
+        // Give the frame the standard editor right-click menu (a bare viewer has
+        // none — hence the "Nothing here" popup), so copy/go-to/find-usages are
+        // reachable from the context menu, not just keybindings.
+        sub.setContextMenuGroupId(IdeActions.GROUP_EDITOR_POPUP)
         sub.settings.apply {
             isLineNumbersShown = false
             isLineMarkerAreaShown = false
@@ -60,10 +66,17 @@ class EditorInlayRenderer : FrameRenderer {
             if (funcEnd < document.textLength) sub.foldingModel.addFoldRegion(funcEnd, document.textLength, "")?.isExpanded = false
         }
 
-        // Height = visual lines from the top through the end of the function,
-        // i.e. up to but not including the trailing collapsed remainder.
-        fun fittedHeight(): Int =
-            host.lineHeight * (sub.offsetToVisualPosition(funcEnd).line + 1).coerceAtLeast(1)
+        // Height = visual lines from the top through the end of the function
+        // (up to but not including the trailing collapsed remainder), PLUS the
+        // pixel height of any block inlays nested inside the function range —
+        // i.e. child frames. A visual-line count alone can't see those inlay
+        // pixels, so without this the card wouldn't grow to fit a nested
+        // expansion (it would render clipped/overlapping).
+        fun fittedHeight(): Int {
+            val lines = host.lineHeight * (sub.offsetToVisualPosition(funcEnd).line + 1).coerceAtLeast(1)
+            val nested = sub.inlayModel.getBlockElementsInRange(funcStart, funcEnd).sumOf { it.heightInPixels }
+            return lines + nested
+        }
 
         sub.component.preferredSize = Dimension(
             sub.component.preferredSize.width.coerceAtLeast(600),
@@ -88,19 +101,31 @@ class EditorInlayRenderer : FrameRenderer {
             ),
         )
 
-        // Re-fit whenever the visible area changes — folding/unfolding inside
-        // the frame fires this, so folding the function shrinks the frame
-        // rather than revealing the file below it.
+        // Recompute the card height and push the new size up to our own inlay.
+        fun refit() {
+            val h = fittedHeight()
+            if (sub.component.preferredSize.height != h) {
+                sub.component.preferredSize = Dimension(sub.component.preferredSize.width, h)
+                sub.component.revalidate()
+                card.revalidate()
+                inlay?.update()
+            }
+        }
+
         val listenerLifetime = Disposer.newDisposable()
-        sub.scrollingModel.addVisibleAreaListener(
-            VisibleAreaListener {
-                val h = fittedHeight()
-                if (sub.component.preferredSize.height != h) {
-                    sub.component.preferredSize = Dimension(sub.component.preferredSize.width, h)
-                    sub.component.revalidate()
-                    card.revalidate()
-                    inlay?.update()
-                }
+        // Folding/unfolding inside the frame changes the visible area — re-fit so
+        // folding the function shrinks the frame rather than revealing the file
+        // below it.
+        sub.scrollingModel.addVisibleAreaListener(VisibleAreaListener { refit() }, listenerLifetime)
+        // A nested expansion adds (or collapse removes) a block inlay inside this
+        // editor; grow/shrink the card to fit it. onUpdated also fires when a
+        // *deeper* nested frame resizes its own inlay, so this re-fit propagates
+        // all the way up the frame stack.
+        sub.inlayModel.addListener(
+            object : InlayModel.Listener {
+                override fun onAdded(inlay: Inlay<*>) = refit()
+                override fun onUpdated(inlay: Inlay<*>) = refit()
+                override fun onRemoved(inlay: Inlay<*>) = refit()
             },
             listenerLifetime,
         )
@@ -126,6 +151,7 @@ class EditorInlayRenderer : FrameRenderer {
         sub.highlighter = EditorHighlighterFactory.getInstance().createEditorHighlighter(project, vf)
         sub.backgroundColor = host.colorsScheme.defaultBackground
         sub.setBorder(null)
+        sub.setContextMenuGroupId(IdeActions.GROUP_EDITOR_POPUP)
         sub.settings.apply {
             isLineNumbersShown = false
             isLineMarkerAreaShown = false

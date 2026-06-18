@@ -242,13 +242,29 @@ action targets `CommonDataKeys.EDITOR`, i.e. whichever editor holds focus.
 
 **Compiles offline against GoLand 2025.3** (`./gradlew clean compileKotlin`).
 
-**Runtime risk to retire with `runIde` (can't be checked headlessly):** whether
-an *embedded* `EditorEx` (created via `createViewer`) can itself host a further
-`EditorEmbeddedComponentManager.addComponent` — i.e. a frame inside a frame.
-Architecturally sound and there's no compile-time blocker, but this is the one
-assumption that needs a live GoLand to confirm. If embedded-in-embedded doesn't
-work, the fallback is to render nested frames as inlays on the *host* editor with
-indentation rather than truly inside the parent frame.
+### Confirmed live + two fixes (2026-06-18)
+
+`runIde` testing settled the open risk: an embedded `EditorEx` **can** host a
+further `EditorEmbeddedComponentManager.addComponent` — frame-in-a-frame renders,
+so the fallback (host-editor inlays) isn't needed. Two issues surfaced and were
+fixed in `EditorInlayRenderer`:
+
+1. **(necessary) Card didn't grow for a nested frame.** `fittedHeight()` counted
+   visual *lines* only, which can't see a block inlay's pixels, so a nested
+   expansion rendered clipped/overlapping. Fix: add the pixel height of block
+   inlays in the function range (`inlayModel.getBlockElementsInRange(funcStart,
+   funcEnd).sumOf { heightInPixels }`) to the line height, and re-fit on inlay
+   add/update/remove via an `InlayModel.Listener` (not just the existing
+   `VisibleAreaListener`, which folding fires but inlay insertion may not).
+   `onUpdated` also fires when a *deeper* frame resizes its own inlay, so the
+   re-fit + `inlay.update()` propagates the growth all the way up the stack.
+2. **(nice-to-have) Empty right-click menu** ("Nothing here"). A bare viewer
+   editor has no context-menu group; go-to-def worked only via keybinding. Fix:
+   `sub.setContextMenuGroupId(IdeActions.GROUP_EDITOR_POPUP)` so the frame has the
+   standard editor popup (copy / go-to / find-usages).
+
+Both compile offline; the height propagation still wants an eyeball on deep
+(3+ level) nesting in `runIde`.
 
 Still open from Phase 5: clickable `file:line`, recursion badge (call already
 expanded higher in the stack), in-frame line folding, keyboard nav, depth cap.
