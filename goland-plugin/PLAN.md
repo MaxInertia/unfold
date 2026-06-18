@@ -266,5 +266,15 @@ fixed in `EditorInlayRenderer`:
 Both compile offline; the height propagation still wants an eyeball on deep
 (3+ level) nesting in `runIde`.
 
+**Follow-up fix — frame collapsed to one line ~1s after opening.** The daemon's
+code-folding pass runs after the editor settles, rebuilds fold regions from the
+Go `FoldingBuilder`, discards our manual range-folds and can auto-collapse the
+function body — which drops `funcEnd` to visual line 0, so the re-fit shrank the
+frame to a single line. Fix: `isAutoCodeFoldingEnabled = false` on the embedded
+editor, so our two range-folds are the only folds and nothing rebuilds them.
+Trade-off: this also drops the *language* fold regions, so in-frame manual
+folding of inner blocks (a Phase 5 goal) isn't available until a more surgical
+fix (e.g. re-assert our folds after the daemon pass instead of suppressing it).
+
 Still open from Phase 5: clickable `file:line`, recursion badge (call already
 expanded higher in the stack), in-frame line folding, keyboard nav, depth cap.

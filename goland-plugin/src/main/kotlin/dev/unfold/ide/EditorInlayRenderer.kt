@@ -52,6 +52,13 @@ class EditorInlayRenderer : FrameRenderer {
             isRightMarginShown = false
             additionalLinesCount = 0
             additionalColumnsCount = 0
+            // The daemon's code-folding pass runs ~1s after the editor settles
+            // and rebuilds fold regions from the language FoldingBuilder — which
+            // discards the manual range-folds below and can auto-collapse the
+            // function body, dropping funcEnd to visual line 0 so the frame
+            // re-fits to a single line. Turn it off; our folds are the only ones
+            // this editor should have.
+            isAutoCodeFoldingEnabled = false
         }
         sub.setVerticalScrollbarVisible(false)
         sub.setHorizontalScrollbarVisible(false)
@@ -158,6 +165,7 @@ class EditorInlayRenderer : FrameRenderer {
             isFoldingOutlineShown = false
             additionalLinesCount = 0
             additionalColumnsCount = 0
+            isAutoCodeFoldingEnabled = false
         }
         sub.component.preferredSize = Dimension(
             sub.component.preferredSize.width.coerceAtLeast(600),
