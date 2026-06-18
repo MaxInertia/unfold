@@ -146,7 +146,16 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
     // the blank area right of a line (or on an empty line) still yields an
     // offset and would pop the type card. Only accept the hit when the
     // pointer is horizontally inside the line's actual text.
-    const textRect = lineSpan.getBoundingClientRect();
+    //
+    // Measure the rendered text via a range over the line's contents, NOT
+    // lineSpan.getBoundingClientRect(): `.line` is a flex child (`flex: 1 1
+    // auto`) that stretches to fill the row, so its box spans the full width
+    // and its right edge is useless here. A range's rect hugs the real glyphs,
+    // so the empty space past the code is correctly rejected (and an empty line
+    // yields a zero-width rect that rejects everything).
+    const textRange = document.createRange();
+    textRange.selectNodeContents(lineSpan);
+    const textRect = textRange.getBoundingClientRect();
     if (clientX < textRect.left || clientX > textRect.right) return null;
     const lineIdx = Number(row.getAttribute("data-line-idx"));
     if (!Number.isFinite(lineIdx)) return null;
