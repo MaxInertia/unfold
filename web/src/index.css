@@ -245,6 +245,17 @@ body.resizing {
   white-space: nowrap;
 }
 
+/* Search-match emphasis: the matched characters stand out, the rest (receiver
+   type / package path) recedes. */
+.picker-hit {
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.picker-dim {
+  color: var(--muted);
+}
+
 /* Frame */
 .frame {
   background: var(--card-bg);

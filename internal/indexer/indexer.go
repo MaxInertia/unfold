@@ -1117,8 +1117,11 @@ func matchesSymbol(full, query string) bool {
 }
 
 // Search returns up to `limit` symbols whose FullName contains query
-// (case-insensitive). A simple substring search; the frontend can do its
-// own ranking later.
+// (case-insensitive). Matches on the leaf name — the method or function name,
+// the part after the last "." — rank above matches that only hit the receiver
+// type or package path, since a search is almost always for the method/function
+// itself. Ranking happens before the limit is applied, so a strong leaf match
+// is never dropped in favor of an alphabetically-earlier receiver match.
 func (i *Indexer) Search(query string, limit int) []SearchResult {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
@@ -1128,30 +1131,57 @@ func (i *Indexer) Search(query string, limit int) []SearchResult {
 	}
 	q := strings.ToLower(query)
 
-	out := make([]SearchResult, 0, limit)
 	ids := make([]TargetID, 0, len(i.funcs))
 	for id := range i.funcs {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(a, b int) bool { return string(ids[a]) < string(ids[b]) })
 
+	type hit struct {
+		res  SearchResult
+		leaf bool // query matched the method/function name, not just the receiver/package
+	}
+	hits := make([]hit, 0, len(ids))
 	for _, id := range ids {
-		if q != "" && !strings.Contains(strings.ToLower(string(id)), q) {
+		s := strings.ToLower(string(id))
+		if q != "" && !strings.Contains(s, q) {
 			continue
 		}
 		fi := i.funcs[id]
 		pos := i.fset.Position(fi.decl.Pos())
-		out = append(out, SearchResult{
-			TargetID: id,
-			Label:    string(id),
-			File:     pos.Filename,
-			Line:     pos.Line,
+		hits = append(hits, hit{
+			res: SearchResult{
+				TargetID: id,
+				Label:    string(id),
+				File:     pos.Filename,
+				Line:     pos.Line,
+			},
+			leaf: q == "" || strings.Contains(leafName(s), q),
 		})
+	}
+
+	// Stable so the alphabetical order within each tier is preserved.
+	sort.SliceStable(hits, func(a, b int) bool { return hits[a].leaf && !hits[b].leaf })
+
+	out := make([]SearchResult, 0, limit)
+	for _, h := range hits {
+		out = append(out, h.res)
 		if len(out) >= limit {
 			break
 		}
 	}
 	return out
+}
+
+// leafName returns the final dot-separated segment of a Go FullName — the bare
+// method or function name, without the receiver type or package path. For
+// "(github.com/x/pkg.Indexer).Load" it returns "load" (given a lowercased
+// input); for "github.com/x/pkg.Validate" it returns "validate".
+func leafName(fullName string) string {
+	if dot := strings.LastIndex(fullName, "."); dot >= 0 {
+		return fullName[dot+1:]
+	}
+	return fullName
 }
 
 // readRange reads bytes [start, end) from filename, caching file contents.

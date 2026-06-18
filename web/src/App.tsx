@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Frame } from "./Frame";
 import { CallTree } from "./CallTree";
 import { CallersTree } from "./CallersTree";
@@ -305,6 +305,45 @@ function shortFile(p: string): string {
   return parts.slice(-2).join("/");
 }
 
+// Render a result label with the characters that matched the query bolded and
+// the rest dimmed. Since a label is "Receiver.method" (Go FullName) and the
+// backend already ranks method-name matches first, the bold span lands on the
+// method when that's what matched, so the part you searched for stands out from
+// the receiver/package noise. Matches every (case-insensitive) occurrence.
+function highlightMatch(label: string, query: string): ReactNode {
+  const q = query.trim().toLowerCase();
+  if (!q) return label;
+  const lower = label.toLowerCase();
+  const parts: ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < label.length) {
+    const at = lower.indexOf(q, i);
+    if (at === -1) {
+      parts.push(
+        <span key={key++} className="picker-dim">
+          {label.slice(i)}
+        </span>,
+      );
+      break;
+    }
+    if (at > i) {
+      parts.push(
+        <span key={key++} className="picker-dim">
+          {label.slice(i, at)}
+        </span>,
+      );
+    }
+    parts.push(
+      <b key={key++} className="picker-hit">
+        {label.slice(at, at + q.length)}
+      </b>,
+    );
+    i = at + q.length;
+  }
+  return parts;
+}
+
 function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -362,7 +401,7 @@ function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
                 onClick={() => onPick(r.targetId)}
                 className="picker-pick"
               >
-                <span className="picker-label">{r.label}</span>
+                <span className="picker-label">{highlightMatch(r.label, query)}</span>
                 <span className="picker-loc">
                   {r.file.split("/").slice(-2).join("/")}:{r.line}
                 </span>
