@@ -1,10 +1,11 @@
 package dev.unfold.ide
 
 import com.goide.GoFileType
-import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.Inlay
+import com.intellij.openapi.editor.InlayModel
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.highlighter.EditorHighlighterFactory
 import com.intellij.openapi.editor.event.VisibleAreaListener
@@ -27,18 +28,22 @@ import java.awt.Dimension
  */
 class EditorInlayRenderer : FrameRenderer {
 
-    override fun render(host: Editor, anchorOffset: Int, callee: Callee): Disposable {
+    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame {
         val vf = callee.sourceFile
         val range = callee.range
-        if (vf == null || range == null) return renderDetached(host, anchorOffset, callee)
+        if (vf == null || range == null) return renderDetached(host, anchorOffset, callee, depth)
         val document = FileDocumentManager.getInstance().getDocument(vf)
-            ?: return renderDetached(host, anchorOffset, callee)
+            ?: return renderDetached(host, anchorOffset, callee, depth)
 
         val project = callee.project
         val sub = EditorFactory.getInstance().createViewer(document, project) as EditorEx
         sub.highlighter = EditorHighlighterFactory.getInstance().createEditorHighlighter(project, vf)
         sub.backgroundColor = host.colorsScheme.defaultBackground
         sub.setBorder(null)
+        // Give the frame the standard editor right-click menu (a bare viewer has
+        // none — hence the "Nothing here" popup), so copy/go-to/find-usages are
+        // reachable from the context menu, not just keybindings.
+        sub.setContextMenuGroupId(IdeActions.GROUP_EDITOR_POPUP)
         sub.settings.apply {
             isLineNumbersShown = false
             isLineMarkerAreaShown = false
@@ -61,10 +66,17 @@ class EditorInlayRenderer : FrameRenderer {
             if (funcEnd < document.textLength) sub.foldingModel.addFoldRegion(funcEnd, document.textLength, "")?.isExpanded = false
         }
 
-        // Height = visual lines from the top through the end of the function,
-        // i.e. up to but not including the trailing collapsed remainder.
-        fun fittedHeight(): Int =
-            host.lineHeight * (sub.offsetToVisualPosition(funcEnd).line + 1).coerceAtLeast(1)
+        // Height = visual lines from the top through the end of the function
+        // (up to but not including the trailing collapsed remainder), PLUS the
+        // pixel height of any block inlays nested inside the function range —
+        // i.e. child frames. A visual-line count alone can't see those inlay
+        // pixels, so without this the card wouldn't grow to fit a nested
+        // expansion (it would render clipped/overlapping).
+        fun fittedHeight(): Int {
+            val lines = host.lineHeight * (sub.offsetToVisualPosition(funcEnd).line + 1).coerceAtLeast(1)
+            val nested = sub.inlayModel.getBlockElementsInRange(funcStart, funcEnd).sumOf { it.heightInPixels }
+            return lines + nested
+        }
 
         sub.component.preferredSize = Dimension(
             sub.component.preferredSize.width.coerceAtLeast(600),
@@ -74,7 +86,7 @@ class EditorInlayRenderer : FrameRenderer {
         // Wrap the native editor in web-style card chrome (header with the
         // callee title + file:line, a thin card border, and a depth-colored
         // left rail). The card's preferred size = header + this content.
-        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = 0)
+        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = depth)
 
         var inlay: Inlay<*>? = EditorEmbeddedComponentManager.getInstance().addComponent(
             host as EditorEx,
@@ -89,24 +101,38 @@ class EditorInlayRenderer : FrameRenderer {
             ),
         )
 
-        // Re-fit whenever the visible area changes — folding/unfolding inside
-        // the frame fires this, so folding the function shrinks the frame
-        // rather than revealing the file below it.
+        // Recompute the card height and push the new size up to our own inlay.
+        fun refit() {
+            val h = fittedHeight()
+            if (sub.component.preferredSize.height != h) {
+                sub.component.preferredSize = Dimension(sub.component.preferredSize.width, h)
+                sub.component.revalidate()
+                card.revalidate()
+                inlay?.update()
+            }
+        }
+
         val listenerLifetime = Disposer.newDisposable()
-        sub.scrollingModel.addVisibleAreaListener(
-            VisibleAreaListener {
-                val h = fittedHeight()
-                if (sub.component.preferredSize.height != h) {
-                    sub.component.preferredSize = Dimension(sub.component.preferredSize.width, h)
-                    sub.component.revalidate()
-                    card.revalidate()
-                    inlay?.update()
-                }
+        // Folding/unfolding inside the frame changes the visible area — re-fit so
+        // folding the function shrinks the frame rather than revealing the file
+        // below it.
+        sub.scrollingModel.addVisibleAreaListener(VisibleAreaListener { refit() }, listenerLifetime)
+        // A nested expansion adds (or collapse removes) a block inlay inside this
+        // editor; grow/shrink the card to fit it. onUpdated also fires when a
+        // *deeper* nested frame resizes its own inlay, so this re-fit propagates
+        // all the way up the frame stack.
+        sub.inlayModel.addListener(
+            object : InlayModel.Listener {
+                override fun onAdded(inlay: Inlay<*>) = refit()
+                override fun onUpdated(inlay: Inlay<*>) = refit()
+                override fun onRemoved(inlay: Inlay<*>) = refit()
             },
             listenerLifetime,
         )
 
-        return Disposable {
+        // The embedded editor is a real editor over the callee file, so it can
+        // host nested expansions — expose it as the frame's inner editor.
+        return Frame(innerEditor = sub) {
             Disposer.dispose(listenerLifetime)
             inlay?.dispose()
             inlay = null
@@ -115,8 +141,8 @@ class EditorInlayRenderer : FrameRenderer {
     }
 
     /** Fallback when the callee has no on-disk file: a detached Go snippet
-     *  (native font + lexer colors, but no semantic analysis). */
-    private fun renderDetached(host: Editor, anchorOffset: Int, callee: Callee): Disposable {
+     *  (native font + lexer colors, but no semantic analysis, so no nesting). */
+    private fun renderDetached(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame {
         val project = callee.project
         val vf = LightVirtualFile("unfold-frame.go", GoFileType.INSTANCE, callee.text)
         val document = EditorFactory.getInstance().createDocument(callee.text)
@@ -125,6 +151,7 @@ class EditorInlayRenderer : FrameRenderer {
         sub.highlighter = EditorHighlighterFactory.getInstance().createEditorHighlighter(project, vf)
         sub.backgroundColor = host.colorsScheme.defaultBackground
         sub.setBorder(null)
+        sub.setContextMenuGroupId(IdeActions.GROUP_EDITOR_POPUP)
         sub.settings.apply {
             isLineNumbersShown = false
             isLineMarkerAreaShown = false
@@ -136,7 +163,7 @@ class EditorInlayRenderer : FrameRenderer {
             sub.component.preferredSize.width.coerceAtLeast(600),
             host.lineHeight * document.lineCount.coerceAtLeast(1),
         )
-        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = 0)
+        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = depth)
         val inlay = EditorEmbeddedComponentManager.getInstance().addComponent(
             host as EditorEx,
             card,
@@ -144,7 +171,9 @@ class EditorInlayRenderer : FrameRenderer {
                 EditorEmbeddedComponentManager.ResizePolicy.none(), null, true, false, 0, anchorOffset,
             ),
         )
-        return Disposable {
+        // Detached snippet has no PSI file behind it, so nested calls can't
+        // resolve — don't expose an inner editor.
+        return Frame(innerEditor = null) {
             inlay?.dispose()
             EditorFactory.getInstance().releaseEditor(sub)
         }

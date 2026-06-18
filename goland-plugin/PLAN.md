@@ -211,3 +211,60 @@ sticky-header/rail system does.
 sandbox) — it compiles against the platform but isn't headlessly screenshotable.
 Nesting/depth tracking, a clickable `file:line` (open in editor), and a
 recursion badge are the natural next parity steps.
+
+---
+
+## Phase 4 — recursion, nesting, depth rails (2026-06-16)
+
+Expanding a call *inside* an expanded frame now nests another frame, one rail
+color deeper; collapsing a frame collapses its whole subtree. Implemented:
+
+- **`ExpansionController`** — the per-editor expansion model, keyed by the
+  document line a call sits on (sibling calls on different lines expand
+  independently; re-invoking on the same line collapses). One controller per
+  editor: the host editor gets depth 0; each embedded frame editor gets its own
+  controller at depth+1, seeded into that editor's user data.
+- **`Frame`** (in `FrameRenderer.kt`) — replaces the bare `Disposable` return.
+  Carries `innerEditor`: the embedded editor a nested expansion can target,
+  non-null only for `EditorInlayRenderer`'s real-file frame (painted/JCEF frames
+  are pictures → null, so they don't nest). `FrameRenderer.render` now takes
+  `depth`, which drives `FrameChrome.wrap`'s rail color (and the JCEF card's
+  accent), so `FrameChrome.RAIL` finally cycles instead of always rendering 0.
+- **Subtree collapse** rides the IntelliJ `Disposer` tree: a frame's child
+  controller is a Disposer child of the frame, and each frame is a child of its
+  controller — so disposing any frame cascades to every frame nested beneath it.
+
+Why nesting falls out cheaply: `PsiResolve.calleesAtCaret` resolves against
+`editor.document`'s PSI file, and the embedded editor is backed by the **real
+callee file's document** — so the same expand action, run with the caret inside
+a frame, resolves and expands against real PSI with no special-casing. The
+action targets `CommonDataKeys.EDITOR`, i.e. whichever editor holds focus.
+
+**Compiles offline against GoLand 2025.3** (`./gradlew clean compileKotlin`).
+
+### Confirmed live + two fixes (2026-06-18)
+
+`runIde` testing settled the open risk: an embedded `EditorEx` **can** host a
+further `EditorEmbeddedComponentManager.addComponent` — frame-in-a-frame renders,
+so the fallback (host-editor inlays) isn't needed. Two issues surfaced and were
+fixed in `EditorInlayRenderer`:
+
+1. **(necessary) Card didn't grow for a nested frame.** `fittedHeight()` counted
+   visual *lines* only, which can't see a block inlay's pixels, so a nested
+   expansion rendered clipped/overlapping. Fix: add the pixel height of block
+   inlays in the function range (`inlayModel.getBlockElementsInRange(funcStart,
+   funcEnd).sumOf { heightInPixels }`) to the line height, and re-fit on inlay
+   add/update/remove via an `InlayModel.Listener` (not just the existing
+   `VisibleAreaListener`, which folding fires but inlay insertion may not).
+   `onUpdated` also fires when a *deeper* frame resizes its own inlay, so the
+   re-fit + `inlay.update()` propagates the growth all the way up the stack.
+2. **(nice-to-have) Empty right-click menu** ("Nothing here"). A bare viewer
+   editor has no context-menu group; go-to-def worked only via keybinding. Fix:
+   `sub.setContextMenuGroupId(IdeActions.GROUP_EDITOR_POPUP)` so the frame has the
+   standard editor popup (copy / go-to / find-usages).
+
+Both compile offline; the height propagation still wants an eyeball on deep
+(3+ level) nesting in `runIde`.
+
+Still open from Phase 5: clickable `file:line`, recursion badge (call already
+expanded higher in the stack), in-frame line folding, keyboard nav, depth cap.
