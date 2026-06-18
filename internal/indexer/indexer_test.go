@@ -665,3 +665,50 @@ func assertGoroutineFlags(t *testing.T, frame *Frame) {
 		t.Errorf("cleanup() is deferred, not a goroutine; want Goroutine=false")
 	}
 }
+
+func TestLeafName(t *testing.T) {
+	cases := map[string]string{
+		"(github.com/x/pkg.Indexer).Load": "Load",
+		"github.com/x/pkg.Validate":       "Validate",
+		"main":                            "main",
+		"":                                "",
+	}
+	for in, want := range cases {
+		if got := leafName(in); got != want {
+			t.Errorf("leafName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSearchRanksLeafMatchesFirst verifies that hits matching on the
+// method/function name (the leaf, e.g. Indexer.Load) sort above hits that only
+// match on the receiver type or package path (e.g. every method of the
+// Reloadable type, whose name contains "load"). Indexes the unfold module
+// itself, which contains both for the query "load".
+func TestSearchRanksLeafMatchesFirst(t *testing.T) {
+	idx := New()
+	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	res := idx.Search("load", 100)
+	if len(res) == 0 {
+		t.Fatal("expected results for 'load'")
+	}
+
+	sawLeaf, seenNonLeaf := false, false
+	for _, r := range res {
+		isLeaf := strings.Contains(strings.ToLower(leafName(string(r.TargetID))), "load")
+		if isLeaf {
+			sawLeaf = true
+			if seenNonLeaf {
+				t.Errorf("leaf match %q ranked after a receiver-only match", r.TargetID)
+			}
+		} else {
+			seenNonLeaf = true
+		}
+	}
+	if !sawLeaf {
+		t.Fatal("expected at least one leaf match for 'load' (e.g. Indexer.Load)")
+	}
+}
