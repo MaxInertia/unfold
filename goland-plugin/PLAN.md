@@ -278,3 +278,63 @@ fix (e.g. re-assert our folds after the daemon pass instead of suppressing it).
 
 Still open from Phase 5: clickable `file:line`, recursion badge (call already
 expanded higher in the stack), in-frame line folding, keyboard nav, depth cap.
+
+---
+
+## Phase 5 — navigation, recursion, in-frame folding (2026-06-23)
+
+One PR (`feat/goland-phase5`) covering the Phase-5 list **except the depth cap**
+(deferred). Compiles offline; **still wants a `runIde` eyeball** (no GUI this
+session) — see the risk list at the end.
+
+1. **Clickable `file:line`.** The header location is now an `ActionLink`;
+   clicking it runs `OpenFileDescriptor(project, vf, range.startOffset)
+   .navigate(true)` to jump the main editor to the callee. `FrameChrome.wrap`
+   took an `onNavigate: (() -> Unit)?`; a null one (detached snippet) keeps the
+   plain `JBLabel`.
+
+2. **Recursion badge.** `Callee` gained a stable `id` (`"<path>#<startOffset>"`,
+   identifying the *declaration*, since `title` can collide across packages).
+   `ExpansionController` threads `ancestorIds: Set<String>` down the controller
+   tree (root empty; child = parent + the id just expanded). When a frame's id is
+   already among its ancestors, `expand` passes `recursive = true` and the chrome
+   shows an amber "↻ recursive" pill (JCEF renderer: HTML equivalent). Only the
+   re-entry is flagged, not the first expansion.
+
+3. **In-frame folding — the surgical fix predicted in Phase 4.** Folding is back
+   **on** (`isAutoCodeFoldingEnabled = true`); instead of suppressing the daemon
+   we re-assert our boundaries after it runs. `applyBoundaryFolds()` (guarded by a
+   `reasserting` flag) force-expands any region *enclosing the whole function*
+   (whose collapse would hide the body) and `ensureCollapsed`s the two boundary
+   regions `[0,funcStart]` / `[funcEnd,end]`. A
+   `FoldingListener.onFoldProcessingEnd` re-runs it + `refit()` after every pass.
+   No infinite loop: `runBatchFoldingOperation` fires `onFoldProcessingEnd`
+   **synchronously** while `reasserting` is still true, so the re-assert's own
+   pass is a no-op. User folds inside the function are subsets of the function
+   range, so the enclosing-region safeguard never reopens them; folding the body
+   shrinks the frame through the existing `fittedHeight()` path.
+
+4. **Keyboard navigation** (`FrameNavActions.kt`, `FrameKeys.kt`). Three
+   context-gated actions (their `update()` disables them off-context, so the
+   keystrokes fall through to the platform default when no frame is in play):
+   - **Focus Frame** `Ctrl+Alt+Down` — descend into the frame on the caret line,
+     caret on the body (`FrameKeys.BODY_OFFSET`, seeded by `EditorInlayRenderer`).
+   - **Focus Parent** `Ctrl+Alt+Up` — ascend to the call site
+     (`FrameKeys.PARENT_EDITOR` / `CALL_LINE`, seeded in `ExpansionController.expand`).
+   - **Collapse Frame** `Ctrl+Alt+Backspace` — collapse the current frame (focus
+     hops to the parent first, since collapse disposes this editor).
+
+   `ExpansionController.existing()` added so action `update()` can read a
+   controller without creating one.
+
+### Still wants a runIde eyeball
+
+- In-frame fold/unfold: body folds, frame re-fits, no flicker from the re-assert
+  racing the daemon.
+- Deep (3+ level) nesting height propagation (carried over from Phase 4).
+- `Ctrl+Alt+Up/Down` really falling through to occurrence-nav when off-context.
+- Recursion-badge header layout on a real recursive Go call.
+
+### Deferred
+
+Depth cap — out of scope for this PR.

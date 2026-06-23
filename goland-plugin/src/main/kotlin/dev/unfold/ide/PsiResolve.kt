@@ -42,13 +42,18 @@ object PsiResolve {
             .sortedBy { it.title }
     }
 
-    private fun calleeOf(decl: GoFunctionOrMethodDeclaration, project: Project): Callee = Callee(
-        title = titleOf(decl),
-        text = decl.text,
-        project = project,
-        sourceFile = decl.containingFile?.virtualFile,
-        range = decl.textRange,
-    )
+    private fun calleeOf(decl: GoFunctionOrMethodDeclaration, project: Project): Callee {
+        val vf = decl.containingFile?.virtualFile
+        val range = decl.textRange
+        return Callee(
+            title = titleOf(decl),
+            text = decl.text,
+            project = project,
+            sourceFile = vf,
+            range = range,
+            id = "${vf?.path ?: "?"}#${range?.startOffset ?: -1}",
+        )
+    }
 
     private fun titleOf(decl: GoFunctionOrMethodDeclaration): String {
         val name = (decl as? PsiNamedElement)?.name ?: "fn"

@@ -21,11 +21,19 @@ import com.intellij.openapi.util.Key
 class ExpansionController private constructor(
     private val editor: Editor,
     val depth: Int,
+    /** Callee ids expanded on the path from the root down to this controller. */
+    private val ancestorIds: Set<String>,
 ) : Disposable {
 
     private val frames = HashMap<Int, Frame>()
 
     fun isExpanded(line: Int): Boolean = frames.containsKey(line)
+
+    /** The inner editor of the frame expanded at [line], or null if none. */
+    fun innerEditorAt(line: Int): Editor? = frames[line]?.innerEditor
+
+    /** True if [calleeId] is already expanded somewhere above this controller. */
+    fun isRecursive(calleeId: String): Boolean = calleeId in ancestorIds
 
     /** Collapse the frame at [line] and, transitively, everything nested in it. */
     fun collapse(line: Int) {
@@ -33,23 +41,26 @@ class ExpansionController private constructor(
     }
 
     /**
-     * Build a frame at [line] via [make] (passed this controller's depth) and
-     * track it. If the frame embeds an inner editor, give that editor its own
-     * depth+1 controller parented to the frame, so nested expansions collapse
-     * with their parent and pick up the next rail color.
+     * Build a frame at [line] for the callee identified by [calleeId] via [make]
+     * (passed this controller's depth and whether the callee recurses) and track
+     * it. If the frame embeds an inner editor, give that editor its own depth+1
+     * controller — its ancestor set extends this one with [calleeId] — and wire
+     * it back to this editor/line so keyboard nav can return to the call site.
      */
-    fun expand(line: Int, make: (depth: Int) -> Frame) {
+    fun expand(line: Int, calleeId: String, make: (depth: Int, recursive: Boolean) -> Frame) {
         if (frames.containsKey(line)) return
-        val frame = make(depth)
+        val frame = make(depth, isRecursive(calleeId))
         frames[line] = frame
         Disposer.register(this, frame)
         // Keep the map honest if the frame is disposed via a parent cascade
         // rather than collapse() (e.g. an ancestor frame collapsing).
         Disposer.register(frame) { frames.remove(line) }
         frame.innerEditor?.let { inner ->
-            val child = ExpansionController(inner, depth + 1)
+            val child = ExpansionController(inner, depth + 1, ancestorIds + calleeId)
             Disposer.register(frame, child)
             inner.putUserData(KEY, child)
+            inner.putUserData(FrameKeys.PARENT_EDITOR, editor)
+            inner.putUserData(FrameKeys.CALL_LINE, line)
         }
     }
 
@@ -69,10 +80,14 @@ class ExpansionController private constructor(
          */
         fun of(editor: Editor, project: Project): ExpansionController {
             editor.getUserData(KEY)?.let { return it }
-            val root = ExpansionController(editor, depth = 0)
+            val root = ExpansionController(editor, depth = 0, ancestorIds = emptySet())
             Disposer.register(project, root)
             editor.putUserData(KEY, root)
             return root
         }
+
+        /** The existing controller for [editor], or null — never creates one
+         *  (so it's safe to call from action `update()`). */
+        fun existing(editor: Editor): ExpansionController? = editor.getUserData(KEY)
     }
 }

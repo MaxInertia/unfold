@@ -18,12 +18,12 @@ import java.awt.Dimension
  * Falls back to the painted renderer if JCEF isn't available.
  */
 class JcefRenderer : FrameRenderer {
-    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame {
+    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int, recursive: Boolean): Frame {
         if (!JBCefApp.isSupported()) {
-            return PaintedRenderer().render(host, anchorOffset, callee, depth)
+            return PaintedRenderer().render(host, anchorOffset, callee, depth, recursive)
         }
         val browser = JBCefBrowser()
-        browser.loadHTML(html(callee.title, FrameChrome.location(callee), callee.text, depth))
+        browser.loadHTML(html(callee.title, FrameChrome.location(callee), callee.text, depth, recursive))
         val component = browser.component
         // +3 lines: header row plus the card's vertical padding/border.
         component.preferredSize = Dimension(800, host.lineHeight * (callee.text.count { it == '\n' } + 3))
@@ -57,9 +57,10 @@ class JcefRenderer : FrameRenderer {
         return light[i] to dark[i]
     }
 
-    private fun html(title: String, location: String, code: String, depth: Int): String {
+    private fun html(title: String, location: String, code: String, depth: Int, recursive: Boolean): String {
         fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         val locSpan = if (location.isNotEmpty()) "<span class=\"frame-loc\">${esc(location)}</span>" else ""
+        val badge = if (recursive) "<span class=\"frame-rec\" title=\"recursion\">↻ recursive</span>" else ""
         val (accentLight, accentDark) = accent(depth)
         return """<!doctype html><html><head><meta charset="utf-8"><style>
             :root{--bg:#fafaf9;--fg:#1c1c1c;--muted:#6b7280;--accent:$accentLight;--card-bg:#fff;--card-border:#e5e7eb;}
@@ -71,11 +72,14 @@ class JcefRenderer : FrameRenderer {
             .frame-header{display:flex;align-items:baseline;gap:.8rem;padding:.4rem .7rem;
               background:rgba(127,127,127,.06);border-bottom:1px solid var(--card-border);font-size:.85em;}
             .frame-title{font-weight:600;}
+            .frame-rec{font-size:.75em;font-weight:600;color:#d97706;border:1px solid #d97706;
+              border-radius:4px;padding:0 .25rem;}
+            @media (prefers-color-scheme:dark){.frame-rec{color:#f59e0b;border-color:#f59e0b;}}
             .frame-loc{margin-left:auto;color:var(--muted);font-size:.8em;}
             pre{margin:0;padding:.4rem .7rem;white-space:pre;overflow:auto;}
             </style></head><body>
             <div class="frame">
-              <div class="frame-header"><span class="frame-title">${esc(title)}</span>$locSpan</div>
+              <div class="frame-header"><span class="frame-title">${esc(title)}</span>$badge$locSpan</div>
               <pre>${esc(code)}</pre>
             </div></body></html>"""
     }

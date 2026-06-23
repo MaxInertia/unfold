@@ -19,9 +19,10 @@ import java.awt.Rectangle
  * go-to-def. Good for validating the expand/recurse mechanics.
  */
 class PaintedRenderer : FrameRenderer {
-    // [depth] is unused: the painted block is a flat picture with no card chrome
-    // or rail to color, and being a picture it can't host nested expansions.
-    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame {
+    // [depth]/[recursive] are unused: the painted block is a flat picture with
+    // no card chrome or rail to color, and being a picture it can't host nested
+    // expansions.
+    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int, recursive: Boolean): Frame {
         val inlay = host.inlayModel.addBlockElement(
             anchorOffset,
             /* relatesToPrecedingText = */ true,
