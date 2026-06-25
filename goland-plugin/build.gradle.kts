@@ -27,10 +27,12 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
-            // Built against 2025.3 (253); open upper bound so future builds
-            // still accept it (otherwise it's auto-stamped to 253.*).
+            // Built against 2025.3 (253). No untilBuild → open-ended, compatible
+            // with all future IDE builds (a real number here would just lock out
+            // newer GoLand releases; the Marketplace flags a fabricated one like
+            // "299.*"). Re-introduce a bound if a future API break needs it.
             sinceBuild = "253"
-            untilBuild = "299.*"
+            untilBuild = provider { null }
         }
     }
 

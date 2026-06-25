@@ -1,9 +1,9 @@
 <idea-plugin>
     <id>dev.unfold.ide</id>
-    <name>Unfold</name>
+    <name>Inline Call Unfold</name>
     <vendor email="dorian11thiessen@gmail.com" url="https://maxinertia.ca">maxinertia</vendor>
     <description><![CDATA[
-        <h2>Unfold — inline call expansion for Go</h2>
+        <h2>Inline Call Unfold — inline call expansion for Go</h2>
         <p>
             Put the caret on a Go function call and Unfold splices the callee's body
             <em>inline, between the lines</em> — rendered over the real source file so the
