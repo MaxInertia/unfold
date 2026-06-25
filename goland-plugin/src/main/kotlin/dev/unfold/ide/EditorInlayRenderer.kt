@@ -1,7 +1,9 @@
 package dev.unfold.ide
 
 import com.goide.GoFileType
+import com.intellij.lang.folding.LanguageFolding
 import com.intellij.openapi.actionSystem.IdeActions
+import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.Inlay
@@ -11,7 +13,9 @@ import com.intellij.openapi.editor.highlighter.EditorHighlighterFactory
 import com.intellij.openapi.editor.event.VisibleAreaListener
 import com.intellij.openapi.editor.impl.EditorEmbeddedComponentManager
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.testFramework.LightVirtualFile
 import java.awt.Dimension
 
@@ -56,8 +60,9 @@ class EditorInlayRenderer : FrameRenderer {
             // and rebuilds fold regions from the language FoldingBuilder — which
             // discards the manual range-folds below and can auto-collapse the
             // function body, dropping funcEnd to visual line 0 so the frame
-            // re-fits to a single line. Turn it off; our folds are the only ones
-            // this editor should have.
+            // re-fits to a single line. Turn the daemon off and instead add the
+            // language folds ourselves (addLanguageFolds), so section folding
+            // still works inside the frame but nothing clobbers our boundaries.
             isAutoCodeFoldingEnabled = false
         }
         sub.setVerticalScrollbarVisible(false)
@@ -71,6 +76,9 @@ class EditorInlayRenderer : FrameRenderer {
         sub.foldingModel.runBatchFoldingOperation {
             if (funcStart > 0) sub.foldingModel.addFoldRegion(0, funcStart, "")?.isExpanded = false
             if (funcEnd < document.textLength) sub.foldingModel.addFoldRegion(funcEnd, document.textLength, "")?.isExpanded = false
+            // With the daemon off, add the language's own fold regions inside the
+            // function ourselves so the gutter fold arrows still work in the frame.
+            addLanguageFolds(sub, document, project, funcStart, funcEnd)
         }
 
         // Height = visual lines from the top through the end of the function
@@ -144,6 +152,34 @@ class EditorInlayRenderer : FrameRenderer {
             inlay?.dispose()
             inlay = null
             EditorFactory.getInstance().releaseEditor(sub)
+        }
+    }
+
+    /**
+     * Add the language's own fold regions (function body, nested if/for/switch
+     * blocks, import groups, …) that fall inside [[from], [to]] to the editor,
+     * left expanded but collapsible. We build them ourselves via the registered
+     * [FoldingBuilder] because the daemon is disabled (it would otherwise rebuild
+     * folds and clobber the boundary folds / collapse the frame), so this is what
+     * keeps the gutter fold arrows working inside a frame.
+     *
+     * Must be called inside a [com.intellij.openapi.editor.FoldingModel]
+     * `runBatchFoldingOperation`. Best-effort: silently skips if PSI or a builder
+     * isn't available, and skips any descriptor that overlaps an existing region.
+     */
+    private fun addLanguageFolds(sub: EditorEx, document: Document, project: Project, from: Int, to: Int) {
+        val psiFile = PsiDocumentManager.getInstance(project).getPsiFile(document) ?: return
+        val builder = LanguageFolding.INSTANCE.forLanguage(psiFile.language) ?: return
+        // Folding is a convenience, not load-bearing: never let a builder quirk
+        // break the frame render. Worst case we add no section folds.
+        try {
+            for (d in builder.buildFoldRegions(psiFile.node, document)) {
+                val r = d.range
+                if (r.startOffset < from || r.endOffset > to) continue
+                sub.foldingModel.addFoldRegion(r.startOffset, r.endOffset, d.placeholderText ?: "…")?.isExpanded = true
+            }
+        } catch (_: Exception) {
+            // No section folds for this frame; the boundary folds still hold.
         }
     }
 
