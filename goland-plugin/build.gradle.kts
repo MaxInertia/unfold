@@ -33,6 +33,22 @@ intellijPlatform {
             untilBuild = "299.*"
         }
     }
+
+    // Marketplace requires every uploaded archive to be signed. Keys/passwords
+    // come from the environment — never commit them. Generate the cert+key with
+    // the `openssl` commands in scaffold-notes.md and export these before
+    // `./gradlew signPlugin` / `publishPlugin`.
+    signing {
+        certificateChainFile = providers.environmentVariable("CERTIFICATE_CHAIN_FILE").map { file(it) }
+        privateKeyFile = providers.environmentVariable("PRIVATE_KEY_FILE").map { file(it) }
+        password = providers.environmentVariable("PRIVATE_KEY_PASSWORD")
+    }
+
+    // `publishPlugin` uploads to the JetBrains Marketplace. The token is a
+    // permanent token from plugins.jetbrains.com → My Tokens.
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
+    }
 }
 
 kotlin {
