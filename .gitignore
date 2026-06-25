@@ -22,3 +22,11 @@ bun.lock
 
 # Stray top-level package.json from one-off bun installs (frontend deps live in /web/)
 /package.json
+
+# Plugin signing material — must never be committed (kept here too in case keys
+# are generated at the repo root rather than under goland-plugin/)
+*.pem
+chain.crt
+*.p12
+*.key
+publish-token*

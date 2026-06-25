@@ -10,8 +10,8 @@ import com.intellij.ui.SimpleListCellRenderer
 
 /**
  * Resolve the Go call under the caret via PSI and render the callee body
- * between the lines with the renderer chosen in settings. Direct calls expand
- * immediately; interface/abstract method calls pop a chooser of the concrete
+ * between the lines as an embedded editor over the callee file. Direct calls
+ * expand immediately; interface/abstract method calls pop a chooser of the concrete
  * implementations (like unfold's impl switcher). Invoke again on the same line
  * to collapse.
  *
@@ -59,9 +59,8 @@ class ExpandCallAction : AnAction() {
     }
 
     private fun expand(controller: ExpansionController, editor: Editor, line: Int, anchor: Int, callee: Callee) {
-        val renderer = UnfoldSettings.getInstance().renderer
         controller.expand(line, callee.id) { depth, recursive ->
-            renderer.create().render(editor, anchor, callee, depth, recursive)
+            EditorInlayRenderer().render(editor, anchor, callee, depth, recursive)
         }
     }
 }

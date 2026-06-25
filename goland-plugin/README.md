@@ -8,6 +8,28 @@ the surrounding code.
 See [`PLAN.md`](./PLAN.md) for the phased design and the rendering deep-dive, and
 [`scaffold-notes.md`](./scaffold-notes.md) for current status and what's wired.
 
+## Screenshots
+
+A single inline expansion — `orderTotal` spliced in below the call as a
+read-only native-editor frame (semantic colors, folding, go-to-def all intact):
+
+![Single expanded frame](./examples/screenshots/single-frame.png)
+
+Nested frames — `validate` and `orderTotal` expanded *inside* `processOrder`,
+each a deeper rail color — with the implementation picker for the `pay.Charge`
+interface call:
+
+![Nested frames with the implementation picker](./examples/screenshots/nested-frames-with-implementation-picker.png)
+
+In-frame code folding — the gutter fold arrows work inside each frame, and the
+frame re-fits as blocks collapse:
+
+![Nested frames with in-frame code folding](./examples/screenshots/nested-frames-code-folding.png)
+
+The code in these shots is the sample under
+[`examples/screenshots/`](./examples/screenshots) — see its README for which call
+to expand for each.
+
 ## Build
 
 From this directory:
@@ -51,5 +73,8 @@ Open a Go file, put the caret on a call:
 
 - **Ctrl+Alt+U** — expand the call under the caret (again to collapse). Also on
   the editor right-click menu.
-- **Ctrl+Alt+R** — pick the renderer (`EDITOR` / `PAINTED` / `JCEF`).
-- **Settings → Tools → Unfold** — persistent renderer choice and options.
+- **Ctrl+Alt+Down / Up** — focus into the expanded frame / back to the call site.
+- **Ctrl+Alt+Backspace** — collapse the frame the caret is inside.
+
+Expanded code is rendered as a real embedded editor over the callee file, so it
+keeps native semantic colors, hover/quick-doc, go-to-definition, and folding.

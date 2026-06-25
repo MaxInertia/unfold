@@ -18,8 +18,8 @@ import com.intellij.testFramework.LightVirtualFile
 import java.awt.Dimension
 
 /**
- * Experiment B — the goal. Embed a real read-only editor over the **real
- * callee file's document**, folded so only the function range shows. Because
+ * Embeds a real read-only editor over the **real callee file's document**,
+ * folded so only the function range shows. Because
  * the editor's PSI is the actual project file, the frame gets native semantic
  * colors, hover/quick-doc, go-to-definition, find-usages, and folding — the
  * same features as the surrounding code.
@@ -28,9 +28,9 @@ import java.awt.Dimension
  * re-fits on every fold change, so folding the function shrinks the frame
  * instead of leaving empty space / revealing the rest of the file.
  */
-class EditorInlayRenderer : FrameRenderer {
+class EditorInlayRenderer {
 
-    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int, recursive: Boolean): Frame {
+    fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int, recursive: Boolean): Frame {
         val vf = callee.sourceFile
         val range = callee.range
         if (vf == null || range == null) return renderDetached(host, anchorOffset, callee, depth, recursive)

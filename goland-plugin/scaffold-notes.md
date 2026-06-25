@@ -51,17 +51,12 @@ See `PLAN.md` for the full phased plan and the rendering deep-dive.
 
 - **PSI resolution** (`PsiResolve.kt`) — the Go call under the caret →
   `GoFunctionOrMethodDeclaration` (direct calls; interface-impl picker TODO).
-- **Three swappable renderers** behind `FrameRenderer`:
-  - `PaintedRenderer` — block inlay, colored token-by-token via the IDE's Go
-    `SyntaxHighlighter` + scheme (looks native; no native interactivity).
-  - **`EditorInlayRenderer`** — the goal: a real read-only `EditorEx` embedded
-    via `EditorEmbeddedComponentManager` (native code).
-  - `JcefRenderer` — a JCEF browser (the reuse-the-web path; falls back to
-    painted if JCEF is off).
-- **Selectable in GoLand** — `Settings > Tools > Unfold` (`UnfoldConfigurable`)
-  and a quick **Ctrl+Alt+R** popup (`SelectRendererAction`); choice persists
-  (`UnfoldSettings`). **Ctrl+Alt+U** expands the call under the caret with the
-  selected renderer; again collapses.
+- **`EditorInlayRenderer`** (the only renderer) — a real read-only `EditorEx`
+  embedded via `EditorEmbeddedComponentManager` over the callee file (native
+  code: semantic colors, hover, go-to-def, folding). The early painted/JCEF
+  experiments were removed in 0.1.2 once this proved out as the best approach.
+- **`Ctrl+Alt+U`** expands the call under the caret (again collapses);
+  `Ctrl+Alt+Down/Up` focus into/out of a frame, `Ctrl+Alt+Backspace` collapses.
 
 ### What still needs a *running* IDE (I can compile but not run the GUI here)
 1. **`EditorInlayRenderer` bounds/scroll/sizing** — it compiles and uses the
@@ -73,9 +68,6 @@ See `PLAN.md` for the full phased plan and the rendering deep-dive.
 3. **Recursion/nesting** — currently one frame at a time (toggle). Phase 4.
 4. **Per-call affordances** (underline/click like unfold) — Phase 2; today you
    trigger via caret + Ctrl+Alt+U.
-
-Try `EDITOR` first (default), compare against `PAINTED`, and switch with
-Ctrl+Alt+R.
 
 ## Releasing to the JetBrains Marketplace
 
