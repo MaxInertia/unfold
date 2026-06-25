@@ -57,6 +57,35 @@ Three usage kinds:
   dispatch to it within the loaded package set, including sites that only
   ever dispatch to a different implementation at runtime.
 
+## Diff mode
+
+Highlight what your branch changed, right where you're reading it. There's no
+toggle in the UI — start unfold with `--diff-base <ref>`:
+
+```
+unfold --diff-base main
+```
+
+It indexes the **merge-base** of your working tree with `<ref>` in a throwaway
+worktree and compares against it, so you see exactly what your branch changes
+versus `main` (the PR diff). As you browse, frames are annotated in place:
+
+- **added** — a function not present in the base: the whole frame is tinted and
+  its header shows an `added` badge.
+- **modified** — an existing function whose body changed: only the changed lines
+  are tinted, with a `modified` badge.
+- unchanged functions look normal.
+
+So there's no separate diff screen — you navigate the call tree as usual and
+changed code stands out inline.
+
+- **Go only** for now. Diff identity is by package-qualified target id;
+  TypeScript ids are positional, so `--diff-base` is ignored (with a log line)
+  for TS projects until name-based identity lands.
+- Diffs against the **merge-base**, so fetch/update the base ref first.
+- Whole-file frames are left unannotated — their ids are path-based and don't
+  match across the two worktrees.
+
 ## Notes
 
 Anchored annotations over the code you're reading. Select line(s) and hit
