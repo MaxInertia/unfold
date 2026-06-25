@@ -13,6 +13,13 @@ data class Callee(
     val project: Project,
     val sourceFile: VirtualFile?,
     val range: TextRange?,
+    /**
+     * A stable identity for the *declaration* (file path + start offset), used
+     * to detect recursion: a frame whose callee id already appears among its
+     * ancestor frames is a recursive expansion. Independent of [title], which
+     * can collide across packages.
+     */
+    val id: String,
 )
 
 /**
@@ -37,12 +44,14 @@ class Frame(
 
 /**
  * Renders an expanded callee frame between the lines, anchored just below
- * [anchorOffset], at nesting [depth] (drives the card's rail color). Returns a
- * [Frame] that removes it.
+ * [anchorOffset], at nesting [depth] (drives the card's rail color). When
+ * [recursive] is true the callee is already expanded higher in the stack, so
+ * the chrome flags it (and the caller may choose not to descend further).
+ * Returns a [Frame] that removes it.
  *
  * Implementations are the swappable experiment: [PaintedRenderer],
  * [EditorInlayRenderer] (the goal — native code), [JcefRenderer].
  */
 interface FrameRenderer {
-    fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame
+    fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int, recursive: Boolean): Frame
 }

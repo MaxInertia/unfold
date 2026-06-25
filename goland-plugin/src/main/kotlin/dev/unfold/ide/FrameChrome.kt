@@ -4,12 +4,14 @@ import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
+import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Color
+import java.awt.FlowLayout
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.border.CompoundBorder
@@ -64,33 +66,56 @@ object FrameChrome {
      * and borders on top via BorderLayout, so its own preferred size accounts
      * for both. Re-fitting: after changing the content's preferred size, call
      * [JComponent.revalidate] on the returned panel before the inlay update.
+     *
+     * [onNavigate], when non-null, makes the [location] a clickable link that
+     * jumps the main IDE to the callee's definition. [recursive] adds a badge
+     * flagging that this callee is already expanded higher in the stack.
      */
-    fun wrap(host: Editor, content: JComponent, title: String, location: String, depth: Int): JPanel {
+    fun wrap(
+        host: Editor,
+        content: JComponent,
+        title: String,
+        location: String,
+        depth: Int,
+        recursive: Boolean = false,
+        onNavigate: (() -> Unit)? = null,
+    ): JPanel {
         val scheme = host.colorsScheme
         val bg = scheme.defaultBackground
         val cardBorder = JBColor.border()
         val rail = railColor(depth)
 
-        val header = JPanel(BorderLayout()).apply {
-            isOpaque = true
-            background = headerTint(bg)
-            border = JBUI.Borders.empty(2, 8)
+        // Title + (optional) recursion badge, left-aligned together.
+        val titleRow = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            isOpaque = false
             add(
                 JBLabel(title).apply {
                     font = JBFont.label().asBold()
                     foreground = scheme.defaultForeground
                 },
-                BorderLayout.WEST,
             )
+            if (recursive) add(recursionBadge())
+        }
+
+        val header = JPanel(BorderLayout()).apply {
+            isOpaque = true
+            background = headerTint(bg)
+            border = JBUI.Borders.empty(2, 8)
+            add(titleRow, BorderLayout.WEST)
             if (location.isNotEmpty()) {
-                add(
+                val locComponent: JComponent = if (onNavigate != null) {
+                    ActionLink(location) { onNavigate() }.apply {
+                        font = JBFont.small()
+                        toolTipText = "Go to definition — $location"
+                    }
+                } else {
                     JBLabel(location).apply {
                         font = JBFont.small()
                         foreground = UIUtil.getContextHelpForeground()
                         toolTipText = location
-                    },
-                    BorderLayout.EAST,
-                )
+                    }
+                }
+                add(locComponent, BorderLayout.EAST)
             }
         }
 
@@ -115,4 +140,17 @@ object FrameChrome {
      */
     private fun headerTint(bg: Color): Color =
         ColorUtil.mix(bg, JBColor.foreground(), 0.06)
+
+    /** Amber "↻ recursive" pill shown when a callee re-appears down the stack. */
+    private val RECURSION_TINT = JBColor(Color(0xD97706), Color(0xF59E0B))
+
+    private fun recursionBadge(): JComponent = JBLabel("↻ recursive").apply {
+        font = JBFont.small().asBold()
+        foreground = RECURSION_TINT
+        toolTipText = "This call is already expanded higher in the stack (recursion)"
+        border = CompoundBorder(
+            JBUI.Borders.customLine(RECURSION_TINT, 1),
+            JBUI.Borders.empty(0, 4),
+        )
+    }
 }

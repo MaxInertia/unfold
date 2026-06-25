@@ -60,6 +60,8 @@ class ExpandCallAction : AnAction() {
 
     private fun expand(controller: ExpansionController, editor: Editor, line: Int, anchor: Int, callee: Callee) {
         val renderer = UnfoldSettings.getInstance().renderer
-        controller.expand(line) { depth -> renderer.create().render(editor, anchor, callee, depth) }
+        controller.expand(line, callee.id) { depth, recursive ->
+            renderer.create().render(editor, anchor, callee, depth, recursive)
+        }
     }
 }

@@ -1,21 +1,19 @@
 package dev.unfold.ide
 
 import com.goide.GoFileType
-import com.intellij.lang.folding.LanguageFolding
 import com.intellij.openapi.actionSystem.IdeActions
-import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.InlayModel
 import com.intellij.openapi.editor.ex.EditorEx
+import com.intellij.openapi.editor.ex.FoldingListener
 import com.intellij.openapi.editor.highlighter.EditorHighlighterFactory
 import com.intellij.openapi.editor.event.VisibleAreaListener
 import com.intellij.openapi.editor.impl.EditorEmbeddedComponentManager
 import com.intellij.openapi.fileEditor.FileDocumentManager
-import com.intellij.openapi.project.Project
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.util.Disposer
-import com.intellij.psi.PsiDocumentManager
 import com.intellij.testFramework.LightVirtualFile
 import java.awt.Dimension
 
@@ -32,12 +30,12 @@ import java.awt.Dimension
  */
 class EditorInlayRenderer : FrameRenderer {
 
-    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame {
+    override fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int, recursive: Boolean): Frame {
         val vf = callee.sourceFile
         val range = callee.range
-        if (vf == null || range == null) return renderDetached(host, anchorOffset, callee, depth)
+        if (vf == null || range == null) return renderDetached(host, anchorOffset, callee, depth, recursive)
         val document = FileDocumentManager.getInstance().getDocument(vf)
-            ?: return renderDetached(host, anchorOffset, callee, depth)
+            ?: return renderDetached(host, anchorOffset, callee, depth, recursive)
 
         val project = callee.project
         val sub = EditorFactory.getInstance().createViewer(document, project) as EditorEx
@@ -56,14 +54,16 @@ class EditorInlayRenderer : FrameRenderer {
             isRightMarginShown = false
             additionalLinesCount = 0
             additionalColumnsCount = 0
-            // The daemon's code-folding pass runs ~1s after the editor settles
-            // and rebuilds fold regions from the language FoldingBuilder — which
-            // discards the manual range-folds below and can auto-collapse the
-            // function body, dropping funcEnd to visual line 0 so the frame
-            // re-fits to a single line. Turn the daemon off and instead add the
-            // language folds ourselves (addLanguageFolds), so section folding
-            // still works inside the frame but nothing clobbers our boundaries.
-            isAutoCodeFoldingEnabled = false
+            // Folding stays ON so the user can collapse blocks *inside* the
+            // frame (Phase 5). The daemon's code-folding pass rebuilds fold
+            // regions from the language FoldingBuilder ~1s after the editor
+            // settles — discarding our boundary folds and sometimes
+            // auto-collapsing the function body (which would drop funcEnd to
+            // visual line 0 and shrink the frame to one line). Rather than
+            // disabling folding wholesale, we re-assert the boundary folds after
+            // every fold-processing pass via the FoldingListener installed
+            // below.
+            isAutoCodeFoldingEnabled = true
         }
         sub.setVerticalScrollbarVisible(false)
         sub.setHorizontalScrollbarVisible(false)
@@ -73,13 +73,45 @@ class EditorInlayRenderer : FrameRenderer {
         val endLine = document.getLineNumber(range.endOffset.coerceAtMost(document.textLength))
         val funcStart = document.getLineStartOffset(startLine)
         val funcEnd = document.getLineEndOffset(endLine)
-        sub.foldingModel.runBatchFoldingOperation {
-            if (funcStart > 0) sub.foldingModel.addFoldRegion(0, funcStart, "")?.isExpanded = false
-            if (funcEnd < document.textLength) sub.foldingModel.addFoldRegion(funcEnd, document.textLength, "")?.isExpanded = false
-            // With the daemon off, add the language's own fold regions inside the
-            // function ourselves so the gutter fold arrows still work in the frame.
-            addLanguageFolds(sub, document, project, funcStart, funcEnd)
+
+        // Re-asserting our boundary folds runs its own batch operation, which
+        // fires onFoldProcessingEnd again — guard against re-entering.
+        var reasserting = false
+
+        /**
+         * Keep only the function visible: collapse [0,funcStart] and
+         * [funcEnd,end], and force-expand any language region that encloses the
+         * whole function (else collapsing the body would shrink the frame). Safe
+         * to call repeatedly; idempotent on already-correct state.
+         */
+        fun applyBoundaryFolds() {
+            if (reasserting) return
+            reasserting = true
+            try {
+                sub.foldingModel.runBatchFoldingOperation {
+                    val fm = sub.foldingModel
+                    // A region spanning the whole function body would hide it
+                    // when collapsed — keep those open.
+                    for (r in fm.allFoldRegions) {
+                        if (r.startOffset <= funcStart && r.endOffset >= funcEnd &&
+                            (r.startOffset < funcStart || r.endOffset > funcEnd) && !r.isExpanded
+                        ) {
+                            r.isExpanded = true
+                        }
+                    }
+                    ensureCollapsed(sub, 0, funcStart)
+                    ensureCollapsed(sub, funcEnd, document.textLength)
+                }
+            } finally {
+                reasserting = false
+            }
         }
+
+        applyBoundaryFolds()
+
+        // "Focus frame" should land the caret on real code, not in the leading
+        // collapsed region.
+        sub.putUserData(FrameKeys.BODY_OFFSET, funcStart)
 
         // Height = visual lines from the top through the end of the function
         // (up to but not including the trailing collapsed remainder), PLUS the
@@ -100,8 +132,16 @@ class EditorInlayRenderer : FrameRenderer {
 
         // Wrap the native editor in web-style card chrome (header with the
         // callee title + file:line, a thin card border, and a depth-colored
-        // left rail). The card's preferred size = header + this content.
-        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = depth)
+        // left rail). The file:line is a link that jumps the main IDE to the
+        // callee definition; a recursion badge flags re-expanded callees. The
+        // card's preferred size = header + this content.
+        val navigate: () -> Unit = {
+            OpenFileDescriptor(project, vf, range.startOffset).navigate(true)
+        }
+        val card = FrameChrome.wrap(
+            host, sub.component, callee.title, FrameChrome.location(callee),
+            depth = depth, recursive = recursive, onNavigate = navigate,
+        )
 
         var inlay: Inlay<*>? = EditorEmbeddedComponentManager.getInstance().addComponent(
             host as EditorEx,
@@ -144,6 +184,18 @@ class EditorInlayRenderer : FrameRenderer {
             },
             listenerLifetime,
         )
+        // The daemon's code-folding pass discards our boundary folds (and may
+        // auto-collapse the body); re-assert them after every pass, then re-fit.
+        // `applyBoundaryFolds` guards against the re-assert's own pass.
+        sub.foldingModel.addListener(
+            object : FoldingListener {
+                override fun onFoldProcessingEnd() {
+                    applyBoundaryFolds()
+                    refit()
+                }
+            },
+            listenerLifetime,
+        )
 
         // The embedded editor is a real editor over the callee file, so it can
         // host nested expansions — expose it as the frame's inner editor.
@@ -156,36 +208,21 @@ class EditorInlayRenderer : FrameRenderer {
     }
 
     /**
-     * Add the language's own fold regions (function body, nested if/for/switch
-     * blocks, import groups, …) that fall inside [[from], [to]] to the editor,
-     * left expanded but collapsible. We build them ourselves via the registered
-     * [FoldingBuilder] because the daemon is disabled (it would otherwise rebuild
-     * folds and clobber the boundary folds / collapse the frame), so this is what
-     * keeps the gutter fold arrows working inside a frame.
-     *
-     * Must be called inside a [com.intellij.openapi.editor.FoldingModel]
-     * `runBatchFoldingOperation`. Best-effort: silently skips if PSI or a builder
-     * isn't available, and skips any descriptor that overlaps an existing region.
+     * Ensure a collapsed fold region with exactly the bounds [start,end] exists;
+     * reuse one already at those bounds, otherwise add it. Must run inside a
+     * batch folding operation.
      */
-    private fun addLanguageFolds(sub: EditorEx, document: Document, project: Project, from: Int, to: Int) {
-        val psiFile = PsiDocumentManager.getInstance(project).getPsiFile(document) ?: return
-        val builder = LanguageFolding.INSTANCE.forLanguage(psiFile.language) ?: return
-        // Folding is a convenience, not load-bearing: never let a builder quirk
-        // break the frame render. Worst case we add no section folds.
-        try {
-            for (d in builder.buildFoldRegions(psiFile.node, document)) {
-                val r = d.range
-                if (r.startOffset < from || r.endOffset > to) continue
-                sub.foldingModel.addFoldRegion(r.startOffset, r.endOffset, d.placeholderText ?: "…")?.isExpanded = true
-            }
-        } catch (_: Exception) {
-            // No section folds for this frame; the boundary folds still hold.
-        }
+    private fun ensureCollapsed(editor: EditorEx, start: Int, end: Int) {
+        if (end <= start) return
+        val fm = editor.foldingModel
+        val existing = fm.allFoldRegions.firstOrNull { it.startOffset == start && it.endOffset == end }
+        val region = existing ?: fm.addFoldRegion(start, end, "")
+        region?.isExpanded = false
     }
 
     /** Fallback when the callee has no on-disk file: a detached Go snippet
      *  (native font + lexer colors, but no semantic analysis, so no nesting). */
-    private fun renderDetached(host: Editor, anchorOffset: Int, callee: Callee, depth: Int): Frame {
+    private fun renderDetached(host: Editor, anchorOffset: Int, callee: Callee, depth: Int, recursive: Boolean): Frame {
         val project = callee.project
         val vf = LightVirtualFile("unfold-frame.go", GoFileType.INSTANCE, callee.text)
         val document = EditorFactory.getInstance().createDocument(callee.text)
@@ -207,7 +244,10 @@ class EditorInlayRenderer : FrameRenderer {
             sub.component.preferredSize.width.coerceAtLeast(600),
             host.lineHeight * document.lineCount.coerceAtLeast(1),
         )
-        val card = FrameChrome.wrap(host, sub.component, callee.title, FrameChrome.location(callee), depth = depth)
+        val card = FrameChrome.wrap(
+            host, sub.component, callee.title, FrameChrome.location(callee),
+            depth = depth, recursive = recursive,
+        )
         val inlay = EditorEmbeddedComponentManager.getInstance().addComponent(
             host as EditorEx,
             card,

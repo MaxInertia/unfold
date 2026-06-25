@@ -28,5 +28,23 @@
                 description="Choose how expanded code is rendered.">
             <keyboard-shortcut keymap="$default" first-keystroke="control alt R"/>
         </action>
+        <action id="unfold.FocusFrame"
+                class="dev.unfold.ide.FocusFrameAction"
+                text="Unfold: Focus Frame"
+                description="Move focus down into the frame expanded on the current line.">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt DOWN"/>
+        </action>
+        <action id="unfold.FocusParent"
+                class="dev.unfold.ide.FocusParentAction"
+                text="Unfold: Focus Parent"
+                description="From inside a frame, move focus back to its call site.">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt UP"/>
+        </action>
+        <action id="unfold.CollapseFrame"
+                class="dev.unfold.ide.CollapseFrameAction"
+                text="Unfold: Collapse Frame"
+                description="Collapse the frame the caret is inside.">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt BACK_SPACE"/>
+        </action>
     </actions>
 </idea-plugin>
