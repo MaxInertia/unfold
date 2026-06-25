@@ -4,3 +4,10 @@ build/
 *.iml
 out/
 .intellijPlatform/
+
+# Plugin signing material — must never be committed
+*.pem
+chain.crt
+*.p12
+*.key
+publish-token*

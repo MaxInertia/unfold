@@ -76,3 +76,45 @@ See `PLAN.md` for the full phased plan and the rendering deep-dive.
 
 Try `EDITOR` first (default), compare against `PAINTED`, and switch with
 Ctrl+Alt+R.
+
+## Releasing to the JetBrains Marketplace
+
+`plugin.xml` and `build.gradle.kts` are Marketplace-ready (HTML description,
+change-notes, vendor email/url, `signing`/`publishing` blocks). What's left is
+secret material + the one-time submission, all driven by environment variables
+so nothing sensitive lands in git (`.gitignore` blocks `*.pem`, `chain.crt`, …).
+
+### One-time: generate a signing certificate
+
+```sh
+openssl genpkey -aes-256-cbc -algorithm RSA -out private.pem -pkeyopt rsa_keygen_bits:4096
+openssl req -key private.pem -new -x509 -days 3650 -out chain.crt
+```
+
+Keep `private.pem` + its password somewhere safe (a password manager); losing
+them means you can't sign upgrades under the same key.
+
+### Each release
+
+```sh
+export CERTIFICATE_CHAIN_FILE=/abs/path/chain.crt
+export PRIVATE_KEY_FILE=/abs/path/private.pem
+export PRIVATE_KEY_PASSWORD=…           # the password set above
+export PUBLISH_TOKEN=…                   # plugins.jetbrains.com → My Tokens (permanent)
+
+./gradlew signPlugin                     # produces a signed zip under build/distributions/
+./gradlew publishPlugin                  # uploads it (after first approval — see below)
+```
+
+Bump `version` in `build.gradle.kts` and add a `<change-notes>` entry first
+(the CLAUDE.md convention), or the upload is rejected as a duplicate.
+
+### First submission is manual + moderated
+
+The very first version must be uploaded by hand and pass JetBrains moderation
+(a few business days) before `publishPlugin` works:
+
+1. `./gradlew signPlugin`
+2. plugins.jetbrains.com → **Upload plugin** → pick the signed zip.
+3. Choose a **license** (required) and confirm the listing.
+4. Wait for approval; thereafter `publishPlugin` handles uploads.

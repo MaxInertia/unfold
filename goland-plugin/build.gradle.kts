@@ -27,11 +27,29 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
-            // Built against 2025.3 (253); open upper bound so future builds
-            // still accept it (otherwise it's auto-stamped to 253.*).
+            // Built against 2025.3 (253). No untilBuild → open-ended, compatible
+            // with all future IDE builds (a real number here would just lock out
+            // newer GoLand releases; the Marketplace flags a fabricated one like
+            // "299.*"). Re-introduce a bound if a future API break needs it.
             sinceBuild = "253"
-            untilBuild = "299.*"
+            untilBuild = provider { null }
         }
+    }
+
+    // Marketplace requires every uploaded archive to be signed. Keys/passwords
+    // come from the environment — never commit them. Generate the cert+key with
+    // the `openssl` commands in scaffold-notes.md and export these before
+    // `./gradlew signPlugin` / `publishPlugin`.
+    signing {
+        certificateChainFile = providers.environmentVariable("CERTIFICATE_CHAIN_FILE").map { file(it) }
+        privateKeyFile = providers.environmentVariable("PRIVATE_KEY_FILE").map { file(it) }
+        password = providers.environmentVariable("PRIVATE_KEY_PASSWORD")
+    }
+
+    // `publishPlugin` uploads to the JetBrains Marketplace. The token is a
+    // permanent token from plugins.jetbrains.com → My Tokens.
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
     }
 }
 
