@@ -17,12 +17,16 @@
             <li><b>In-frame folding</b> — fold blocks inside a frame; the frame re-fits as you collapse.</li>
             <li><b>Keyboard navigation</b> — descend into a frame, jump back to the call site, or collapse it.</li>
             <li><b>Recursion aware</b> — re-entered callees are flagged so deep chains stay legible.</li>
-            <li><b>Selectable renderers</b> — native embedded editor, painted, or JCEF.</li>
         </ul>
         <p>Requires the Go plugin (bundled in GoLand; available in IntelliJ IDEA Ultimate).</p>
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.1.2</h3>
+        <ul>
+            <li>Removed the experimental painted and JCEF renderers (and the renderer
+                picker) — the embedded native-editor frame is now the only renderer.</li>
+        </ul>
         <h3>0.1.1</h3>
         <ul>
             <li>Clickable <code>file:line</code> header navigation, recursion badge, in-frame
@@ -33,13 +37,6 @@
     <depends>com.intellij.modules.platform</depends>
     <depends>org.jetbrains.plugins.go</depends>
 
-    <extensions defaultExtensionNs="com.intellij">
-        <applicationConfigurable instance="dev.unfold.ide.UnfoldConfigurable"
-                                 displayName="Unfold"
-                                 groupId="tools"
-                                 id="dev.unfold.ide.settings"/>
-    </extensions>
-
     <actions>
         <action id="unfold.ExpandCall"
                 class="dev.unfold.ide.ExpandCallAction"
@@ -47,12 +44,6 @@
                 description="Splice the callee body below the current line.">
             <keyboard-shortcut keymap="$default" first-keystroke="control alt U"/>
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
-        </action>
-        <action id="unfold.SelectRenderer"
-                class="dev.unfold.ide.SelectRendererAction"
-                text="Unfold: Select Renderer"
-                description="Choose how expanded code is rendered.">
-            <keyboard-shortcut keymap="$default" first-keystroke="control alt R"/>
         </action>
         <action id="unfold.FocusFrame"
                 class="dev.unfold.ide.FocusFrameAction"

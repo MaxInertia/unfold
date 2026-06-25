@@ -51,5 +51,8 @@ Open a Go file, put the caret on a call:
 
 - **Ctrl+Alt+U** — expand the call under the caret (again to collapse). Also on
   the editor right-click menu.
-- **Ctrl+Alt+R** — pick the renderer (`EDITOR` / `PAINTED` / `JCEF`).
-- **Settings → Tools → Unfold** — persistent renderer choice and options.
+- **Ctrl+Alt+Down / Up** — focus into the expanded frame / back to the call site.
+- **Ctrl+Alt+Backspace** — collapse the frame the caret is inside.
+
+Expanded code is rendered as a real embedded editor over the callee file, so it
+keeps native semantic colors, hover/quick-doc, go-to-definition, and folding.

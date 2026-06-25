@@ -23,11 +23,12 @@ data class Callee(
 )
 
 /**
- * A rendered frame. Disposing it removes the frame (and, through the Disposer
- * tree, any frames nested inside it). [innerEditor] is the embedded editor a
- * nested expansion can target — non-null only for [EditorInlayRenderer], whose
- * frame is a real editor over the callee file; painted/JCEF frames are pictures
- * and can't host native nested expansions.
+ * A rendered frame, produced by [EditorInlayRenderer]. Disposing it removes the
+ * frame (and, through the Disposer tree, any frames nested inside it).
+ * [innerEditor] is the embedded editor a nested expansion can target — non-null
+ * when the frame is a real editor over the callee's on-disk file; the detached
+ * snippet fallback (a callee with no source file) has none and can't host
+ * native nested expansions.
  */
 class Frame(
     val innerEditor: Editor?,
@@ -40,18 +41,4 @@ class Frame(
         disposed = true
         onDispose()
     }
-}
-
-/**
- * Renders an expanded callee frame between the lines, anchored just below
- * [anchorOffset], at nesting [depth] (drives the card's rail color). When
- * [recursive] is true the callee is already expanded higher in the stack, so
- * the chrome flags it (and the caller may choose not to descend further).
- * Returns a [Frame] that removes it.
- *
- * Implementations are the swappable experiment: [PaintedRenderer],
- * [EditorInlayRenderer] (the goal — native code), [JcefRenderer].
- */
-interface FrameRenderer {
-    fun render(host: Editor, anchorOffset: Int, callee: Callee, depth: Int, recursive: Boolean): Frame
 }
