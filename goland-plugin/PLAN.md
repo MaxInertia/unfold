@@ -272,12 +272,20 @@ Go `FoldingBuilder`, discards our manual range-folds and can auto-collapse the
 function body — which drops `funcEnd` to visual line 0, so the re-fit shrank the
 frame to a single line. Fix: `isAutoCodeFoldingEnabled = false` on the embedded
 editor, so our two range-folds are the only folds and nothing rebuilds them.
-Trade-off: this also drops the *language* fold regions, so in-frame manual
-folding of inner blocks (a Phase 5 goal) isn't available until a more surgical
-fix (e.g. re-assert our folds after the daemon pass instead of suppressing it).
+
+**In-frame section folding kept (the surgical version).** Disabling the daemon
+would have dropped the *language* fold regions too, so you couldn't collapse
+inner blocks in a frame. Instead, with the daemon off we add those folds
+ourselves: `addLanguageFolds` asks the registered `FoldingBuilder`
+(`LanguageFolding.INSTANCE.forLanguage`) for the fold descriptors in the
+function range and adds them expanded-but-collapsible, alongside the boundary
+folds, in the same batch. So the gutter fold arrows work inside a frame, the
+boundaries never get clobbered, and collapsing a section re-fits the frame
+smaller (the height calc is already fold-aware). This is the "B is the prize"
+parity getting closer: in-frame folding now works *and* is stable.
 
 Still open from Phase 5: clickable `file:line`, recursion badge (call already
-expanded higher in the stack), in-frame line folding, keyboard nav, depth cap.
+expanded higher in the stack), keyboard nav, depth cap.
 
 ---
 
