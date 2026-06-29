@@ -3,9 +3,9 @@
     <name>Inline Call Unfold</name>
     <vendor email="dorian11thiessen@gmail.com" url="https://maxinertia.ca">maxinertia</vendor>
     <description><![CDATA[
-        <h2>Inline Call Unfold — inline call expansion for Go</h2>
+        <h2>Inline Call Unfold — inline call expansion for Go and TypeScript</h2>
         <p>
-            Put the caret on a Go function call and Unfold splices the callee's body
+            Put the caret on a function call and Unfold splices the callee's body
             <em>inline, between the lines</em> — rendered over the real source file so the
             expanded code keeps native semantic colors, hover/quick-doc, go-to-definition,
             find-usages, and code folding. Read a call chain top-to-bottom without losing
@@ -18,10 +18,18 @@
             <li><b>Keyboard navigation</b> — descend into a frame, jump back to the call site, or collapse it.</li>
             <li><b>Recursion aware</b> — re-entered callees are flagged so deep chains stay legible.</li>
         </ul>
-        <p>Requires the Go plugin (bundled in GoLand; available in IntelliJ IDEA Ultimate).</p>
+        <p>Go support requires the Go plugin; TypeScript/JavaScript support requires the
+           JavaScript plugin. Both are bundled in GoLand (and available in IntelliJ IDEA Ultimate).</p>
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.2.0</h3>
+        <ul>
+            <li>TypeScript/JavaScript support — expand TS/JS function, method, and
+                arrow-const calls, with the same native-editor frame, nesting, and
+                folding as Go. Interface/abstract method calls show an implementations
+                chooser. Requires the JavaScript plugin (bundled in GoLand).</li>
+        </ul>
         <h3>0.1.2</h3>
         <ul>
             <li>Removed the experimental painted and JCEF renderers (and the renderer
@@ -36,6 +44,9 @@
 
     <depends>com.intellij.modules.platform</depends>
     <depends>org.jetbrains.plugins.go</depends>
+    <!-- Optional: TS/JS resolution loads only when the JavaScript plugin is present,
+         so the plugin still loads in an IDE without JS support. -->
+    <depends optional="true" config-file="unfold-js.xml">JavaScript</depends>
 
     <actions>
         <action id="unfold.ExpandCall"

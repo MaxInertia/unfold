@@ -1,9 +1,9 @@
 # goland-plugin
 
 A GoLand/IntelliJ plugin (Kotlin + IntelliJ Platform Gradle Plugin 2.x) that
-expands a Go call **inline in the editor** — put the caret on a call and the
-callee's body is spliced in between the lines, rendered to look and behave like
-the surrounding code.
+expands a **Go or TypeScript/JavaScript** call **inline in the editor** — put the
+caret on a call and the callee's body is spliced in between the lines, rendered to
+look and behave like the surrounding code.
 
 See [`PLAN.md`](./PLAN.md) for the phased design and the rendering deep-dive, and
 [`scaffold-notes.md`](./scaffold-notes.md) for current status and what's wired.
@@ -55,9 +55,10 @@ iterating):
   21 toolchain, install one (`sudo apt install openjdk-21-jdk`); Gradle
   auto-detects installed JDKs.
 - **First build downloads its own GoLand** (`goland("2025.3.1.1")` in
-  `build.gradle.kts`) to compile against the Go PSI APIs — ~1 GB, cached under
-  `~/.gradle` and `.intellijPlatform`. This is independent of any GoLand you have
-  installed locally. First run is slow; later runs are fast.
+  `build.gradle.kts`) to compile against the Go PSI and the bundled JavaScript/
+  TypeScript PSI APIs — ~1 GB, cached under `~/.gradle` and `.intellijPlatform`.
+  This is independent of any GoLand you have installed locally. First run is slow;
+  later runs are fast.
 - The build targets IDE build `253` (2025.3) with `untilBuild = "299.*"`, so the
   zip installs into newer GoLand releases too. To make `runIde` launch a
   different GoLand, change the `goland("...")` coordinate.
@@ -69,7 +70,7 @@ zip from `build/distributions/`.
 
 ## Use it
 
-Open a Go file, put the caret on a call:
+Open a Go or TypeScript/JavaScript file, put the caret on a call:
 
 - **Ctrl+Alt+U** — expand the call under the caret (again to collapse). Also on
   the editor right-click menu.

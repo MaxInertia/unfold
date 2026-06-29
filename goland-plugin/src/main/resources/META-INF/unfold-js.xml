@@ -1,0 +1,9 @@
+<!--
+  Optional dependency config, loaded only when the JavaScript plugin is present
+  (see the optional <depends> for "JavaScript" in plugin.xml). TS/JS call
+  resolution is dispatched in code (PsiResolve -> TsCalleeResolver), so there are
+  no extra extensions to register here; this file's presence is what makes the
+  JavaScript dependency optional rather than required.
+-->
+<idea-plugin>
+</idea-plugin>
