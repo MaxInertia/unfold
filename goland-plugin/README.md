@@ -72,9 +72,9 @@ zip from `build/distributions/`.
 
 Open a Go or TypeScript/JavaScript file, put the caret on a call:
 
-- **Ctrl+Alt+U** — expand the call under the caret (again to collapse). Also on
+- **Ctrl+Alt+W** — expand the call under the caret (again to collapse). Also on
   the editor right-click menu.
-- **Ctrl+Alt+Down / Up** — focus into the expanded frame / back to the call site.
+- **Ctrl+Alt+PgDn / PgUp** — focus into the expanded frame / back to the call site.
 - **Ctrl+Alt+Backspace** — collapse the frame the caret is inside.
 
 Expanded code is rendered as a real embedded editor over the callee file, so it

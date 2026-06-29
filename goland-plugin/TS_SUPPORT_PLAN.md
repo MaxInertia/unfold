@@ -27,6 +27,30 @@ Still live-only to confirm (per the plan's risk list): interface-impl dispatch i
 TS, import indirection, and the rare detached-TS path. Angular templates remain
 out of scope (Phase 6).
 
+### Live verification (2026-06-29, `runIde`)
+
+Confirmed working in a live GoLand sandbox: caret on a TS call → callee body
+splices in below as a native TS editor frame (correct highlighting, header +
+`file:line` link, depth rail). Direct same-file function call verified.
+
+**Issue found — keybinding conflicts.** `Ctrl+Alt+U` is GoLand's built-in
+"Show Diagram" shortcut, which **wins for TS/JS files** (pressing it opens the UML
+diagram popup instead of expanding). Checked all four of the plugin's bindings
+against the default keymap + every bundled plugin:
+
+| Action | Old binding | Status |
+|---|---|---|
+| `unfold.ExpandCall` | `Ctrl+Alt+U` | conflicted (Show Diagram) — **rebound to `Ctrl+Alt+W`** |
+| `unfold.FocusFrame` | `Ctrl+Alt+Down` | conflicted (`NextOccurence`) — **rebound to `Ctrl+Alt+PgDn`** |
+| `unfold.FocusParent` | `Ctrl+Alt+Up` | conflicted (`PreviousOccurence`) — **rebound to `Ctrl+Alt+PgUp`** |
+| `unfold.CollapseFrame` | `Ctrl+Alt+Backspace` | free — unchanged |
+
+All replacements verified free across the platform default keymap and every
+bundled plugin (388 bindings). `Ctrl+Alt+W` confirmed live (expands a TS call, no
+diagram popup). Every Down/Up arrow pair was taken under all modifiers, so the
+focus actions moved to `Ctrl+Alt+PgDn`/`PgUp` — same Ctrl+Alt family, still
+down/up.
+
 ---
 
 ## Original plan

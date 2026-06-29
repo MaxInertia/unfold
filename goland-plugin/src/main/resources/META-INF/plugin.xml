@@ -29,6 +29,9 @@
                 arrow-const calls, with the same native-editor frame, nesting, and
                 folding as Go. Interface/abstract method calls show an implementations
                 chooser. Requires the JavaScript plugin (bundled in GoLand).</li>
+            <li>Default shortcuts chosen to avoid IDE conflicts: <b>Ctrl+Alt+W</b>
+                expand call, <b>Ctrl+Alt+PgDn</b>/<b>PgUp</b> focus into/out of a
+                frame, <b>Ctrl+Alt+Backspace</b> collapse.</li>
         </ul>
         <h3>0.1.2</h3>
         <ul>
@@ -53,20 +56,20 @@
                 class="dev.unfold.ide.ExpandCallAction"
                 text="Unfold: Expand Call"
                 description="Splice the callee body below the current line.">
-            <keyboard-shortcut keymap="$default" first-keystroke="control alt U"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt W"/>
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
         <action id="unfold.FocusFrame"
                 class="dev.unfold.ide.FocusFrameAction"
                 text="Unfold: Focus Frame"
                 description="Move focus down into the frame expanded on the current line.">
-            <keyboard-shortcut keymap="$default" first-keystroke="control alt DOWN"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt PAGE_DOWN"/>
         </action>
         <action id="unfold.FocusParent"
                 class="dev.unfold.ide.FocusParentAction"
                 text="Unfold: Focus Parent"
                 description="From inside a frame, move focus back to its call site.">
-            <keyboard-shortcut keymap="$default" first-keystroke="control alt UP"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt PAGE_UP"/>
         </action>
         <action id="unfold.CollapseFrame"
                 class="dev.unfold.ide.CollapseFrameAction"
