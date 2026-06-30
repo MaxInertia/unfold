@@ -325,9 +325,9 @@ session) — see the risk list at the end.
 4. **Keyboard navigation** (`FrameNavActions.kt`, `FrameKeys.kt`). Three
    context-gated actions (their `update()` disables them off-context, so the
    keystrokes fall through to the platform default when no frame is in play):
-   - **Focus Frame** `Ctrl+Alt+Down` — descend into the frame on the caret line,
+   - **Focus Frame** `Ctrl+Alt+PgDn` — descend into the frame on the caret line,
      caret on the body (`FrameKeys.BODY_OFFSET`, seeded by `EditorInlayRenderer`).
-   - **Focus Parent** `Ctrl+Alt+Up` — ascend to the call site
+   - **Focus Parent** `Ctrl+Alt+PgUp` — ascend to the call site
      (`FrameKeys.PARENT_EDITOR` / `CALL_LINE`, seeded in `ExpansionController.expand`).
    - **Collapse Frame** `Ctrl+Alt+Backspace` — collapse the current frame (focus
      hops to the parent first, since collapse disposes this editor).
@@ -340,7 +340,8 @@ session) — see the risk list at the end.
 - In-frame fold/unfold: body folds, frame re-fits, no flicker from the re-assert
   racing the daemon.
 - Deep (3+ level) nesting height propagation (carried over from Phase 4).
-- `Ctrl+Alt+Up/Down` really falling through to occurrence-nav when off-context.
+- `Ctrl+Alt+PgUp/PgDn` no-op when off-context (these are unbound by default, so
+  unlike the old `Ctrl+Alt+Up/Down` they don't trigger occurrence-nav).
 - Recursion-badge header layout on a real recursive Go call.
 
 ### Deferred

@@ -37,7 +37,7 @@ class ExpandCallAction : AnAction() {
 
         val callees = PsiResolve.calleesAtCaret(editor, project)
         if (callees.isEmpty()) {
-            HintManager.getInstance().showInformationHint(editor, "Unfold: no resolvable Go call at the caret")
+            HintManager.getInstance().showInformationHint(editor, "Unfold: no resolvable call at the caret")
             return
         }
 
