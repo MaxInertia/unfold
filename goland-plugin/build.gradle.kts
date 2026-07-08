@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.unfold"
-version = "0.1.2"
+version = "0.2.0"
 
 repositories {
     mavenCentral()
@@ -21,6 +21,7 @@ dependencies {
         // so the Go PSI + embedded-editor APIs match the IDE it'll run in.
         goland("2025.3.1.1")
         bundledPlugin("org.jetbrains.plugins.go") // Go PSI
+        bundledPlugin("JavaScript") // JS/TS PSI (bundled in GoLand)
     }
 }
 

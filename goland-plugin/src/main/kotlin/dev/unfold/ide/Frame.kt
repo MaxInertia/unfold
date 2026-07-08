@@ -2,6 +2,7 @@ package dev.unfold.ide
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
@@ -13,6 +14,13 @@ data class Callee(
     val project: Project,
     val sourceFile: VirtualFile?,
     val range: TextRange?,
+    /**
+     * The callee's source-language file type. The detached-snippet fallback uses
+     * it to highlight the copy correctly (the primary editor-over-file path
+     * derives highlighting from [sourceFile] directly). This is what keeps the
+     * renderer language-agnostic across Go, TypeScript, etc.
+     */
+    val fileType: FileType,
     /**
      * A stable identity for the *declaration* (file path + start offset), used
      * to detect recursion: a frame whose callee id already appears among its

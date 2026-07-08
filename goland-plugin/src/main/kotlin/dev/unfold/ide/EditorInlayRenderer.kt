@@ -1,6 +1,5 @@
 package dev.unfold.ide
 
-import com.goide.GoFileType
 import com.intellij.openapi.actionSystem.IdeActions
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
@@ -220,11 +219,12 @@ class EditorInlayRenderer {
         region?.isExpanded = false
     }
 
-    /** Fallback when the callee has no on-disk file: a detached Go snippet
-     *  (native font + lexer colors, but no semantic analysis, so no nesting). */
+    /** Fallback when the callee has no on-disk file: a detached snippet in the
+     *  callee's language (native font + lexer colors, but no semantic analysis,
+     *  so no nesting). */
     private fun renderDetached(host: Editor, anchorOffset: Int, callee: Callee, depth: Int, recursive: Boolean): Frame {
         val project = callee.project
-        val vf = LightVirtualFile("unfold-frame.go", GoFileType.INSTANCE, callee.text)
+        val vf = LightVirtualFile("unfold-frame.${callee.fileType.defaultExtension}", callee.fileType, callee.text)
         val document = EditorFactory.getInstance().createDocument(callee.text)
         val sub = EditorFactory.getInstance().createViewer(document, project) as EditorEx
         sub.setFile(vf)

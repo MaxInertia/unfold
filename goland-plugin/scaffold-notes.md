@@ -11,7 +11,7 @@ the point; the exact code is yours to iterate.
   classpath). If you'd rather use IDEA Ultimate, swap `goland(...)` for
   `idea("IU", ...)` and keep `bundledPlugin("org.jetbrains.plugins.go")`.
 - `META-INF/plugin.xml` — declares the plugin, `depends` on the Go plugin, and
-  registers the **Unfold: Expand Call** action (Ctrl+Alt+U + context menu).
+  registers the **Unfold: Expand Call** action (Ctrl+Alt+W + context menu).
 - `ExpandCallAction.kt` — Phase 0: toggles a block inlay below the caret line.
   `resolveCalleeText()` is the Phase 1 hook — make it resolve the real callee
   via PSI.
@@ -28,7 +28,7 @@ cd unfold-goland
 (You'll need the Gradle wrapper — run `gradle wrapper` once if `./gradlew`
 is missing, or open the folder in IntelliJ/GoLand and let it generate one.)
 
-Open a Go file, put the caret on a call, hit **Ctrl+Alt+U** → a block inlay
+Open a Go file, put the caret on a call, hit **Ctrl+Alt+W** → a block inlay
 appears below the line; hit it again to remove it.
 
 ## Then, in order
@@ -55,8 +55,8 @@ See `PLAN.md` for the full phased plan and the rendering deep-dive.
   embedded via `EditorEmbeddedComponentManager` over the callee file (native
   code: semantic colors, hover, go-to-def, folding). The early painted/JCEF
   experiments were removed in 0.1.2 once this proved out as the best approach.
-- **`Ctrl+Alt+U`** expands the call under the caret (again collapses);
-  `Ctrl+Alt+Down/Up` focus into/out of a frame, `Ctrl+Alt+Backspace` collapses.
+- **`Ctrl+Alt+W`** expands the call under the caret (again collapses);
+  `Ctrl+Alt+PgDn/PgUp` focus into/out of a frame, `Ctrl+Alt+Backspace` collapses.
 
 ### What still needs a *running* IDE (I can compile but not run the GUI here)
 1. **`EditorInlayRenderer` bounds/scroll/sizing** — it compiles and uses the
@@ -67,7 +67,7 @@ See `PLAN.md` for the full phased plan and the rendering deep-dive.
    range, instead of the current detached `LightVirtualFile` copy.
 3. **Recursion/nesting** — currently one frame at a time (toggle). Phase 4.
 4. **Per-call affordances** (underline/click like unfold) — Phase 2; today you
-   trigger via caret + Ctrl+Alt+U.
+   trigger via caret + Ctrl+Alt+W.
 
 ## Releasing to the JetBrains Marketplace
 

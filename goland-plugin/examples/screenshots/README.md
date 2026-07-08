@@ -15,8 +15,8 @@ implementations — so each plugin feature has an obvious shot.
 
 ## Recipes
 
-Put the caret on the named call and press **Ctrl+Alt+U** to expand (again to
-collapse). Frame controls: **Ctrl+Alt+Down/Up** focus into/out of a frame,
+Put the caret on the named call and press **Ctrl+Alt+W** to expand (again to
+collapse). Frame controls: **Ctrl+Alt+PgDn/PgUp** focus into/out of a frame,
 **Ctrl+Alt+Backspace** collapse.
 
 | Shot | Where | What it shows |
