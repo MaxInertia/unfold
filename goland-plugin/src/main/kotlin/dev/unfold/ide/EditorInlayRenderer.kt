@@ -53,15 +53,15 @@ class EditorInlayRenderer {
             isRightMarginShown = false
             additionalLinesCount = 0
             additionalColumnsCount = 0
-            // Folding stays ON so the user can collapse blocks *inside* the
-            // frame (Phase 5). The daemon's code-folding pass rebuilds fold
-            // regions from the language FoldingBuilder ~1s after the editor
-            // settles — discarding our boundary folds and sometimes
-            // auto-collapsing the function body (which would drop funcEnd to
-            // visual line 0 and shrink the frame to one line). Rather than
-            // disabling folding wholesale, we re-assert the boundary folds after
-            // every fold-processing pass via the FoldingListener installed
-            // below.
+            // Folding stays ON so the user can collapse blocks *inside* the frame
+            // (Phase 5). The daemon's code-folding pass rebuilds fold regions from
+            // the language FoldingBuilder ~1s after the editor settles — discarding
+            // our boundary folds and, per the user's "Collapse by default" settings,
+            // sometimes auto-collapsing the function *body*, which drops funcEnd to
+            // visual line 0 and shrinks the frame to one line. applyBoundaryFolds
+            // (below) re-asserts the boundaries after every pass AND, on a rebuild
+            // pass, re-expands the body — see its doc for how it tells a daemon
+            // rebuild from a user's own in-frame fold so the latter still sticks.
             isAutoCodeFoldingEnabled = true
         }
         sub.setVerticalScrollbarVisible(false)
@@ -79,16 +79,39 @@ class EditorInlayRenderer {
 
         /**
          * Keep only the function visible: collapse [0,funcStart] and
-         * [funcEnd,end], and force-expand any language region that encloses the
-         * whole function (else collapsing the body would shrink the frame). Safe
-         * to call repeatedly; idempotent on already-correct state.
+         * [funcEnd,end], force-expand any language region that encloses the whole
+         * function, and — on a daemon *rebuild* pass — re-expand the function body
+         * so the daemon's "Collapse by default" settings can't shrink the frame.
+         *
+         * The tricky part is not undoing the user's own in-frame folds (Phase 5).
+         * The daemon's fold pass rebuilds the whole region set from scratch, which
+         * discards our manually-added boundary folds; a user folding one inner
+         * block does not. So a missing/expanded boundary fold is a reliable signal
+         * that *this* pass was a rebuild — and a rebuild wipes any user folds too,
+         * so re-expanding the body then is safe. On an incremental pass (boundaries
+         * still intact) we leave inner regions alone, so a block the user collapsed
+         * stays collapsed. Safe to call repeatedly; idempotent on correct state.
          */
         fun applyBoundaryFolds() {
             if (reasserting) return
             reasserting = true
             try {
-                sub.foldingModel.runBatchFoldingOperation {
-                    val fm = sub.foldingModel
+                val fm = sub.foldingModel
+                // A rebuild discards our boundary folds; find them by exact bounds.
+                val leading = fm.allFoldRegions.firstOrNull { it.startOffset == 0 && it.endOffset == funcStart }
+                val trailing = fm.allFoldRegions.firstOrNull { it.startOffset == funcEnd && it.endOffset == document.textLength }
+                val rebuilt = leading == null || trailing == null || leading.isExpanded || trailing.isExpanded
+                fm.runBatchFoldingOperation {
+                    if (rebuilt) {
+                        // Fresh region set — undo any auto-collapse of the body
+                        // (every region within the function range), no user folds
+                        // to preserve.
+                        for (r in fm.allFoldRegions) {
+                            if (r.startOffset >= funcStart && r.endOffset <= funcEnd && !r.isExpanded) {
+                                r.isExpanded = true
+                            }
+                        }
+                    }
                     // A region spanning the whole function body would hide it
                     // when collapsed — keep those open.
                     for (r in fm.allFoldRegions) {
