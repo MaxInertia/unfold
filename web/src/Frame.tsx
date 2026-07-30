@@ -170,6 +170,12 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
   }
 
   function onSourceMouseMove(e: React.MouseEvent) {
+    // Child frames render inside this frame's `.frame-source`, so a mousemove
+    // over a nested frame bubbles up here too. Left unchecked, every ancestor
+    // frame would recompute a type lookup against *its own* source/id and pop a
+    // card at the same point — with the outermost (first-level) card painting on
+    // top, masking the correct one. Stop at the innermost frame under the cursor.
+    e.stopPropagation();
     if (selection) return; // don't fight a line selection
     const off = offsetAtPoint(e.clientX, e.clientY);
     if (off == null) {
