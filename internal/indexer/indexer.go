@@ -538,8 +538,21 @@ func (i *Indexer) dropRelayedBindings() {
 	}
 	var stage []entry
 	for n, b := range i.bindings {
-		if isStub(n) && calledBy[siteKey{b.Site, b.Key}] {
-			continue // somebody calls this stub; they own the edge
+		if isStub(n) {
+			// A generated client method is the *ability* to call an RPC, not
+			// a call. Repos that generate their clients in-tree have one such
+			// method per RPC on the platform, and counting them made the
+			// outbound surface a catalogue of everything callable rather than
+			// what this service calls. The edge belongs to whoever calls the
+			// stub; if nobody does, there is no edge.
+			if i.isGeneratedClient(b.Site) {
+				continue
+			}
+			// A hand-written direct Invoke that something else calls is a
+			// relay for the same reason.
+			if calledBy[siteKey{b.Site, b.Key}] {
+				continue
+			}
 		}
 		stage = append(stage, entry{b, at(i.bindingCallee, n)})
 	}
@@ -876,6 +889,37 @@ func (i *Indexer) implementationByName(name string) (TargetID, []TargetID) {
 		return any[0], any
 	}
 	return "", any
+}
+
+// isGeneratedClient reports whether a function is a method on a generated
+// gRPC client.
+//
+// protoc-gen-go-grpc emits, per service, a `<Service>Client` interface and an
+// unexported struct implementing it with one method per RPC. Testing the
+// implements relation makes this structural rather than a guess about naming,
+// and it is what separates "this repo can call that RPC" from "this repo does".
+func (i *Indexer) isGeneratedClient(target TargetID) bool {
+	fi := i.funcs[target]
+	if fi == nil {
+		return false
+	}
+	recv, recvPkg := receiverParts(fi)
+	if recv == "" {
+		return false
+	}
+	for key, impls := range i.interfaceImpls {
+		if !strings.HasSuffix(key, "Client") {
+			continue
+		}
+		for _, t := range impls {
+			if n, p := namedTypeParts(t); n == recv && p == recvPkg {
+				return true
+			}
+		}
+	}
+	// No such interface indexed (hand-rolled client, or generated code whose
+	// interface didn't load) — fall back to the naming codegen guarantees.
+	return strings.HasSuffix(recv, "Client")
 }
 
 // isDouble reports whether a receiver type name looks like a test double

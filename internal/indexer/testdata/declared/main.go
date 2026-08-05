@@ -64,5 +64,6 @@ func main() {
 	(&Server{}).fetchConversation()
 	_ = (&Server{}).listAccounts(context.Background())
 	(&Server{}).wireUp()
+	_ = (&Server{}).chargeCustomer(context.Background())
 	_ = (&Server{}).refresh(context.Background())
 }

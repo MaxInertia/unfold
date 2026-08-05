@@ -574,3 +574,37 @@ func TestFanOutHelperIsNotAClient(t *testing.T) {
 		t.Error("the unambiguous SDK call should still be an outbound edge")
 	}
 }
+
+// Generating clients in-tree gives a repo one stub method per RPC on the whole
+// platform. Those are the *ability* to call, not calls — counting them turned
+// the outbound surface into a catalogue of everything callable.
+func TestGeneratedClientStubsAreNotOutboundEdges(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	keys := map[string]string{} // key -> site
+	for _, b := range sv.Outbound {
+		if b.Kind == "grpc.method" {
+			keys[b.Key] = b.SiteTitle
+		}
+	}
+
+	// The one RPC the service actually calls, attributed to the caller.
+	if site, ok := keys["billing.v1.BillingService/Charge"]; !ok {
+		t.Errorf("the RPC the service calls is missing; got %v", keys)
+	} else if site != "Server.chargeCustomer" {
+		t.Errorf("Charge should belong to its caller, got %q", site)
+	}
+
+	// Stubs nothing calls contribute nothing, however many exist.
+	for _, uncalled := range []string{
+		"billing.v1.BillingService/Refund",
+		"search.v1.SearchService/Query",
+		"inventory.v1.InventoryService/Reserve",
+	} {
+		if site, ok := keys[uncalled]; ok {
+			t.Errorf("%s is only a generated stub (at %q) — the service never calls it", uncalled, site)
+		}
+	}
+}

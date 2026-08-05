@@ -109,6 +109,12 @@ The service view is a two-sided card, not a graph:
     hops, a wrapper is 1, a second wrapper 2.
   - **Ownership.** Only this module's own call sites produce bindings; a
     dependency's internal calls aren't your service's surface.
+  - **Capability isn't usage.** A generated client method *is* an `Invoke`
+    with a literal, so a repo that generates its clients in-tree has one per
+    RPC on the whole platform. Those are the ability to call, not calls —
+    recognized structurally (the receiver implements a generated
+    `<Service>Client` interface) and excluded. The edge belongs to whoever
+    calls the stub; if nobody does, there is no edge.
   - **Attribution.** An edge found down a chain belongs to the innermost
     qualifying call site, not to every caller above it.
 
