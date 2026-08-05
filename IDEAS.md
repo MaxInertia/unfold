@@ -108,3 +108,95 @@ that still matter are tracked inline.
 - Palette: shipped as a fixed 6-color cycle (repeats at depth 7). Revisit if deep traces make collisions confusing; needs a dedicated dark-theme pair if contrast complaints show up.
 - Hover-to-highlight-enclosing-chain (variation 3 from the brainstorm) layers cleanly on top of rails — same depth plumbing. Deferred.
 - A modal presentation for settings as itself a setting (`settingsUi: "panel" | "modal"`) — deferred until someone wants it.
+
+---
+
+## Platform unfold — one repo to the whole system (2026-08-05)
+
+Extend unfolding past the boundary of a single repository, so a reading session follows execution *and information* across services, brokers, databases, and observability tooling. Have a Pub/Sub subscriber? See the topic, where it's published, and every other consumer. Call another microservice you own? Unfold into the handler in that service. A `vstore`-tagged struct field? Jump to that model's page, and to BigQuery where a secondary index exists. Same thesis as today — collapse the distance between pieces of information you'd otherwise hunt down — at platform scale.
+
+Full design record in the vault: `docs/2026-08-05-unfold-platform-graph.md`.
+
+### Sketch
+
+**Two node types.** The load-bearing simplification: every node is either a **`Frame`** (source you read linearly — what exists today) or a **`Resource`** (an identity in another system, carrying deep links out plus the code sites that touch it).
+
+```go
+type Resource struct {
+    Kind     string  // pubsub.topic | vstore.model | bigquery.table | log.site | service | http.route
+    Key      string  // "orders-v1" | "billing.Invoice" | "acme:analytics.invoices"
+    Links    []Link  // deep links out — the leaf exits
+    Emitters []Site  // code that writes / publishes / queries it
+    Handlers []Site  // code that reads / subscribes / serves it
+}
+```
+
+Topics, routes, vstore models, BQ tables and log sites are all this one type with different *recognizers*. A topic isn't source, so it can't be a `Frame` — expanding a cross-boundary call yields a **junction card** (resource + config + endpoints) that you expand *through* into the next code frame. That's also honest UI: it marks where execution left the process.
+
+**Leaf nodes are hubs.** Nodes you can't traverse past (open BigQuery yourself) should still exist — they're dead ends in only one direction. Traversing *inward* gives every model, writer and query site across the platform, which is usually the question you actually had.
+
+**Link-out before inline-preview.** Governing constraint: connect all the things without reimplementing all the things. Every integration has two depths — link-out (a URL template, near-free) and inline preview (real work). Ship link-out everywhere first. unfold stays an index of identities plus a link graph; it never becomes a log viewer or a DB browser. (This is why the log story starts as a pre-filled Cloud Logging query URL, not a live query panel.)
+
+**1. Federating engine.** `model.Engine` is one project, one index. Platform mode needs N engines behind one, `TargetID` namespaced by repo. `Frame`, `Usages` and diff mode ride along unchanged. This is the plumbing everything else depends on.
+
+**2. Key-joined edges.** A publish and its subscriber share no AST edge — they share a key. Engines emit bindings alongside calls (`emit pubsub.topic:orders-v1 @ billing/publish.go:42`, `serve http:POST /v1/orders @ orders/routes.go:31`) and a platform resolver joins emitters to handlers. One mechanism, several key namespaces, covering Pub/Sub, HTTP and gRPC.
+
+**3. `KindFanout` already fits.** `KindFanout` + `Receivers` (one site reaches many targets, all of which run, each with `Provenance` and `Confidence`) was built for RxJS subscribers and is exactly the shape of a topic with N subscribers. Publish → subscribers needs no new rendering concept.
+
+**4. Struct tags ride on `TypeInfo`.** `vstore` tags are a *type-level* recognizer, not a call edge. `TypeInfo` already resolves an identifier to its struct definition, so it grows a "linked resources" section on a card that already renders.
+
+**Where the metadata comes from.** Keep the manifest thin — a hand-maintained platform map rots in a quarter. Tier 1, derived from code: route tables are already in the source (`mux.HandleFunc`, gRPC registration, `@Controller`), topic names are in the code at both ends, and *which* pubsub tech is a recognizer plugin auto-detected from `go.mod` / `package.json` (same gating the TS engine already does for Angular by type symbol + origin module). Tier 2, derived from infra-as-code: Terraform *is* the topology — `google_pubsub_topic`, `google_pubsub_subscription` push endpoints, Cloud Run/GKE services, DLQs, project id. Tier 3, hand-declared, only what neither knows: repo list, terraform dir, logging backend + project, occasional env-var→service mappings, and per-org URL templates for resource deep links.
+
+**Cross-service calls.** Through a Go SDK — better than it looks: `go/types` already resolves `c.CreateOrder(...)` into `ordersclient.(*Client).CreateOrder`, and unfold can unfold that body today if the SDK is in the module graph (interface-held clients are covered by `KindInterface`/`Candidates`). The gap is a single hop from the transport call inside the SDK method to the remote handler — usually *exact*, since an SDK and its server typically share a route constant or generated stub. For raw HTTP, invert the problem: don't resolve the hostname, join on **method + path literal** against the global route table and fall back to host resolution only on ambiguity.
+
+**The honesty problem.** unfold's credibility is that resolution is deterministic — `go/types` doesn't guess. Platform edges often aren't literal (topic names from constants, env vars, Terraform). So resolution is tiered and *visible*: **exact** (literal↔literal or shared constant/stub), **declared** (manifest or Terraform), **inferred** (heuristic). `Confidence` on `Receiver` stops being decoration. Derived always beats declared, and the manifest is validated against the index — declare a service whose routes nobody registers and it's flagged stale rather than silently drawing a wrong edge.
+
+**Zoom levels — platform → service → frame.** Zooming out to "show me this microservice as a whole" (inbound API surface, outgoing calls, who it talks to, a link to the pods in GCP) is mostly a *byproduct* of the recognizer work: once bindings like `serve http:POST /v1/orders` are extracted per repo, a service node is a `GROUP BY repo` over data already in the index — you query the same graph at a coarser granularity rather than building a second thing. The pods link is `Resource{Kind: "service"}` with `Links`.
+
+**The ladder is reachability, not containment.** The tempting ladder is function ⊂ file ⊂ package ⊂ service ⊂ platform — but the file rung should be rejected. The file is the unit unfold exists to dissolve (execution doesn't respect file boundaries; that's the founding premise), and a whole-file view is already reachable via `Frame("file:<path>")`, so it can stay a *lateral* move rather than spend a rung. unfold's strengths — unfolding down, the callers tree, re-rooting — are all reachability, so:
+
+```
+L2   frame        a function + its unfolded callees      (today)
+L1.5 entrypoints  which routes/subs/crons reach this fn  (new)
+L1   service      inbound surface + outbound deps
+L0   platform     services and their edges
+```
+
+**L1.5 is the valuable rung.** Deep in `validateCoupon`, "it's in coupon.go with 8 other functions" is worth nearly nothing — already visible. "It's reached by `POST /v1/orders` and the nightly-reprice subscription" is the orienting fact and the question you actually had. Cheap, too: the existing callers traversal with a different termination rule (stop at binding sites, not at no-more-callers). Package sits *off* the ladder — a grouping/filter inside L1, not a rung.
+
+**The anchor.** Carry the frame you zoomed out from as an anchor through every level: at L1.5 the entrypoints reaching it are marked, at L1 the inbound entries reaching it are highlighted and the rest dimmed, at L0 its service is lit. Zoom out and back in is lossless because the anchor never left — that's the mechanism behind "preserve expansion state and location". It also dissolves the L1 legibility problem: you aren't reading 80 routes, you're seeing the 2 that concern you with 78 as context.
+
+**The trail is a zoom stack, not a breadcrumb.** Standard breadcrumbs truncate when you click up — click `orders` and `validateCoupon` vanishes. Wrong here, because *the trailing entries are the anchor*: L1 is only useful because it highlights the routes reaching `validateCoupon`, and truncating deletes what makes the level you just zoomed to meaningful. So keep every entry and mark the active level — above solid (ancestors), current marked, below ghosted (clicking returns you there exactly, since nothing was destroyed). Rule: zooming out preserves the tail; descending a *different* branch rewrites it from that slot down. A consequence: **L1.5 is the picker for an unfilled trail slot** — `platform › orders › ⋯ › validateCoupon`, where choosing an entrypoint fills the `⋯`.
+
+**History: vertical vs lateral.** Anchors get a history stack so lateral moves are reversible (back from a re-root, forward to it again). Keep the axes separate — *the trail handles vertical, history handles lateral*: zooming isn't destructive once the tail is preserved, so clicking down the trail is already the undo, while history earns its keep on moves that genuinely replace state (re-root through a caller, impl switch). Back/forward still undoes zooms as a safety net, just isn't the primary vertical affordance, or two "go back" gestures disagree. Likely near-free: expansion state already serializes into the URL hash, so if navigations `pushState` and expansions `replaceState`, browser back/forward *is* the anchor history and every entry is already a shareable URL. Entries must be whole view-states, not just the anchor.
+
+Design rules for it: (a) **a zoom level, not a tab** — clicking a route in the map makes it your root frame, and any frame can surface its enclosing service; bidirectional or don't bother, otherwise it's a diagram you look at once instead of an entry point into the core loop. (b) The value over an architecture diagram is that this is a *projection of the index* — regenerated each load, can't drift, every node clickable into source, nobody maintains it (unlike Backstage-style catalogs typed into YAML). (c) **L1 probably shouldn't be a graph** — 80 routes and 30 outbound deps force-directed is a hairball; structure it as inbound-left / service-middle / outbound-right, grouped by domain. Save node-link rendering for L0 where the node count is the number of services.
+
+**Smallest slice worth building.** Two candidates:
+
+- **A — Pub/Sub, literal topic strings only,** across a workspace manifest of local checkouts. No cloud credentials (the topic name is in the code at both ends), reuses fan-out rendering end-to-end, forces the federating-engine plumbing every other edge type needs. GCP metadata (topic exists? DLQ? retention?) is an enrichment layer on the junction card later.
+- **B — the L1 service view for a single repo.** Notably this does *not* need the federating engine: index one service and its inbound surface + outbound calls render immediately, with unresolved outbound edges degrading gracefully to named-but-not-traversable. It exercises binding extraction — the foundation everything else sits on — without committing to multi-repo plumbing, and produces something useful on day one.
+
+Leaning **B first, then A**: cheaper, and it de-risks the recognizer layer before the expensive plumbing lands.
+
+### Decided (2026-08-05)
+
+- **Zoom-out gesture:** build *both* a frame-header control and a breadcrumb, try them, keep one. Keybinding regardless. (The breadcrumb has a structural edge: it *is* the zoom stack and the natural home for the anchor — `platform › orders › POST /v1/orders › validateCoupon` — one widget doing both jobs.)
+- **Web view only** for now; extending to the GoLand plugin is a later decision, after this works well in the web UI.
+- **Zooming out preserves expansion state and location**, via the anchor.
+- **No file rung** in the ladder — reachability, not containment.
+- **Filtering, not domain clustering,** at L0 — unless `microservice.yaml` turns out to carry a team/domain field, in which case clustering is *declared* rather than inferred and becomes free instead of arbitrary. Check before ruling it out.
+- **Service naming:** most microservices here declare it in a `microservice.yaml` at the repo root — use that as canonical, repo name as fallback. Read a real one before designing this or the clustering question; it likely carries team ownership, which would settle L0 clustering as *declared* (the only version worth having).
+- **The trail keeps every entry**, styling the active level rather than truncating on zoom-out. Descending a different branch rewrites from that slot down.
+- **Anchor history with back/forward** so lateral moves are reversible; trail = vertical, history = lateral; entries are whole view-states.
+
+### Open questions
+
+- Federating engine: index N checkouts in-process, or one engine per repo behind a coordinator? The latter scales and matches watch mode's per-repo reload, but adds a transport.
+- `TargetID` namespacing — repo alias from the manifest vs a content-addressed project id. Bookmarks and URL-hash sharing both need it stable (same fragility as the bookmarking entry above).
+- Terraform: parse HCL directly, or consume `terraform show -json` / state? State is accurate but needs credentials and drifts from the branch you're reading.
+- Indexing cost across N repos, and whether watch mode stays viable over a whole workspace.
+- L0 at real scale — how many services before the node-link view needs filtering ("only edges touching X")? Filtering is the chosen mechanism; the threshold that forces it is unknown.
+- L1.5 termination: an entrypoint search that finds nothing (a helper reachable only from other helpers, or through a `ref` edge that breaks the chain — see the usages limitations in the README) needs an honest empty state, not a blank panel.
+- Trail rendering for a *fan-in* anchor: if three routes reach `validateCoupon`, the route slot has no single answer until you pick one. Render the unfilled slot as `⋯`, as "3 entrypoints", or keep the trail short until you choose?
+- Does `pushState` on every zoom make browser back tediously granular? May need rapid zoom transitions coalesced into one history entry.

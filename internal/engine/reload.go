@@ -115,3 +115,26 @@ func (r *Reloadable) Usages(id model.TargetID) ([]model.Usage, error) {
 	defer r.mu.RUnlock()
 	return r.cur.Usages(id)
 }
+
+// ServiceView forwards to the current engine when it has recognizers. The
+// wrapper always satisfies model.PlatformEngine (method sets are static), so
+// an engine without them is reported at call time.
+func (r *Reloadable) ServiceView(anchor model.TargetID) (*model.ServiceView, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	pe, ok := r.cur.(model.PlatformEngine)
+	if !ok {
+		return nil, model.ErrNoPlatformView
+	}
+	return pe.ServiceView(anchor)
+}
+
+// PlatformAvailable reports whether the engine currently held can serve a
+// service view, so /api/health advertises the zoom-out affordance honestly
+// even though the wrapper's own method set can't.
+func (r *Reloadable) PlatformAvailable() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.cur.(model.PlatformEngine)
+	return ok
+}

@@ -70,6 +70,39 @@ export interface Usage {
   excerptLine: number; // 1-based file line of excerpt's first line
 }
 
+// ----- platform / zoom-out (mirrors model.Binding and model.ServiceView) -----
+
+export type BindingRole = "inbound" | "outbound";
+export type BindingConfidence = "exact" | "declared" | "inferred";
+
+// One place the code touches something outside itself, keyed by a string the
+// other end of the edge also names. Within a single repo only one end is
+// visible, so an outbound binding with no matching inbound one is normal.
+export interface Binding {
+  role: BindingRole;
+  kind: string; // "http.route" | "pubsub.topic" | "pubsub.subscription" | "http.call"
+  key: string; // the join key, e.g. "POST /v1/orders"
+  detail?: string; // provenance, e.g. "ServeMux.HandleFunc"
+  target?: TargetID; // the handler, when it's an indexed function
+  targetTitle?: string;
+  site: TargetID; // the function containing the registration/call
+  siteTitle?: string;
+  file: string;
+  line: number;
+  confidence?: BindingConfidence;
+  reachesAnchor?: boolean; // this entrypoint transitively reaches the anchor
+}
+
+export interface ServiceView {
+  name: string;
+  module?: string;
+  root?: string;
+  anchor?: TargetID; // the frame zoomed out from, carried up as the anchor
+  anchorTitle?: string;
+  inbound: Binding[];
+  outbound: Binding[];
+}
+
 export interface TypeInfo {
   kind: string;
   name: string;

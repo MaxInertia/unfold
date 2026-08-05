@@ -57,6 +57,77 @@ Three usage kinds:
   dispatch to it within the loaded package set, including sites that only
   ever dispatch to a different implementation at runtime.
 
+## Zooming out — the service view
+
+Unfolding follows one execution path downward. **Zoom-out** goes the other
+way on a different axis: it shows the service as a whole — everything that
+enters it, and everything it reaches out to.
+
+Press **alt+↑** (or **▴ service** in the root frame header, or the service
+name in the trail above the frame) to zoom out; **alt+↓**, or the frame name
+in the trail, comes back. Nothing is unloaded, so zooming is lossless —
+your expansion state is exactly as you left it.
+
+The service view is a two-sided card, not a graph:
+
+- **inbound** — where work enters: HTTP routes registered with `net/http`,
+  Pub/Sub subscriptions. Click one to open its handler as a new root frame.
+- **outbound** — where the service reaches out: `http.Get`/`Post` calls with a
+  statically known URL, Pub/Sub topics it names. These have no in-repo target
+  (the far end lives in another service) so they open their call site.
+
+### The anchor
+
+The frame you zoomed out from is carried up as the **anchor**. Every inbound
+entry that transitively reaches it is highlighted and badged `reaches anchor`;
+the rest dim. That's what keeps a large surface readable — with eighty routes
+you're not reading eighty, you're seeing the two that concern you with the
+rest as context. The trail names the count (`unfold › 3 entrypoints ›
+validateCoupon`) because until you pick one, the entrypoint slot genuinely has
+three answers.
+
+Reachability is computed the same way the callers tree walks: backwards over
+call and interface edges. Value references aren't followed — a function passed
+as a value has no call site, so a chain through one isn't an execution path.
+
+### Bindings and confidence
+
+Inbound and outbound entries are **bindings**: a `kind` and a `key` extracted
+by a recognizer. A publish and its subscriber share no AST edge — they share a
+*string* — so the key is what will eventually join them once more than one repo
+is indexed. Today only one end of a cross-service edge is visible, which is
+why an outbound `GET /v1/orders` with nothing serving it is expected, not an
+error.
+
+Because platform edges often aren't literal, each binding records how it was
+resolved, and anything short of `exact` is badged:
+
+- **exact** — a literal (or constant-folded) string on both sides.
+- **inferred** — the key is literal but something about it is a guess. A
+  `client.Topic("orders-v1")` handle is marked this way: the topic name is
+  certain, whether the code publishes to it is not.
+- **declared** — asserted by a manifest or infra-as-code. Not yet produced.
+
+Recognizers currently cover `net/http` route registration (including Go 1.22
+`"POST /path"` patterns, host-qualified patterns, and handlers wrapped in
+`http.HandlerFunc`), GCP Pub/Sub topic and subscription handles, and outbound
+`net/http` client calls. A URL assembled at runtime is skipped rather than
+guessed. Adding a router or broker means adding a rule in
+`internal/platform` — recognizers see a neutral `Call` (package, receiver,
+function, constant-folded args), never an AST.
+
+### Limitations
+
+- **Single repo.** The service is the module you indexed, named after its
+  directory. Joining outbound keys to the services that serve them needs a
+  multi-repo index, which doesn't exist yet.
+- **Go only.** The TypeScript engine has no recognizers, so the zoom control
+  is hidden when it's loaded.
+- **Only `net/http`.** Third-party routers (chi, gin, echo) aren't recognized
+  yet, so a service using one shows an empty inbound surface.
+- **Handlers must be named functions.** A route registered with an inline
+  closure has no target to open, so it falls back to the registration site.
+
 ## Diff mode
 
 Highlight what your branch changed, right where you're reading it. There's no

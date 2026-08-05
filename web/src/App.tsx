@@ -8,7 +8,10 @@ import { SettingsPanel } from "./SettingsPanel";
 import { useSettings } from "./settings";
 import { NotesList } from "./NotesUI";
 import { loadNotes } from "./notes";
-import { fetchSymbol, search } from "./api";
+import { ServiceView } from "./ServiceView";
+import { ZoomTrail } from "./ZoomTrail";
+import { zoomIn, zoomOut, type ZoomLevel } from "./zoom";
+import { fetchServiceView, fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
 import { ReloadProvider, useReloadRevision } from "./reload";
@@ -43,6 +46,12 @@ function AppShell() {
   const [reindexed, setReindexed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settings = useSettings();
+  // Zoom is a level, not a tab: the frame tree stays mounted in the view
+  // store either way, so switching levels never costs expansion state.
+  const [zoom, setZoom] = useState<ZoomLevel>("frame");
+  const [platform, setPlatform] = useState(false);
+  const [serviceName, setServiceName] = useState<string | null>(null);
+  const [entrypointCount, setEntrypointCount] = useState<number | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
@@ -110,10 +119,54 @@ function AppShell() {
       .then((h) => {
         setTarget(h.target ?? null);
         setBookmarkProject(h.target ?? null); // namespace bookmarks per project
+        setPlatform(!!h.platform);
       })
       .catch(() => {});
     loadNotes();
   }, []);
+
+  // The trail needs the service name before you've zoomed anywhere, and the
+  // entrypoint count for the unfilled route slot. Both come from the same
+  // request the service level uses, so this warms its data too.
+  useEffect(() => {
+    if (!platform) return;
+    let alive = true;
+    fetchServiceView(rootFrame?.id ?? null)
+      .then((v) => {
+        if (!alive) return;
+        setServiceName(v.name);
+        setEntrypointCount(
+          v.anchor ? v.inbound.filter((b) => b.reachesAnchor).length : null,
+        );
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [platform, rootFrame?.id, revision]);
+
+  // Keyboard zoom. Alt+↑/↓ works at any level and doesn't collide with the
+  // editor-style bindings the frame view already uses.
+  useEffect(() => {
+    if (!platform) return;
+    function onKey(e: KeyboardEvent) {
+      if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setZoom(zoomOut);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setZoom(zoomIn);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [platform]);
+
+  // Loading a different symbol is a descent, so it lands you in the code.
+  useEffect(() => {
+    setZoom("frame");
+  }, [symbol]);
 
   return (
     <div
@@ -227,17 +280,41 @@ function AppShell() {
         )}
         <div className="app-content">
           <SymbolPicker onPick={(s) => store.setSymbol(s)} />
+          {platform && (
+            <ZoomTrail
+              level={zoom}
+              serviceName={serviceName}
+              anchorTitle={rootFrame ? (rootFrame.title ?? rootFrame.id) : null}
+              entrypointCount={entrypointCount}
+              onZoom={setZoom}
+            />
+          )}
           {error && <div className="app-error">{error}</div>}
           {loading && <div className="app-loading">loading…</div>}
-          {rootFrame && (
-            <div className="app-root-frame">
-              {/* Remount the whole frame tree on reindex so every expanded
-                  child refetches; the expansion intent persists in the store. */}
-              <Frame key={revision} frame={rootFrame} path={[]} />
-              <StickyHeaders />
-            </div>
+          {zoom === "service" ? (
+            <ServiceView
+              anchor={rootFrame?.id ?? null}
+              onOpen={(id) => {
+                store.setSymbol(id);
+                setZoom("frame");
+              }}
+            />
+          ) : (
+            rootFrame && (
+              <div className="app-root-frame">
+                {/* Remount the whole frame tree on reindex so every expanded
+                    child refetches; the expansion intent persists in the store. */}
+                <Frame
+                  key={revision}
+                  frame={rootFrame}
+                  path={[]}
+                  onZoomOut={platform ? () => setZoom("service") : undefined}
+                />
+                <StickyHeaders />
+              </div>
+            )
           )}
-          {!rootFrame && !loading && !error && (
+          {zoom === "frame" && !rootFrame && !loading && !error && (
             <p className="app-hint">
               Search for a function above and select one to start. Click any
               underlined call site to expand its body inline; interface calls

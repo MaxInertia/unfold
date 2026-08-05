@@ -3,6 +3,7 @@ package server
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -71,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/typeinfo", s.handleTypeInfo)
 	mux.HandleFunc("/api/usages", s.handleUsages)
+	mux.HandleFunc("/api/service", s.handleService)
 	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
@@ -177,6 +179,30 @@ func (s *Server) handleUsages(w http.ResponseWriter, r *http.Request) {
 		usages = []model.Usage{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"usages": usages})
+}
+
+// GET /api/service[?anchor=<targetId>] — the service-level (zoomed-out) view:
+// what enters this service and what it reaches out to.
+//
+// The optional anchor is the frame the user zoomed out from; bindings whose
+// handler transitively reaches it come back flagged, which is what lets the
+// view highlight the two routes that concern you out of eighty.
+func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
+	pe, ok := s.engine.(model.PlatformEngine)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "platform view is not available for this engine")
+		return
+	}
+	view, err := pe.ServiceView(model.TargetID(r.URL.Query().Get("anchor")))
+	if err != nil {
+		if errors.Is(err, model.ErrNoPlatformView) {
+			writeError(w, http.StatusNotImplemented, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // /api/notes — list (GET), upsert (POST a Note; empty id creates), delete
@@ -337,9 +363,10 @@ func openInEditor(file, line string) error {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"target": s.target,
-		"diff":   s.differ != nil,
+		"status":   "ok",
+		"target":   s.target,
+		"diff":     s.differ != nil,
+		"platform": model.HasPlatformView(s.engine),
 	})
 }
 

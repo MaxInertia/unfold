@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/MaxInertia/unfold/internal/indexer"
+	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/notes"
 )
 
@@ -35,6 +36,52 @@ func TestEndpoints(t *testing.T) {
 		}
 		if resp["diff"] != false {
 			t.Errorf("diff: got %v want false (no base engine in this test)", resp["diff"])
+		}
+		// The Go engine has recognizers, so the zoom-out affordance is on.
+		if resp["platform"] != true {
+			t.Errorf("platform: got %v want true", resp["platform"])
+		}
+	})
+
+	t.Run("service", func(t *testing.T) {
+		var view model.ServiceView
+		getJSON(t, ts.URL+"/api/service", http.StatusOK, &view)
+		if view.Name != "unfold" {
+			t.Errorf("service name: got %q want unfold", view.Name)
+		}
+		if len(view.Inbound) == 0 {
+			t.Fatal("expected unfold's own HTTP routes as its inbound surface")
+		}
+		var found bool
+		for _, b := range view.Inbound {
+			if b.Key == "/api/health" {
+				found = true
+				if b.Target == "" {
+					t.Error("/api/health binding should name its handler")
+				}
+			}
+		}
+		if !found {
+			t.Errorf("missing /api/health among %d inbound bindings", len(view.Inbound))
+		}
+	})
+
+	t.Run("service-with-anchor", func(t *testing.T) {
+		// handleHealth is the /api/health handler, so anchoring on it must
+		// mark that route and leave unrelated ones unmarked.
+		var anchored model.ServiceView
+		id := url.QueryEscape("(*github.com/MaxInertia/unfold/internal/server.Server).handleHealth")
+		getJSON(t, ts.URL+"/api/service?anchor="+id, http.StatusOK, &anchored)
+		if anchored.Anchor == "" {
+			t.Fatal("anchor was not echoed back; the target id may have changed")
+		}
+		for _, b := range anchored.Inbound {
+			if b.Key == "/api/health" && !b.ReachesAnchor {
+				t.Error("/api/health should be marked as reaching handleHealth")
+			}
+			if b.Key == "/api/search" && b.ReachesAnchor {
+				t.Error("/api/search should not reach handleHealth")
+			}
 		}
 	})
 

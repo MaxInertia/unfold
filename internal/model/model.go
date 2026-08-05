@@ -5,6 +5,8 @@
 // to know which language a frame came from.
 package model
 
+import "errors"
+
 // TargetID uniquely identifies a function/method within one loaded
 // project. Its internal format is engine-specific and opaque to the
 // server and frontend (Go uses *types.Func.FullName; the TS engine uses
@@ -176,6 +178,121 @@ type Usage struct {
 	// (so the usage line within the excerpt is Line - ExcerptLine).
 	Excerpt     string `json:"excerpt"`
 	ExcerptLine int    `json:"excerptLine"`
+}
+
+// BindingRole says which side of a cross-boundary edge a code site sits on.
+type BindingRole string
+
+const (
+	// RoleInbound is a site where work enters this service: an HTTP route
+	// registration, a subscription, a cron registration.
+	RoleInbound BindingRole = "inbound"
+	// RoleOutbound is a site where this service reaches out: a call to
+	// another service, a publish to a topic, a query against a datastore.
+	RoleOutbound BindingRole = "outbound"
+)
+
+// BindingConfidence records how a binding's key was resolved. The whole
+// point of the tiering is that platform edges — unlike call edges resolved
+// by go/types — are frequently not literal, so the UI must be able to say
+// which kind of claim it is making.
+type BindingConfidence string
+
+const (
+	// ConfExact is a literal ↔ literal match (or a folded constant).
+	ConfExact BindingConfidence = "exact"
+	// ConfDeclared comes from a manifest or infra-as-code declaration.
+	ConfDeclared BindingConfidence = "declared"
+	// ConfInferred is heuristic — the key is right but the role or the
+	// endpoint is a guess.
+	ConfInferred BindingConfidence = "inferred"
+)
+
+// Binding is one place the code touches something outside itself, keyed by a
+// string that the other side of the edge also names. Two bindings with the
+// same Kind and Key are the two ends of one platform edge, which is how a
+// publish gets joined to its subscriber (they share no AST edge, only a key).
+//
+// Within a single repo only one end is visible, so an outbound Binding whose
+// key nothing here serves is expected, not an error.
+type Binding struct {
+	Role BindingRole `json:"role"`
+	// Kind namespaces the key: "http.route", "pubsub.topic",
+	// "pubsub.subscription", "http.call".
+	Kind string `json:"kind"`
+	// Key is the join key — "POST /v1/orders", "orders-v1".
+	Key string `json:"key"`
+	// Detail is human-readable provenance ("mux.HandleFunc"), shown so a
+	// surprising binding can be traced back to the call that produced it.
+	Detail string `json:"detail,omitempty"`
+
+	// Target is the function the binding hands off to — an inbound route's
+	// handler. Empty when the far end isn't in this index (every outbound
+	// binding, and inbound registrations whose handler isn't a named func).
+	Target      TargetID `json:"target,omitempty"`
+	TargetTitle string   `json:"targetTitle,omitempty"`
+
+	// Site is the function containing the registration or call itself, so
+	// every binding opens into source even when Target is empty.
+	Site      TargetID `json:"site"`
+	SiteTitle string   `json:"siteTitle,omitempty"`
+
+	File string `json:"file"`
+	Line int    `json:"line"`
+
+	Confidence BindingConfidence `json:"confidence,omitempty"`
+
+	// ReachesAnchor is set when a ServiceView was asked for an anchor and
+	// this binding's handler transitively calls it — i.e. this is one of the
+	// entrypoints through which the anchor actually runs.
+	ReachesAnchor bool `json:"reachesAnchor,omitempty"`
+}
+
+// ServiceView is the zoomed-out picture of one service: what enters it and
+// what it reaches out to. It is not a separate index — it's the same binding
+// data grouped by role, which is why zooming out costs nothing beyond the
+// recognizer pass that produced the bindings.
+type ServiceView struct {
+	Name   string `json:"name"`             // repo/module directory name
+	Module string `json:"module,omitempty"` // Go module path, informational
+	Root   string `json:"root,omitempty"`   // project directory
+
+	// Anchor is the frame the user zoomed out from, carried up so every
+	// level can mark what reaches it. Empty when zooming out from nothing.
+	Anchor      TargetID `json:"anchor,omitempty"`
+	AnchorTitle string   `json:"anchorTitle,omitempty"`
+
+	Inbound  []Binding `json:"inbound"`
+	Outbound []Binding `json:"outbound"`
+}
+
+// PlatformEngine is the optional half of Engine: engines that can describe
+// their project as a service implement it, and the server exposes
+// /api/service only when the loaded engine does. Kept separate from Engine
+// so an engine without recognizers (today, the TypeScript one) stays valid.
+type PlatformEngine interface {
+	// ServiceView returns the service-level view. A non-empty anchor marks
+	// the bindings that reach it; an anchor that isn't an indexed function
+	// is ignored rather than being an error.
+	ServiceView(anchor TargetID) (*ServiceView, error)
+}
+
+// ErrNoPlatformView is what a wrapping engine returns when the engine it
+// currently holds has no recognizers. A wrapper can't implement
+// PlatformEngine conditionally — the method set is static — so it satisfies
+// the interface and reports the gap at call time instead.
+var ErrNoPlatformView = errors.New("platform view is not available for this engine")
+
+// HasPlatformView reports whether e can currently serve a service-level view,
+// so the server can advertise the zoom-out affordance only when it works.
+// A wrapper answers for whatever engine it holds; anything else is judged by
+// whether it implements PlatformEngine at all.
+func HasPlatformView(e Engine) bool {
+	if p, ok := e.(interface{ PlatformAvailable() bool }); ok {
+		return p.PlatformAvailable()
+	}
+	_, ok := e.(PlatformEngine)
+	return ok
 }
 
 // Engine is the query surface the HTTP server depends on. It is the seam

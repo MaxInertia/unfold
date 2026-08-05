@@ -11,6 +11,7 @@ package indexer
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MaxInertia/unfold/internal/model"
+	"github.com/MaxInertia/unfold/internal/platform"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/packages"
 )
@@ -98,8 +100,11 @@ const (
 	KindIndirect  = model.KindIndirect
 )
 
-// Indexer implements model.Engine.
-var _ model.Engine = (*Indexer)(nil)
+// Indexer implements model.Engine, and the optional platform half of it.
+var (
+	_ model.Engine         = (*Indexer)(nil)
+	_ model.PlatformEngine = (*Indexer)(nil)
+)
 
 // Indexer holds loaded packages and the per-function call-site index.
 type Indexer struct {
@@ -124,6 +129,18 @@ type Indexer struct {
 	// the places it's referenced (direct calls, interface calls that may
 	// dispatch to it, and value references). Built once during Load.
 	usagesByTarget map[TargetID][]*usageInfo
+
+	// bindings are the platform edges recognized in this project — routes it
+	// serves, topics it names, calls it makes out. Collected during Load in
+	// the same body walk that resolves call sites.
+	bindings []model.Binding
+
+	// Identity of the indexed project, for the service-level view. Service
+	// naming is the repo directory today; a microservice.yaml declaration
+	// would take precedence once that's read.
+	serviceName string
+	modulePath  string
+	rootDir     string
 
 	// fileBytes caches the raw source of files whose functions we've
 	// produced frames for, so we don't re-read on every /body request.
@@ -202,6 +219,8 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.callsByID = make(map[CallID]*callInfo)
 	i.interfaceImpls = buildInterfaceImpls(pkgs)
 	i.usagesByTarget = make(map[TargetID][]*usageInfo)
+	i.bindings = nil
+	i.identify(dir, pkgs)
 
 	// Pass 1: register every FuncDecl as a target.
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
@@ -252,6 +271,13 @@ func (i *Indexer) Load(dir, pattern string) error {
 			case *ast.CallExpr:
 				if name := nameIdent(node.Fun); name != nil {
 					callNames[name] = true
+				}
+				// Binding extraction is independent of call resolution: a
+				// recognized call site (mux.HandleFunc) is an ordinary
+				// resolvable call *and* a platform edge, and a call whose
+				// target we can't resolve can still carry a usable key.
+				if facts, ok := i.callFacts(fi, node); ok {
+					i.bindings = append(i.bindings, platform.Extract(facts)...)
 				}
 				ci := i.resolveCall(fi, node)
 				if ci == nil {
@@ -311,7 +337,206 @@ func (i *Indexer) Load(dir, pattern string) error {
 		}
 	}
 
+	// Titles for binding endpoints, resolved once the whole function set is
+	// known (a route registered in one package can hand off to a handler
+	// defined in another, so this can't be done during the walk).
+	for n := range i.bindings {
+		b := &i.bindings[n]
+		if fi := i.funcs[b.Target]; fi != nil {
+			b.TargetTitle = goTitle(fi.obj)
+		} else {
+			b.Target = "" // handler isn't an indexed function; don't offer a dead link
+		}
+		if fi := i.funcs[b.Site]; fi != nil {
+			b.SiteTitle = goTitle(fi.obj)
+		}
+	}
+	sort.SliceStable(i.bindings, func(a, b int) bool {
+		x, y := i.bindings[a], i.bindings[b]
+		if x.Kind != y.Kind {
+			return x.Kind < y.Kind
+		}
+		return x.Key < y.Key
+	})
+
 	return nil
+}
+
+// identify records what to call this project at the service level. The repo
+// (module) directory name is the working answer; a microservice.yaml in the
+// project root would override it once that file's shape is known, and the
+// module path is kept alongside as the unambiguous identifier.
+func (i *Indexer) identify(dir string, pkgs []*packages.Package) {
+	root := dir
+	for _, p := range pkgs {
+		if p.Module != nil && p.Module.Dir != "" {
+			root = p.Module.Dir
+			i.modulePath = p.Module.Path
+			break
+		}
+	}
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	i.rootDir = filepath.Clean(root)
+	i.serviceName = filepath.Base(i.rootDir)
+	if i.serviceName == "." || i.serviceName == string(filepath.Separator) {
+		i.serviceName = i.modulePath
+	}
+}
+
+// callFacts reduces a call site to the neutral shape recognizers consume.
+// Reports false when the callee can't be identified — a builtin, an
+// immediately-invoked literal, or a call in a package that failed to type
+// check.
+func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool) {
+	info := fi.pkg.TypesInfo
+	if info == nil {
+		return platform.Call{}, false
+	}
+	var obj *types.Func
+	switch fn := ce.Fun.(type) {
+	case *ast.Ident:
+		obj, _ = info.Uses[fn].(*types.Func)
+	case *ast.SelectorExpr:
+		if sel, ok := info.Selections[fn]; ok {
+			obj, _ = sel.Obj().(*types.Func)
+		} else {
+			obj, _ = info.Uses[fn.Sel].(*types.Func)
+		}
+	}
+	if obj == nil || obj.Pkg() == nil {
+		return platform.Call{}, false
+	}
+
+	pos := i.fset.Position(ce.Pos())
+	c := platform.Call{
+		PkgPath: obj.Pkg().Path(),
+		Func:    obj.Name(),
+		Site:    fi.id,
+		File:    pos.Filename,
+		Line:    pos.Line,
+	}
+	if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil {
+		c.Recv, c.RecvPkg = namedTypeParts(sig.Recv().Type())
+	}
+	for _, a := range ce.Args {
+		c.Args = append(c.Args, argFacts(info, a))
+	}
+	return c, true
+}
+
+// namedTypeParts unwraps a receiver type to its bare name and package, so a
+// recognizer can match on ("net/http", "ServeMux") without caring whether the
+// method was declared on the value or the pointer.
+func namedTypeParts(t types.Type) (name, pkgPath string) {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok || named.Obj() == nil {
+		return "", ""
+	}
+	if pkg := named.Obj().Pkg(); pkg != nil {
+		pkgPath = pkg.Path()
+	}
+	return named.Obj().Name(), pkgPath
+}
+
+// argFacts extracts the two things recognizers read off an argument: its
+// constant string value, and the function it names when it's a function
+// value. Using the type checker's constant folding (rather than looking for
+// *ast.BasicLit) means `"POST " + routePrefix` resolves like a literal.
+func argFacts(info *types.Info, e ast.Expr) platform.Arg {
+	var a platform.Arg
+	if tv, ok := info.Types[e]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
+		a.Value = constant.StringVal(tv.Value)
+		a.Known = true
+	}
+	switch v := e.(type) {
+	case *ast.Ident:
+		if f, ok := info.Uses[v].(*types.Func); ok {
+			a.Target = TargetID(f.FullName())
+		}
+	case *ast.SelectorExpr:
+		if sel, ok := info.Selections[v]; ok {
+			if f, ok := sel.Obj().(*types.Func); ok {
+				a.Target = TargetID(f.FullName())
+			}
+		} else if f, ok := info.Uses[v.Sel].(*types.Func); ok {
+			a.Target = TargetID(f.FullName())
+		}
+	case *ast.CallExpr:
+		// A conversion wrapping the real argument, e.g.
+		// http.Handle("/x", http.HandlerFunc(h)) — look through it.
+		if tv, ok := info.Types[v.Fun]; ok && tv.IsType() && len(v.Args) == 1 {
+			return argFacts(info, v.Args[0])
+		}
+	}
+	return a
+}
+
+// ServiceView implements model.PlatformEngine.
+func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	sv := &model.ServiceView{
+		Name:     i.serviceName,
+		Module:   i.modulePath,
+		Root:     i.rootDir,
+		Inbound:  []model.Binding{},
+		Outbound: []model.Binding{},
+	}
+	// An anchor that isn't an indexed function (a stale URL, a file frame)
+	// degrades to the plain service view rather than erroring — the view is
+	// still correct, it just can't mark anything.
+	var reaching map[TargetID]bool
+	if fi := i.funcs[anchor]; fi != nil {
+		sv.Anchor = anchor
+		sv.AnchorTitle = goTitle(fi.obj)
+		reaching = i.callersClosure(anchor)
+	}
+
+	for _, b := range i.bindings {
+		if reaching != nil && (reaching[b.Target] || reaching[b.Site]) {
+			b.ReachesAnchor = true
+		}
+		if b.Role == model.RoleInbound {
+			sv.Inbound = append(sv.Inbound, b)
+		} else {
+			sv.Outbound = append(sv.Outbound, b)
+		}
+	}
+	return sv, nil
+}
+
+// callersClosure returns every function that transitively reaches target,
+// including target itself. It walks the usage index backwards, which makes
+// it the same traversal the callers tree uses — an inbound binding whose
+// handler lands in this set is an entrypoint through which the anchor runs.
+//
+// Value references are not followed: a function passed as a value has no call
+// site, so a chain through one isn't an execution path (the same limitation
+// the callers tree documents).
+func (i *Indexer) callersClosure(target TargetID) map[TargetID]bool {
+	seen := map[TargetID]bool{target: true}
+	queue := []TargetID{target}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, u := range i.usagesByTarget[cur] {
+			if u.kind == model.UsageRef || seen[u.parent] {
+				continue
+			}
+			seen[u.parent] = true
+			queue = append(queue, u.parent)
+		}
+	}
+	return seen
 }
 
 // nameIdent returns the identifier that names a call's function — the same

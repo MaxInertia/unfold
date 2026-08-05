@@ -1857,3 +1857,266 @@ body.resizing {
   overflow: auto;
   max-height: 16rem;
 }
+
+/* ----- zoom: trail + service level ----- */
+
+/* The trail reads as a level indicator, not a path: every entry stays put
+   when you zoom, because the tail is what anchors the upper levels. */
+.zoom-trail {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+}
+
+.zoom-crumb {
+  font: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.05rem 0.4rem;
+  cursor: pointer;
+}
+
+.zoom-crumb:hover {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.zoom-crumb--active {
+  color: var(--fg);
+  font-weight: 600;
+  border-color: var(--card-border);
+  background: var(--card-bg);
+  cursor: default;
+}
+
+/* Below the active level: still present, visibly "where you came from". */
+.zoom-crumb--ghost {
+  opacity: 0.55;
+}
+
+/* The route slot has no single answer until one is picked, so it states the
+   count rather than choosing an entrypoint on your behalf. */
+.zoom-crumb--slot {
+  cursor: default;
+  font-style: italic;
+}
+
+.zoom-crumb--slot:hover {
+  color: var(--muted);
+  border-color: transparent;
+  background: none;
+}
+
+.zoom-sep {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.frame-zoom-out {
+  font: inherit;
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.05rem 0.45rem;
+  cursor: pointer;
+  flex: none;
+}
+
+.frame-zoom-out:hover {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.service {
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  overflow: hidden;
+}
+
+.service-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid var(--card-border);
+  background: rgba(127, 127, 127, 0.04);
+}
+
+.service-name {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.service-module {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.service-anchor {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Inbound left, service in the middle, outbound right — a two-sided
+   dependency card. Collapses to one column when there isn't room. */
+.service-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0;
+}
+
+.service-col {
+  padding: 0.7rem 0.8rem 1rem;
+  min-width: 0;
+}
+
+.service-col--outbound {
+  border-left: 1px solid var(--card-border);
+}
+
+.service-col-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.service-col-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.service-col-count {
+  font-size: 0.72rem;
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+}
+
+.service-col-hint,
+.service-empty {
+  margin: 0.15rem 0 0.7rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.service-group-kind {
+  margin: 0.7rem 0 0.25rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.service-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.service-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.15rem 0;
+}
+
+.service-item-open {
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.1rem 0.3rem;
+  margin-left: -0.3rem;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg);
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Long keys and handler names truncate rather than wrapping: the column is
+   scanned vertically, so a ragged left edge costs more than a clipped tail
+   (the full text is in the row's tooltip). */
+.service-key,
+.service-handler,
+.service-loc {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.service-item-meta {
+  min-width: 0;
+}
+
+.service-item-open:hover {
+  background: var(--call-bg);
+}
+
+.service-key {
+  font-size: 0.82rem;
+}
+
+.service-item-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.service-handler--site {
+  font-style: italic;
+}
+
+/* With an anchor loaded the reaching entrypoints are lit and the rest dim,
+   so a large inbound surface stays readable — you read the two that matter,
+   with the rest as context rather than noise. */
+.service-item--reaches .service-key {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.service-item--dim {
+  opacity: 0.45;
+}
+
+.service-badge {
+  font-size: 0.65rem;
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  border: 1px solid var(--card-border);
+  color: var(--muted);
+  flex: none;
+}
+
+.service-badge--reaches {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+/* Non-exact resolution is always labelled: a platform edge that was guessed
+   must not read like one that was proven. */
+.service-badge--inferred,
+.service-badge--declared {
+  color: var(--goroutine-fg);
+  border-color: var(--goroutine-border);
+  background: var(--goroutine-bg);
+}

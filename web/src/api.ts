@@ -1,4 +1,13 @@
-import type { CallID, Frame, Note, SearchResult, TargetID, TypeInfo, Usage } from "./types";
+import type {
+  CallID,
+  Frame,
+  Note,
+  SearchResult,
+  ServiceView,
+  TargetID,
+  TypeInfo,
+  Usage,
+} from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -44,6 +53,13 @@ export async function fetchUsages(targetId: TargetID): Promise<Usage[]> {
   const url = `/api/usages?targetId=${encodeURIComponent(targetId)}`;
   const res = await getJSON<{ usages: Usage[] }>(url);
   return res.usages ?? [];
+}
+
+// The zoomed-out service view. Passing the frame you zoomed out from as the
+// anchor is what lets the view mark which entrypoints actually reach it.
+export function fetchServiceView(anchor?: TargetID | null): Promise<ServiceView> {
+  const qs = anchor ? `?anchor=${encodeURIComponent(anchor)}` : "";
+  return getJSON<ServiceView>(`/api/service${qs}`);
 }
 
 export async function fetchTypeInfo(targetId: TargetID, offset: number): Promise<TypeInfo | null> {
