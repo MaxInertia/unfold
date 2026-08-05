@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchServiceView, resolveBinding } from "./api";
 import { ProtoRootPicker } from "./ProtoRootPicker";
 import type { Binding, BindingVisibility, ServiceView as ServiceViewT, TargetID } from "./types";
+import { bindingMatches, type ServiceFilters } from "./ZoomSidebar";
 
 // The L1 (service) zoom level: what enters this service on the left, what it
 // reaches out to on the right.
@@ -13,9 +14,18 @@ import type { Binding, BindingVisibility, ServiceView as ServiceViewT, TargetID 
 // level where the node count is the number of services.
 export function ServiceView({
   anchor,
+  repo,
+  filters,
+  onLoaded,
   onOpen,
 }: {
   anchor: TargetID | null;
+  // Which workspace service to describe; null means the primary one.
+  repo: string | null;
+  filters: ServiceFilters;
+  // Hands the loaded view up so the sidebar's filter panel can show real
+  // facet counts instead of a guess at what's here.
+  onLoaded: (v: ServiceViewT | null) => void;
   onOpen: (id: TargetID) => void;
 }) {
   const [view, setView] = useState<ServiceViewT | null>(null);
@@ -26,19 +36,29 @@ export function ServiceView({
   useEffect(() => {
     let alive = true;
     setError(null);
-    fetchServiceView(anchor)
-      .then((v) => alive && setView(v))
+    fetchServiceView(anchor, repo)
+      .then((v) => {
+        if (!alive) return;
+        setView(v);
+        onLoaded(v);
+      })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
       alive = false;
     };
-  }, [anchor, revision]);
+    // onLoaded is a stable setter from App; including it would refetch on
+    // every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchor, repo, revision]);
 
   if (error) return <div className="app-error">{error}</div>;
   if (!view) return <div className="app-loading">loading service…</div>;
 
   const anchored = !!view.anchorTitle;
   const reaching = view.inbound.filter((b) => b.reachesAnchor).length;
+  const inbound = view.inbound.filter((b) => bindingMatches(b, filters));
+  const outbound = view.outbound.filter((b) => bindingMatches(b, filters));
+  const hidden = view.inbound.length + view.outbound.length - inbound.length - outbound.length;
 
   return (
     <div className="service">
@@ -62,9 +82,13 @@ export function ServiceView({
           {view.repos.map((r) => (
             <span
               key={r.alias}
-              className={`service-repo${r.primary ? " service-repo--primary" : ""}${
-                r.indexed ? " service-repo--indexed" : ""
-              }`}
+              // "primary" is the repo unfold was launched in; "current" is
+              // the one this view is about. They differ as soon as you pick
+              // another service at the platform level, and marking only the
+              // former would point at the wrong card.
+              className={`service-repo${r.name === view.name ? " service-repo--current" : ""}${
+                r.primary ? " service-repo--primary" : ""
+              }${r.indexed ? " service-repo--indexed" : ""}`}
               title={
                 r.error
                   ? `${r.dir} — ${r.error}`
@@ -94,11 +118,17 @@ export function ServiceView({
         </div>
       )}
 
+      {hidden > 0 && (
+        <div className="service-filtered">
+          {hidden} binding{hidden === 1 ? "" : "s"} hidden by filters
+        </div>
+      )}
+
       <div className="service-columns">
         <Column
           title="inbound"
           hint="where work enters this service"
-          bindings={view.inbound}
+          bindings={inbound}
           anchored={anchored}
           onOpen={onOpen}
           groupBy={visibilityOf}
@@ -107,7 +137,7 @@ export function ServiceView({
         <Column
           title="outbound"
           hint="where this service reaches out"
-          bindings={view.outbound}
+          bindings={outbound}
           anchored={anchored}
           onOpen={onOpen}
           groupBy={(b) => b.kind}

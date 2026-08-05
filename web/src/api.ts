@@ -1,5 +1,6 @@
 import type {
   CallID,
+  PlatformView,
   Resolution,
   Frame,
   Note,
@@ -58,9 +59,42 @@ export async function fetchUsages(targetId: TargetID): Promise<Usage[]> {
 
 // The zoomed-out service view. Passing the frame you zoomed out from as the
 // anchor is what lets the view mark which entrypoints actually reach it.
-export function fetchServiceView(anchor?: TargetID | null): Promise<ServiceView> {
-  const qs = anchor ? `?anchor=${encodeURIComponent(anchor)}` : "";
-  return getJSON<ServiceView>(`/api/service${qs}`);
+// `repo` selects which workspace service the view is about; omitted, it's the
+// one unfold was pointed at.
+export function fetchServiceView(
+  anchor?: TargetID | null,
+  repo?: string | null,
+): Promise<ServiceView> {
+  const qs = new URLSearchParams();
+  if (anchor) qs.set("anchor", anchor);
+  if (repo) qs.set("repo", repo);
+  const s = qs.toString();
+  return getJSON<ServiceView>(`/api/service${s ? `?${s}` : ""}`);
+}
+
+// The workspace-level view: services and the calls between them.
+export function fetchPlatformView(): Promise<PlatformView> {
+  return getJSON<PlatformView>("/api/platform");
+}
+
+// Index one service's code, filling in its outgoing edges. Expensive and
+// state-changing, hence POST.
+export async function indexRepo(alias: string): Promise<void> {
+  const res = await fetch("/api/index-repo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ alias }),
+  });
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.error) msg = body.error;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(msg);
+  }
 }
 
 // Open the implementation of an outbound edge in whichever workspace repo

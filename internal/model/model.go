@@ -337,6 +337,74 @@ type Resolution struct {
 	Note    string   `json:"note,omitempty"`
 }
 
+// PlatformView is the L0 picture: every service in the workspace and the
+// calls between them.
+//
+// Services come from the declaration layer, so they're all listed however
+// little has been indexed. Edges cannot: knowing that A calls B means having
+// read A's code. So a service that hasn't been indexed contributes no
+// outbound edges, and says so rather than looking like a leaf.
+type PlatformView struct {
+	Services []PlatformService `json:"services"`
+	Edges    []PlatformEdge    `json:"edges"`
+}
+
+// PlatformService is one node.
+type PlatformService struct {
+	Alias   string `json:"alias"`
+	Name    string `json:"name"`
+	Dir     string `json:"dir"`
+	Primary bool   `json:"primary,omitempty"`
+	// Indexed reports whether this service's code has been read. Its
+	// *incoming* edges are known either way — those come from other
+	// services' code — but its outgoing ones are unknown until it is.
+	Indexed bool   `json:"indexed,omitempty"`
+	Error   string `json:"error,omitempty"`
+	// Methods counts the RPCs it declares, which is known from protos alone.
+	Methods int `json:"methods,omitempty"`
+}
+
+// PlatformEdge is every call from one service to another, of one kind.
+type PlatformEdge struct {
+	From  string         `json:"from"` // service alias
+	To    string         `json:"to"`
+	Kind  string         `json:"kind"`
+	Calls []PlatformCall `json:"calls"`
+}
+
+// PlatformCall is one call site behind an edge, so a platform-level line can
+// be opened as code.
+type PlatformCall struct {
+	Key       string   `json:"key"`
+	Site      TargetID `json:"site,omitempty"`
+	SiteTitle string   `json:"siteTitle,omitempty"`
+	File      string   `json:"file,omitempty"`
+	Line      int      `json:"line,omitempty"`
+}
+
+// WorkspaceEngine is implemented by engines that can describe a whole
+// workspace. Separate from PlatformEngine because a single repo has a service
+// view but no platform above it.
+type WorkspaceEngine interface {
+	PlatformView() (*PlatformView, error)
+	// ServiceViewOf describes any service in the workspace, not just the one
+	// unfold was pointed at — otherwise picking a service at the platform
+	// level would zoom in on somebody else.
+	ServiceViewOf(repo string, anchor TargetID) (*ServiceView, error)
+}
+
+// HasWorkspace reports whether a workspace of several repositories is open,
+// so the UI offers the platform level only when there's a platform to show.
+// A wrapper answers for whatever engine it holds, since its own method set
+// can't be conditional.
+func HasWorkspace(e Engine) bool {
+	if p, ok := e.(interface{ WorkspaceAvailable() bool }); ok {
+		return p.WorkspaceAvailable()
+	}
+	_, ok := e.(WorkspaceEngine)
+	return ok
+}
+
 // CrossRepoResolver is implemented by engines that federate repositories.
 type CrossRepoResolver interface {
 	Resolve(kind, key string) (*Resolution, error)

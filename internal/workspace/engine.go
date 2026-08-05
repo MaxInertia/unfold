@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	_ model.Engine         = (*Workspace)(nil)
-	_ model.PlatformEngine = (*Workspace)(nil)
+	_ model.Engine          = (*Workspace)(nil)
+	_ model.PlatformEngine  = (*Workspace)(nil)
+	_ model.WorkspaceEngine = (*Workspace)(nil)
 )
 
 // Ids crossing this boundary are rewritten in both directions: a sub-engine
@@ -207,33 +208,50 @@ func (w *Workspace) PlatformAvailable() bool { return true }
 // this" instantly — the cost of actually opening the implementation is
 // deferred to Resolve.
 func (w *Workspace) ServiceView(anchor model.TargetID) (*model.ServiceView, error) {
-	idx, bare, err := w.engineFor(string(anchor))
-	if err != nil {
-		// An anchor in a repo that failed to load shouldn't sink the view.
-		idx, _, err = w.engineFor("")
-		if err != nil {
-			return nil, err
-		}
-		bare = ""
+	return w.ServiceViewOf(w.primary, anchor)
+}
+
+// ServiceViewOf describes any service in the workspace. Selecting one at the
+// platform level has to be able to zoom into *that* service, so the view
+// isn't hard-wired to the repo unfold was launched in.
+func (w *Workspace) ServiceViewOf(repo string, anchor model.TargetID) (*model.ServiceView, error) {
+	if repo == "" {
+		repo = w.primary
 	}
-	// Only an anchor belonging to the primary repo can be marked, since the
-	// view is about that service.
-	if alias, _ := split(string(anchor)); alias != "" && alias != w.primary {
-		bare = ""
+	if _, ok := w.repos[repo]; !ok {
+		return nil, fmt.Errorf("unknown service %q", repo)
 	}
+	if err := w.load(repo); err != nil {
+		return nil, err
+	}
+	r := w.repos[repo]
+	r.mu.Lock()
+	idx := r.idx
+	r.mu.Unlock()
+	if idx == nil {
+		return nil, fmt.Errorf("%s is not indexed", repo)
+	}
+
+	// An anchor only means something to the service it belongs to; marking
+	// one service's entrypoints with another's frame would be nonsense.
+	bare := ""
+	if alias, b := split(string(anchor)); (alias == "" && repo == w.primary) || alias == repo {
+		bare = b
+	}
+
 	sv, err := idx.ServiceView(model.TargetID(bare))
 	if err != nil {
 		return nil, err
 	}
-	sv.Anchor = model.TargetID(w.qualify(w.primary, string(sv.Anchor)))
+	sv.Anchor = model.TargetID(w.qualify(repo, string(sv.Anchor)))
 	sv.Repos = w.Repos()
 	for n := range sv.Inbound {
-		w.qualifyBinding(w.primary, &sv.Inbound[n])
+		w.qualifyBinding(repo, &sv.Inbound[n])
 	}
 	for n := range sv.Outbound {
 		b := &sv.Outbound[n]
-		w.qualifyBinding(w.primary, b)
-		if alias, ok := w.servedBy[declKey(b.Kind, b.Key)]; ok && alias != w.primary {
+		w.qualifyBinding(repo, b)
+		if alias, ok := w.servedBy[declKey(b.Kind, b.Key)]; ok && alias != repo {
 			b.ServedBy = w.repos[alias].name
 			b.ServedByRepo = alias
 		}
@@ -284,3 +302,82 @@ func (w *Workspace) Resolve(kind, key string) (*model.Resolution, error) {
 	}
 	return res, nil
 }
+
+// PlatformView is the L0 view: every service in the workspace, and the calls
+// between them.
+//
+// Services come from the declaration layer, so all of them appear however
+// little has been indexed. Edges can't work that way — knowing that A calls B
+// means having read A's code — so an un-indexed service contributes no
+// outgoing edges. It still receives them, since those come from other
+// services' code, and the view marks it so a lazily-loaded workspace doesn't
+// read as "this service calls nothing".
+func (w *Workspace) PlatformView() (*model.PlatformView, error) {
+	pv := &model.PlatformView{
+		Services: make([]model.PlatformService, 0, len(w.order)),
+		Edges:    []model.PlatformEdge{},
+	}
+	// grouped is keyed by from→to→kind so several calls between the same
+	// pair collapse into one edge carrying its call sites.
+	grouped := map[[3]string][]model.PlatformCall{}
+
+	for _, alias := range w.order {
+		r := w.repos[alias]
+		r.mu.Lock()
+		idx, loaded, loadErr := r.idx, r.loaded, r.err
+		r.mu.Unlock()
+
+		svc := model.PlatformService{
+			Alias:   alias,
+			Name:    r.name,
+			Dir:     r.dir,
+			Primary: alias == w.primary,
+			Indexed: loaded,
+			Methods: len(r.methods),
+		}
+		if loadErr != nil {
+			svc.Error = loadErr.Error()
+		}
+		pv.Services = append(pv.Services, svc)
+
+		if !loaded || idx == nil {
+			continue
+		}
+		sv, err := idx.ServiceView("")
+		if err != nil {
+			continue
+		}
+		for _, b := range sv.Outbound {
+			to, ok := w.servedBy[declKey(b.Kind, b.Key)]
+			if !ok || to == alias {
+				continue // nothing here serves it, or it's a self-call
+			}
+			k := [3]string{alias, to, b.Kind}
+			grouped[k] = append(grouped[k], model.PlatformCall{
+				Key:       b.Key,
+				Site:      model.TargetID(w.qualify(alias, string(b.Site))),
+				SiteTitle: b.SiteTitle,
+				File:      b.File,
+				Line:      b.Line,
+			})
+		}
+	}
+
+	for k, calls := range grouped {
+		sort.Slice(calls, func(a, b int) bool { return calls[a].Key < calls[b].Key })
+		pv.Edges = append(pv.Edges, model.PlatformEdge{
+			From: k[0], To: k[1], Kind: k[2], Calls: calls,
+		})
+	}
+	sort.Slice(pv.Edges, func(a, b int) bool {
+		if pv.Edges[a].From != pv.Edges[b].From {
+			return pv.Edges[a].From < pv.Edges[b].From
+		}
+		return pv.Edges[a].To < pv.Edges[b].To
+	})
+	return pv, nil
+}
+
+// IndexRepo loads one service's code on demand, so the platform view can be
+// filled in a service at a time instead of paying for the whole workspace.
+func (w *Workspace) IndexRepo(alias string) error { return w.load(alias) }

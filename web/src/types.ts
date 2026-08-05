@@ -143,6 +143,39 @@ export interface Resolution {
   note?: string;
 }
 
+// The L0 view. Services come from declarations so all are listed; edges need
+// a service's code to have been read, so an un-indexed service shows no
+// outgoing calls — which the view says rather than implying it calls nothing.
+export interface PlatformView {
+  services: PlatformService[];
+  edges: PlatformEdge[];
+}
+
+export interface PlatformService {
+  alias: string;
+  name: string;
+  dir: string;
+  primary?: boolean;
+  indexed?: boolean;
+  error?: string;
+  methods?: number; // RPCs it declares, known from protos alone
+}
+
+export interface PlatformEdge {
+  from: string;
+  to: string;
+  kind: string;
+  calls: PlatformCall[];
+}
+
+export interface PlatformCall {
+  key: string;
+  site?: TargetID;
+  siteTitle?: string;
+  file?: string;
+  line?: number;
+}
+
 export interface TypeInfo {
   kind: string;
   name: string;

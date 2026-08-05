@@ -157,6 +157,39 @@ func (r *Reloadable) Resolve(kind, key string) (*model.Resolution, error) {
 	return cr.Resolve(kind, key)
 }
 
+// PlatformView forwards the workspace-level view when one is open.
+func (r *Reloadable) PlatformView() (*model.PlatformView, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	we, ok := r.cur.(model.WorkspaceEngine)
+	if !ok {
+		return nil, model.ErrNoWorkspace
+	}
+	return we.PlatformView()
+}
+
+// ServiceViewOf forwards the view of a named workspace service.
+func (r *Reloadable) ServiceViewOf(repo string, anchor model.TargetID) (*model.ServiceView, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	we, ok := r.cur.(model.WorkspaceEngine)
+	if !ok {
+		return nil, model.ErrNoWorkspace
+	}
+	return we.ServiceViewOf(repo, anchor)
+}
+
+// IndexRepo forwards on-demand indexing of one workspace service.
+func (r *Reloadable) IndexRepo(alias string) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ir, ok := r.cur.(interface{ IndexRepo(string) error })
+	if !ok {
+		return model.ErrNoWorkspace
+	}
+	return ir.IndexRepo(alias)
+}
+
 // PlatformAvailable reports whether the engine currently held can serve a
 // service view, so /api/health advertises the zoom-out affordance honestly
 // even though the wrapper's own method set can't.
@@ -164,5 +197,14 @@ func (r *Reloadable) PlatformAvailable() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	_, ok := r.cur.(model.PlatformEngine)
+	return ok
+}
+
+// WorkspaceAvailable reports whether the engine currently held is a
+// workspace, for the same reason.
+func (r *Reloadable) WorkspaceAvailable() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.cur.(model.WorkspaceEngine)
 	return ok
 }

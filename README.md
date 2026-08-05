@@ -259,6 +259,33 @@ demand, or `auto` (the default) which is eager for a small workspace and lazy
 beyond four repos. The workspace strip at the top of the service view shows
 which repos are indexed; search and cross-linking cover the ones that are.
 
+### The platform level
+
+With a workspace open there's a level above the service view: **alt+↑** again,
+or `workspace` in the trail. It lists every service — those come from
+declarations, so all of them appear however little has been indexed — and the
+calls between them.
+
+Edges can't work that way: knowing that A calls B means having read A's code.
+So a service that hasn't been indexed contributes no *outgoing* edges, and the
+view says so rather than showing it as a leaf that calls nothing. Each such
+service carries an **index** button that reads just that one.
+
+Picking a service draws the slice around it — callers on the left, it in the
+middle, callees on the right, with the individual RPCs on each edge. Every one
+of those lines opens the real call site, so the level changes but the
+destination doesn't. That's deliberately not an all-pairs canvas: a drawn
+graph of every service at once is the hairball the service view already avoids,
+and the slice stays legible at any workspace size.
+
+### The sidebar follows the level
+
+Above the frame there is no call tree to show, so the sidebar stops being
+files/calls/callers/notes and becomes the **filter panel** — text, reach
+(public/platform/internal) and "only entrypoints reaching the anchor" at the
+service level, a service filter at the platform level. Filtering is one
+mechanism across both upper levels rather than two bolted onto each view.
+
 ### Limitations
 
 - **Discovery is one level deep.** A workspace is a directory of checkouts;

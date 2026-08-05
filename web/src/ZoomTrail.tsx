@@ -11,12 +11,16 @@ import type { ZoomLevel } from "./zoom";
 // exactly, because nothing was destroyed.
 export function ZoomTrail({
   level,
+  hasPlatform,
   serviceName,
   anchorTitle,
   entrypointCount,
   onZoom,
 }: {
   level: ZoomLevel;
+  // A workspace adds a level above the service; without one the trail starts
+  // at the service, because there is no platform to zoom out to.
+  hasPlatform: boolean;
   serviceName: string | null;
   anchorTitle: string | null;
   // How many entrypoints reach the anchor. The route slot between service and
@@ -27,13 +31,29 @@ export function ZoomTrail({
 }) {
   if (!serviceName) return null;
 
+  const atPlatform = level === "platform";
   const atService = level === "service";
 
   return (
     <nav className="zoom-trail" aria-label="zoom level">
+      {hasPlatform && (
+        <>
+          <button
+            type="button"
+            className={`zoom-crumb${atPlatform ? " zoom-crumb--active" : ""}`}
+            onClick={() => onZoom("platform")}
+            title="zoom out to the whole workspace — services and the calls between them"
+          >
+            workspace
+          </button>
+          <span className="zoom-sep">›</span>
+        </>
+      )}
       <button
         type="button"
-        className={`zoom-crumb${atService ? " zoom-crumb--active" : ""}`}
+        className={`zoom-crumb${atService ? " zoom-crumb--active" : ""}${
+          atPlatform ? " zoom-crumb--ghost" : ""
+        }`}
         onClick={() => onZoom("service")}
         title="zoom out to the service — its inbound surface and outbound dependencies"
       >
@@ -46,7 +66,9 @@ export function ZoomTrail({
           {/* The unfilled route slot: which entrypoint you came in through
               isn't decided until you pick one at the service level. */}
           <span
-            className={`zoom-crumb zoom-crumb--slot${atService ? "" : " zoom-crumb--ghost"}`}
+            className={`zoom-crumb zoom-crumb--slot${
+              atService || atPlatform ? "" : " zoom-crumb--ghost"
+            }`}
             title="the entrypoints that reach this frame — pick one at the service level to fill this slot"
           >
             {entrypointCount === null
@@ -56,7 +78,9 @@ export function ZoomTrail({
           <span className="zoom-sep">›</span>
           <button
             type="button"
-            className={`zoom-crumb${atService ? " zoom-crumb--ghost" : " zoom-crumb--active"}`}
+            className={`zoom-crumb${
+              atService || atPlatform ? " zoom-crumb--ghost" : " zoom-crumb--active"
+            }`}
             onClick={() => onZoom("frame")}
             title="back to the code — your expansion state is untouched"
           >

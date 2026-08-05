@@ -86,6 +86,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/proto-root", s.handleProtoRoot)
 	mux.HandleFunc("/api/dirs", s.handleDirs)
 	mux.HandleFunc("/api/resolve", s.handleResolve)
+	mux.HandleFunc("/api/platform", s.handlePlatform)
+	mux.HandleFunc("/api/index-repo", s.handleIndexRepo)
 	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
@@ -206,7 +208,23 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "platform view is not available for this engine")
 		return
 	}
-	view, err := pe.ServiceView(model.TargetID(r.URL.Query().Get("anchor")))
+	anchor := model.TargetID(r.URL.Query().Get("anchor"))
+	// ?repo= selects which workspace service the view is about; without it
+	// the view is about the repo unfold was pointed at.
+	var (
+		view *model.ServiceView
+		err  error
+	)
+	if repo := r.URL.Query().Get("repo"); repo != "" {
+		we, ok := s.engine.(model.WorkspaceEngine)
+		if !ok {
+			writeError(w, http.StatusNotImplemented, model.ErrNoWorkspace.Error())
+			return
+		}
+		view, err = we.ServiceViewOf(repo, anchor)
+	} else {
+		view, err = pe.ServiceView(anchor)
+	}
 	if err != nil {
 		if errors.Is(err, model.ErrNoPlatformView) {
 			writeError(w, http.StatusNotImplemented, err.Error())
@@ -312,6 +330,65 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// GET /api/platform — every service in the workspace and the calls between
+// them. Available only with a workspace open; a single repo has a service
+// view but nothing above it.
+func (s *Server) handlePlatform(w http.ResponseWriter, _ *http.Request) {
+	we, ok := s.engine.(model.WorkspaceEngine)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, model.ErrNoWorkspace.Error())
+		return
+	}
+	pv, err := we.PlatformView()
+	if err != nil {
+		if errors.Is(err, model.ErrNoWorkspace) {
+			writeError(w, http.StatusNotImplemented, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, pv)
+}
+
+// POST /api/index-repo {"alias": "<service>"} — index one service's code.
+//
+// The platform view lists every service from declarations but can only draw
+// *outgoing* edges for services it has read, so this fills the picture in one
+// service at a time rather than making the user index the whole workspace.
+// It's POST because it's the expensive, state-changing half.
+func (s *Server) handleIndexRepo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	indexer, ok := s.engine.(interface{ IndexRepo(string) error })
+	if !ok {
+		writeError(w, http.StatusNotImplemented, model.ErrNoWorkspace.Error())
+		return
+	}
+	var body struct {
+		Alias string `json:"alias"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if body.Alias == "" {
+		writeError(w, http.StatusBadRequest, "missing required field: alias")
+		return
+	}
+	if err := indexer.IndexRepo(body.Alias); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // GET /api/dirs?path=<dir> — the subdirectories of path, so the UI can offer
@@ -531,6 +608,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"target":   s.target,
 		"diff":     s.differ != nil,
 		"platform": model.HasPlatformView(s.engine),
+		// A workspace unlocks the level above the service view.
+		"workspace": model.HasWorkspace(s.engine),
 	})
 }
 

@@ -9,11 +9,18 @@ import { useSettings } from "./settings";
 import { NotesList } from "./NotesUI";
 import { loadNotes } from "./notes";
 import { ServiceView } from "./ServiceView";
+import { PlatformView } from "./PlatformView";
 import { ZoomTrail } from "./ZoomTrail";
+import {
+  emptyServiceFilters,
+  PlatformFilterPanel,
+  ServiceFilterPanel,
+  type ServiceFilters,
+} from "./ZoomSidebar";
 import { zoomIn, zoomOut, type ZoomLevel } from "./zoom";
 import { matches } from "./keybindings";
 import { fetchServiceView, fetchSymbol, search } from "./api";
-import type { Frame as FrameT, SearchResult } from "./types";
+import type { Frame as FrameT, SearchResult, ServiceView as ServiceViewT } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
 import { ReloadProvider, useReloadRevision } from "./reload";
 import { setBookmarkProject, useBookmarks } from "./bookmarks";
@@ -51,8 +58,16 @@ function AppShell() {
   // store either way, so switching levels never costs expansion state.
   const [zoom, setZoom] = useState<ZoomLevel>("frame");
   const [platform, setPlatform] = useState(false);
+  const [workspace, setWorkspace] = useState(false);
   const [serviceName, setServiceName] = useState<string | null>(null);
   const [entrypointCount, setEntrypointCount] = useState<number | null>(null);
+  const [trailAnchor, setTrailAnchor] = useState<string | null>(null);
+  // Filters live here, not inside the views, because the sidebar owns them
+  // once you're above the frame level.
+  const [serviceFilters, setServiceFilters] = useState<ServiceFilters>(emptyServiceFilters);
+  const [platformFilter, setPlatformFilter] = useState("");
+  const [selectedService, setSelectedService] = useState<string | null>(null);
+  const [loadedService, setLoadedService] = useState<ServiceViewT | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
@@ -121,21 +136,25 @@ function AppShell() {
         setTarget(h.target ?? null);
         setBookmarkProject(h.target ?? null); // namespace bookmarks per project
         setPlatform(!!h.platform);
+        setWorkspace(!!h.workspace);
       })
       .catch(() => {});
     loadNotes();
   }, []);
 
-  // The trail needs the service name before you've zoomed anywhere, and the
-  // entrypoint count for the unfilled route slot. Both come from the same
-  // request the service level uses, so this warms its data too.
+  // Everything the trail shows comes from one request: the service's name,
+  // whether the current frame is even *in* that service, and how many
+  // entrypoints reach it. The backend only echoes an anchor that belongs to
+  // the service being described, so viewing another service correctly drops
+  // the anchor tail instead of implying a frame it doesn't contain.
   useEffect(() => {
     if (!platform) return;
     let alive = true;
-    fetchServiceView(rootFrame?.id ?? null)
+    fetchServiceView(rootFrame?.id ?? null, selectedService)
       .then((v) => {
         if (!alive) return;
         setServiceName(v.name);
+        setTrailAnchor(v.anchorTitle ?? null);
         setEntrypointCount(
           v.anchor ? v.inbound.filter((b) => b.reachesAnchor).length : null,
         );
@@ -144,7 +163,7 @@ function AppShell() {
     return () => {
       alive = false;
     };
-  }, [platform, rootFrame?.id, revision]);
+  }, [platform, rootFrame?.id, selectedService, revision]);
 
   // Keyboard zoom. The chords live in the keybinding registry, which is also
   // what the settings panel lists — so the documented shortcut and the wired
@@ -154,20 +173,22 @@ function AppShell() {
     function onKey(e: KeyboardEvent) {
       if (matches("zoom.out", e)) {
         e.preventDefault();
-        setZoom(zoomOut);
+        setZoom((z) => zoomOut(z, workspace));
       } else if (matches("zoom.in", e)) {
         e.preventDefault();
-        setZoom(zoomIn);
+        setZoom((z) => zoomIn(z, workspace));
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [platform]);
+  }, [platform, workspace]);
 
   // Loading a different symbol is a descent, so it lands you in the code.
   useEffect(() => {
     setZoom("frame");
   }, [symbol]);
+
+
 
   return (
     <div
@@ -210,37 +231,50 @@ function AppShell() {
             <>
               <BookmarksPanel onOpen={(id) => store.setSymbol(id)} />
               <div className="tree-inner">
+                {/* The sidebar follows the zoom level. Above the frame there
+                    is no call tree to show, and what you need instead is a
+                    way to cut a large surface down — so the tabs give way to
+                    the filter panel rather than sitting there describing a
+                    frame you're no longer looking at. */}
                 <div className="tree-header tree-tabs">
-                  <button
-                    type="button"
-                    className={`tree-tab${sidebarTab === "files" ? " tree-tab--active" : ""}`}
-                    onClick={() => setSidebarTab("files")}
-                  >
-                    files
-                  </button>
-                  <button
-                    type="button"
-                    className={`tree-tab${sidebarTab === "calls" ? " tree-tab--active" : ""}`}
-                    onClick={() => setSidebarTab("calls")}
-                  >
-                    calls
-                  </button>
-                  <button
-                    type="button"
-                    className={`tree-tab${sidebarTab === "callers" ? " tree-tab--active" : ""}`}
-                    onClick={() => setSidebarTab("callers")}
-                    title="who calls the focused function — expand to walk toward entry points"
-                  >
-                    callers
-                  </button>
-                  <button
-                    type="button"
-                    className={`tree-tab${sidebarTab === "notes" ? " tree-tab--active" : ""}`}
-                    onClick={() => setSidebarTab("notes")}
-                    title="all notes in this project"
-                  >
-                    notes
-                  </button>
+                  {zoom === "frame" ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`tree-tab${sidebarTab === "files" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("files")}
+                      >
+                        files
+                      </button>
+                      <button
+                        type="button"
+                        className={`tree-tab${sidebarTab === "calls" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("calls")}
+                      >
+                        calls
+                      </button>
+                      <button
+                        type="button"
+                        className={`tree-tab${sidebarTab === "callers" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("callers")}
+                        title="who calls the focused function — expand to walk toward entry points"
+                      >
+                        callers
+                      </button>
+                      <button
+                        type="button"
+                        className={`tree-tab${sidebarTab === "notes" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("notes")}
+                        title="all notes in this project"
+                      >
+                        notes
+                      </button>
+                    </>
+                  ) : (
+                    <span className="tree-tab tree-tab--active tree-tab--static">
+                      {zoom === "platform" ? "services" : "filters"}
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="tree-collapse"
@@ -252,7 +286,15 @@ function AppShell() {
                   </button>
                 </div>
                 <div className="tree-body">
-                  {sidebarTab === "files" ? (
+                  {zoom === "platform" ? (
+                    <PlatformFilterPanel text={platformFilter} onChange={setPlatformFilter} />
+                  ) : zoom === "service" ? (
+                    <ServiceFilterPanel
+                      view={loadedService}
+                      filters={serviceFilters}
+                      onChange={setServiceFilters}
+                    />
+                  ) : sidebarTab === "files" ? (
                     <FileTree onOpen={(id) => store.setSymbol(id)} />
                   ) : sidebarTab === "notes" ? (
                     <NotesList />
@@ -284,17 +326,35 @@ function AppShell() {
           {platform && (
             <ZoomTrail
               level={zoom}
+              hasPlatform={workspace}
               serviceName={serviceName}
-              anchorTitle={rootFrame ? (rootFrame.title ?? rootFrame.id) : null}
+              anchorTitle={trailAnchor}
               entrypointCount={entrypointCount}
               onZoom={setZoom}
             />
           )}
           {error && <div className="app-error">{error}</div>}
           {loading && <div className="app-loading">loading…</div>}
-          {zoom === "service" ? (
+          {zoom === "platform" ? (
+            <PlatformView
+              filter={platformFilter}
+              selected={selectedService}
+              onSelect={setSelectedService}
+              onOpenService={(alias) => {
+                setSelectedService(alias);
+                setZoom("service");
+              }}
+              onOpenSite={(id) => {
+                store.setSymbol(id);
+                setZoom("frame");
+              }}
+            />
+          ) : zoom === "service" ? (
             <ServiceView
               anchor={rootFrame?.id ?? null}
+              repo={selectedService}
+              filters={serviceFilters}
+              onLoaded={setLoadedService}
               onOpen={(id) => {
                 store.setSymbol(id);
                 setZoom("frame");

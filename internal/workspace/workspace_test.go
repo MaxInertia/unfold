@@ -215,3 +215,61 @@ func TestAutoModeEagerBelowLimit(t *testing.T) {
 		}
 	}
 }
+
+// The platform view lists every service from declarations, but can only draw
+// outgoing edges for services whose code has been read. A lazy workspace must
+// therefore say which services are unindexed rather than presenting them as
+// leaves that call nothing.
+func TestPlatformViewEdgesFollowIndexing(t *testing.T) {
+	w := open(t, ModeLazy)
+
+	pv, err := w.PlatformView()
+	if err != nil {
+		t.Fatalf("PlatformView: %v", err)
+	}
+	if len(pv.Services) != 2 {
+		t.Fatalf("every service should be listed from declarations alone, got %+v", pv.Services)
+	}
+	byAlias := map[string]model.PlatformService{}
+	for _, s := range pv.Services {
+		byAlias[s.Alias] = s
+	}
+	if !byAlias["inbox"].Primary || !byAlias["inbox"].Indexed {
+		t.Errorf("inbox should be the indexed primary: %+v", byAlias["inbox"])
+	}
+	if byAlias["conversation"].Indexed {
+		t.Error("conversation should not be indexed yet in lazy mode")
+	}
+	// conversation's declared surface is known without its code.
+	if byAlias["conversation"].Methods == 0 {
+		t.Error("declared RPC count should come from protos, not from indexing")
+	}
+
+	if len(pv.Edges) != 1 {
+		t.Fatalf("expected the inbox→conversation edge, got %+v", pv.Edges)
+	}
+	e := pv.Edges[0]
+	if e.From != "inbox" || e.To != "conversation" || e.Kind != "grpc.method" {
+		t.Errorf("edge: got %s→%s (%s)", e.From, e.To, e.Kind)
+	}
+	if len(e.Calls) != 1 || e.Calls[0].SiteTitle != "Server.showThread" {
+		t.Errorf("edge should carry its call site: %+v", e.Calls)
+	}
+
+	// Indexing the other service can only add edges, never remove them.
+	if err := w.IndexRepo("conversation"); err != nil {
+		t.Fatalf("IndexRepo: %v", err)
+	}
+	pv2, err := w.PlatformView()
+	if err != nil {
+		t.Fatalf("PlatformView: %v", err)
+	}
+	if len(pv2.Edges) < len(pv.Edges) {
+		t.Errorf("edges shrank after indexing: %d then %d", len(pv.Edges), len(pv2.Edges))
+	}
+	for _, s := range pv2.Services {
+		if !s.Indexed {
+			t.Errorf("%s should be indexed now", s.Alias)
+		}
+	}
+}

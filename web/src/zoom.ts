@@ -8,15 +8,26 @@
 // above service once more than one repo is indexed. Today only the two ends
 // exist; the entrypoint rung is present as data (which inbound bindings reach
 // the anchor) but has no screen of its own yet.
-export type ZoomLevel = "service" | "frame";
+export type ZoomLevel = "platform" | "service" | "frame";
+
+// Ordered outermost-in. Zooming walks this list, skipping levels that aren't
+// available (there's no platform above a single repo).
+export const LEVELS: ZoomLevel[] = ["platform", "service", "frame"];
 
 // Zooming out never destroys the view you came from — the frame tree and its
 // expansion state live in the view store, untouched — so zooming back in is
 // lossless and needs no snapshotting.
-export function zoomOut(level: ZoomLevel): ZoomLevel {
-  return level === "frame" ? "service" : level;
+function step(level: ZoomLevel, delta: number, hasPlatform: boolean): ZoomLevel {
+  const usable = hasPlatform ? LEVELS : LEVELS.filter((l) => l !== "platform");
+  const i = usable.indexOf(level);
+  if (i === -1) return level;
+  return usable[Math.min(usable.length - 1, Math.max(0, i + delta))];
 }
 
-export function zoomIn(level: ZoomLevel): ZoomLevel {
-  return level === "service" ? "frame" : level;
+export function zoomOut(level: ZoomLevel, hasPlatform: boolean): ZoomLevel {
+  return step(level, -1, hasPlatform);
+}
+
+export function zoomIn(level: ZoomLevel, hasPlatform: boolean): ZoomLevel {
+  return step(level, 1, hasPlatform);
 }
