@@ -139,10 +139,15 @@ microservice:
   Linking an RPC to its Go implementation uses the name (gRPC forces them to
   match), narrowed to methods that aren't generated clients — identified by
   the same `Invoke` literal the outbound recognizer reads — aren't
-  `Unimplemented*` stubs, and are in the main module when any candidate is.
-  **Zero** candidates means nothing implements the RPC, which is stale;
-  **several** means unfold couldn't tell which, which is not the same thing
-  and isn't badged as staleness.
+  `Unimplemented*` stubs, aren't test doubles, aren't in `_test.go` files, and
+  are in the main module when any candidate is.
+
+  **Zero** candidates means nothing implements the RPC: that's stale.
+  **Several** means unfold can't tell which — a service behind decorators, say
+  — which is a different claim and not the manifest's fault. Those are
+  *enumerated* rather than dropped: the row offers each implementation, the
+  same way an interface call site offers its impls. An enumerated binding is
+  still marked as reaching the anchor if any of its implementations does.
 - **`excludeFromSdk`** marks surface implemented here but not callable from
   other services. Those methods are shown as **internal** rather than omitted —
   they exist, and later "nothing calls this" readings must not fire on them,

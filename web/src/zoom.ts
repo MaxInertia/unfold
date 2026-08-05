@@ -31,3 +31,17 @@ export function zoomOut(level: ZoomLevel, hasPlatform: boolean): ZoomLevel {
 export function zoomIn(level: ZoomLevel, hasPlatform: boolean): ZoomLevel {
   return step(level, 1, hasPlatform);
 }
+
+// Ids from a workspace carry their repo as "<alias>::<id>"; the primary
+// repo's stay bare. Mirrors workspace.Sep on the Go side.
+export const REPO_SEP = "::";
+
+// Which service a frame belongs to, or null for the primary repo. Zooming out
+// of a frame has to land on *that* frame's service — defaulting to the repo
+// unfold was launched in would show you a different service than the code you
+// were just reading.
+export function repoOf(id: string | undefined | null): string | null {
+  if (!id) return null;
+  const i = id.indexOf(REPO_SEP);
+  return i > 0 ? id.slice(0, i) : null;
+}

@@ -89,6 +89,10 @@ export interface Binding {
   detail?: string; // provenance, e.g. "ServeMux.HandleFunc"
   target?: TargetID; // the handler, when it's an indexed function
   targetTitle?: string;
+  // Set instead of target when several implementations match and none is
+  // unambiguous — a service behind decorators, say. Enumerating beats both
+  // guessing and dropping the link.
+  candidates?: Candidate[];
   site: TargetID; // the function containing the registration/call
   siteTitle?: string;
   file: string;
@@ -141,6 +145,7 @@ export interface Resolution {
   title?: string;
   stale?: boolean;
   note?: string;
+  candidates?: Candidate[];
 }
 
 // The L0 view. Services come from declarations so all are listed; edges need

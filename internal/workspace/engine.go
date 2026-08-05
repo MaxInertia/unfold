@@ -169,11 +169,16 @@ func (w *Workspace) qualifyFrame(alias string, f *model.Frame) {
 		c := &f.Calls[n]
 		c.ID = model.CallID(w.qualify(alias, string(c.ID)))
 		c.TargetID = model.TargetID(w.qualify(alias, string(c.TargetID)))
-		for j := range c.Candidates {
-			c.Candidates[j].TargetID = model.TargetID(w.qualify(alias, string(c.Candidates[j].TargetID)))
-		}
-		for j := range c.Receivers {
-			c.Receivers[j].TargetID = model.TargetID(w.qualify(alias, string(c.Receivers[j].TargetID)))
+		// Same aliasing hazard as bindings: a frame's Candidates and
+		// Receivers slices are the engine's, not ours.
+		c.Candidates = w.qualifyCandidates(alias, c.Candidates)
+		if len(c.Receivers) > 0 {
+			recv := make([]model.Receiver, len(c.Receivers))
+			for j, r := range c.Receivers {
+				r.TargetID = model.TargetID(w.qualify(alias, string(r.TargetID)))
+				recv[j] = r
+			}
+			c.Receivers = recv
 		}
 	}
 }
@@ -262,6 +267,25 @@ func (w *Workspace) ServiceViewOf(repo string, anchor model.TargetID) (*model.Se
 func (w *Workspace) qualifyBinding(alias string, b *model.Binding) {
 	b.Target = model.TargetID(w.qualify(alias, string(b.Target)))
 	b.Site = model.TargetID(w.qualify(alias, string(b.Site)))
+	b.Candidates = w.qualifyCandidates(alias, b.Candidates)
+}
+
+// qualifyCandidates returns a *new* slice. Copying is the whole point: a
+// Binding is handed out by value but its Candidates slice header still points
+// at the array the indexer stored, so rewriting in place would prefix the
+// engine's own data — and prefix it again on the next request, compounding
+// until ids match nothing. Single-call tests never see it; a UI that refetches
+// does, immediately.
+func (w *Workspace) qualifyCandidates(alias string, in []model.Candidate) []model.Candidate {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]model.Candidate, len(in))
+	for n, c := range in {
+		c.TargetID = model.TargetID(w.qualify(alias, string(c.TargetID)))
+		out[n] = c
+	}
+	return out
 }
 
 // Resolve opens the implementation of a declared key in whichever repo serves
@@ -293,9 +317,20 @@ func (w *Workspace) Resolve(kind, key string) (*model.Resolution, error) {
 		res.Target = model.TargetID(w.qualify(alias, string(b.Target)))
 		res.Title = b.TargetTitle
 		res.Stale = b.Stale
+		// With several implementations there's no single answer, so hand
+		// them all back and let the caller choose rather than silently
+		// picking one.
+		for _, c := range b.Candidates {
+			res.Candidates = append(res.Candidates, model.Candidate{
+				TargetID: model.TargetID(w.qualify(alias, string(c.TargetID))),
+				Label:    c.Label,
+			})
+		}
 		break
 	}
-	if res.Target == "" {
+	switch {
+	case res.Target != "" || len(res.Candidates) > 0:
+	default:
 		// The serving repo is known, but its implementation isn't linkable —
 		// say which repo to look in rather than failing outright.
 		res.Note = fmt.Sprintf("%s declares %s but unfold could not identify its implementation", r.name, key)

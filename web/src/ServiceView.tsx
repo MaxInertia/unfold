@@ -266,6 +266,8 @@ function BindingRow({
     .filter(Boolean)
     .join(" · ");
 
+  const choices = binding.candidates ?? [];
+
   // A declared binding with no implementation has nothing to open — render
   // it as text rather than a button that would go nowhere.
   const body = (
@@ -295,6 +297,10 @@ function BindingRow({
         <button type="button" className="service-item-open" onClick={() => onOpen(open)} title={openTitle}>
           {body}
         </button>
+      ) : choices.length > 0 ? (
+        // Several implementations and no way to tell which: offer them all
+        // rather than silently picking or dropping the link.
+        <ImplPicker choices={choices} body={body} onOpen={onOpen} />
       ) : (
         <span className="service-item-open service-item-open--dead" title={binding.detail}>
           {body}
@@ -344,6 +350,51 @@ function displayKey(b: Binding): string {
   return `${bare}/${method}`;
 }
 
+// One RPC with several implementations — a decorator in front of a server,
+// typically. The same shape the impl switcher uses at interface call sites:
+// the tool never guesses which one you meant.
+function ImplPicker({
+  choices,
+  body,
+  onOpen,
+}: {
+  choices: { targetId: TargetID; label: string }[];
+  body: React.ReactNode;
+  onOpen: (id: TargetID) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="impl-picker">
+      <button
+        type="button"
+        className="service-item-open"
+        onClick={() => setOpen((v) => !v)}
+        title={`${choices.length} implementations — pick one`}
+      >
+        {body}
+      </button>
+      <button
+        type="button"
+        className={`impl-toggle${open ? " impl-toggle--open" : ""}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {choices.length} impls ▾
+      </button>
+      {open && (
+        <ul className="impl-list">
+          {choices.map((c) => (
+            <li key={c.targetId}>
+              <button type="button" onClick={() => onOpen(c.targetId)}>
+                {c.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </span>
+  );
+}
+
 // The far end of an outbound edge. Kept as its own action rather than
 // replacing the row's click: one end is the call site in this repo, the other
 // is the implementation in another, and both are things you want one click
@@ -370,6 +421,9 @@ function CrossRepoLink({
     try {
       const res = await resolveBinding(binding.kind, binding.key);
       if (res.target) onOpen(res.target);
+      // Several implementations over there: open the first rather than
+      // refusing to navigate at all.
+      else if (res.candidates?.length) onOpen(res.candidates[0].targetId);
       else setError(res.note ?? `${res.service} has no linkable implementation`);
     } catch (e) {
       setError((e as Error).message);

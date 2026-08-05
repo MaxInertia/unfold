@@ -17,7 +17,7 @@ import {
   ServiceFilterPanel,
   type ServiceFilters,
 } from "./ZoomSidebar";
-import { zoomIn, zoomOut, type ZoomLevel } from "./zoom";
+import { repoOf, zoomIn, zoomOut, type ZoomLevel } from "./zoom";
 import { matches } from "./keybindings";
 import { fetchServiceView, fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult, ServiceView as ServiceViewT } from "./types";
@@ -72,6 +72,12 @@ function AppShell() {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
   });
+
+  // Which service the views are about. Zooming out follows the code you were
+  // reading — the frame's own repo — rather than snapping back to the one
+  // unfold was launched in; an explicit pick at the platform level overrides
+  // that until you descend into code again.
+  const serviceRepo = selectedService ?? repoOf(rootFrame?.id);
 
   // Flash a brief toast whenever watch mode reindexes (revision > 0).
   useEffect(() => {
@@ -150,7 +156,7 @@ function AppShell() {
   useEffect(() => {
     if (!platform) return;
     let alive = true;
-    fetchServiceView(rootFrame?.id ?? null, selectedService)
+    fetchServiceView(rootFrame?.id ?? null, serviceRepo)
       .then((v) => {
         if (!alive) return;
         setServiceName(v.name);
@@ -163,7 +169,7 @@ function AppShell() {
     return () => {
       alive = false;
     };
-  }, [platform, rootFrame?.id, selectedService, revision]);
+  }, [platform, rootFrame?.id, serviceRepo, revision]);
 
   // Keyboard zoom. The chords live in the keybinding registry, which is also
   // what the settings panel lists — so the documented shortcut and the wired
@@ -183,9 +189,12 @@ function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [platform, workspace]);
 
-  // Loading a different symbol is a descent, so it lands you in the code.
+  // Loading a different symbol is a descent, so it lands you in the code —
+  // and drops any explicit service pick, since the frame now decides which
+  // service you're in.
   useEffect(() => {
     setZoom("frame");
+    setSelectedService(null);
   }, [symbol]);
 
 
@@ -352,7 +361,7 @@ function AppShell() {
           ) : zoom === "service" ? (
             <ServiceView
               anchor={rootFrame?.id ?? null}
-              repo={selectedService}
+              repo={serviceRepo}
               filters={serviceFilters}
               onLoaded={setLoadedService}
               onOpen={(id) => {

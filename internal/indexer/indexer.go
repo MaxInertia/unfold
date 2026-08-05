@@ -593,10 +593,22 @@ func (i *Indexer) declaredBindings() []model.Binding {
 					b.TargetTitle = goTitle(i.funcs[target].obj)
 					b.Site = target
 					b.SiteTitle = b.TargetTitle
-				case candidates == 0:
+				case len(candidates) == 0:
 					b.Stale = true
 				default:
-					b.Detail += fmt.Sprintf(" · %d candidate implementations, none unambiguous", candidates)
+					// Several implementations and no way to tell which is
+					// "the" one — a service behind decorators, or one with
+					// generated mocks beside the real thing. Enumerate them:
+					// dropping the link left the row unopenable *and*
+					// unreachable, since reachability is computed from the
+					// very fields that were left empty.
+					for _, c := range candidates {
+						b.Candidates = append(b.Candidates, model.Candidate{
+							TargetID: c,
+							Label:    goTitle(i.funcs[c].obj),
+						})
+					}
+					b.Detail += fmt.Sprintf(" · %d implementations", len(candidates))
 				}
 				out = append(out, b)
 			}
@@ -675,16 +687,23 @@ func routePath(key string) string {
 // usable rather than perpetually ambiguous:
 //
 //   - must be a method (a bare function of that name is something else),
+//
 //   - must not itself invoke gRPC — that's the *client* for this very RPC,
 //     identified by the same Invoke literal the outbound recognizer reads,
+//
 //   - must not be a generated Unimplemented stub,
+//
 //   - and main-module methods win outright, since a match inside a
 //     dependency is someone else's implementation, not this service's.
 //
-// The count matters as much as the target: zero candidates means nothing
-// implements the RPC (a real staleness signal), while several means unfold
-// couldn't tell which — a different thing, and not the manifest's fault.
-func (i *Indexer) implementationOf(name string) (TargetID, int) {
+//   - and test files and generated mocks are skipped, since a double is
+//     never the implementation being asked about.
+//
+// Zero candidates means nothing implements the RPC — a real staleness signal.
+// Several means unfold can't tell which, which is a different claim: the
+// candidates are returned so the caller can offer them all rather than
+// dropping the link.
+func (i *Indexer) implementationOf(name string) (TargetID, []TargetID) {
 	var local, any []TargetID
 	for id, fi := range i.funcs {
 		if fi.obj.Name() != name {
@@ -694,11 +713,15 @@ func (i *Indexer) implementationOf(name string) (TargetID, int) {
 		if sig == nil || sig.Recv() == nil {
 			continue
 		}
-		if recv, _ := namedTypeParts(sig.Recv().Type()); strings.HasPrefix(recv, "Unimplemented") {
+		recv, _ := namedTypeParts(sig.Recv().Type())
+		if strings.HasPrefix(recv, "Unimplemented") || isDouble(recv) {
 			continue
 		}
 		if i.invokePath(id) != "" {
 			continue // a generated client method, not a server implementation
+		}
+		if pos := i.fset.Position(fi.decl.Pos()); strings.HasSuffix(pos.Filename, "_test.go") {
+			continue
 		}
 		any = append(any, id)
 		if isMainModule(fi.pkg) {
@@ -708,10 +731,25 @@ func (i *Indexer) implementationOf(name string) (TargetID, int) {
 	if len(local) > 0 {
 		any = local
 	}
+	sort.Slice(any, func(a, b int) bool { return any[a] < any[b] })
 	if len(any) == 1 {
-		return any[0], 1
+		return any[0], any
 	}
-	return "", len(any)
+	return "", any
+}
+
+// isDouble reports whether a receiver type name looks like a test double
+// rather than an implementation. Naming is the only signal available — a mock
+// satisfies the same interface as the real thing by construction — but the
+// conventions are near-universal.
+func isDouble(recv string) bool {
+	l := strings.ToLower(recv)
+	for _, p := range []string{"mock", "fake", "stub", "spy"} {
+		if strings.HasPrefix(l, p) || strings.HasSuffix(l, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // callFacts reduces a call site to the neutral shape recognizers consume.
@@ -947,10 +985,16 @@ func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
 	}
 
 	for _, b := range i.bindings {
-		if reaching != nil && (reaching[b.Target] || reaching[b.Site]) {
-			b.ReachesAnchor = true
-		}
 		if b.Role == model.RoleInbound {
+			// Only inbound surface is marked. The closure runs backwards
+			// (who reaches the anchor), which answers "which entrypoints run
+			// this code". The outbound question is the mirror image — which
+			// calls the anchor itself makes — and needs a forward walk, so
+			// labelling outbound rows with this closure would state
+			// something true but not what the badge claims.
+			if reaching != nil && bindingReaches(b, reaching) {
+				b.ReachesAnchor = true
+			}
 			sv.Inbound = append(sv.Inbound, b)
 		} else {
 			sv.Outbound = append(sv.Outbound, b)
@@ -981,6 +1025,22 @@ func (i *Indexer) needsProtoRoot() bool {
 func (i *Indexer) hasDeclaredGRPC() bool {
 	for _, b := range i.bindings {
 		if b.Kind == "grpc.method" && b.Role == model.RoleInbound && b.Confidence == model.ConfDeclared {
+			return true
+		}
+	}
+	return false
+}
+
+// bindingReaches reports whether any endpoint of a binding reaches the
+// anchor. Candidates count: an RPC with three possible implementations is
+// still an entrypoint to the anchor if any one of them leads there, and
+// checking only Target/Site silently excluded every enumerated binding.
+func bindingReaches(b model.Binding, reaching map[TargetID]bool) bool {
+	if reaching[b.Target] || reaching[b.Site] {
+		return true
+	}
+	for _, c := range b.Candidates {
+		if reaching[c.TargetID] {
 			return true
 		}
 	}

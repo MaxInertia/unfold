@@ -248,6 +248,12 @@ type Binding struct {
 	Target      TargetID `json:"target,omitempty"`
 	TargetTitle string   `json:"targetTitle,omitempty"`
 
+	// Candidates lists the implementations when several match and none is
+	// unambiguous — a service fronted by decorators, or one with generated
+	// mocks alongside the real thing. Enumerating beats guessing, and beats
+	// dropping the link entirely: the same choice interface call sites make.
+	Candidates []Candidate `json:"candidates,omitempty"`
+
 	// Site is the function containing the registration or call itself, so
 	// every binding opens into source even when Target is empty.
 	Site      TargetID `json:"site"`
@@ -335,6 +341,9 @@ type Resolution struct {
 	Title   string   `json:"title,omitempty"`
 	Stale   bool     `json:"stale,omitempty"`
 	Note    string   `json:"note,omitempty"`
+	// Candidates is set instead of Target when the serving repo has several
+	// implementations of the key and none is unambiguous.
+	Candidates []Candidate `json:"candidates,omitempty"`
 }
 
 // PlatformView is the L0 picture: every service in the workspace and the

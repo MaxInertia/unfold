@@ -7,6 +7,7 @@ type ConversationServer struct{}
 
 // GetConversation implements conversation.v1.ConversationService.
 func (s *ConversationServer) GetConversation(ctx context.Context) error {
+	s.reachMe()
 	return nil
 }
 

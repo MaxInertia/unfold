@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -98,16 +99,30 @@ func TestResolveOpensTheOtherRepo(t *testing.T) {
 	if res.Service != "conversation" {
 		t.Errorf("service: got %q", res.Service)
 	}
-	if res.Title != "ConversationServer.GetConversation" {
-		t.Errorf("title: got %q, want ConversationServer.GetConversation", res.Title)
+	// This service is fronted by a decorator, so there is no single
+	// implementation — resolution hands back the choices instead of picking
+	// one, and either form has to be openable.
+	target := res.Target
+	if target == "" {
+		if len(res.Candidates) == 0 {
+			t.Fatalf("resolution produced nothing to open: %+v", res)
+		}
+		for _, c := range res.Candidates {
+			if c.Label == "ConversationServer.GetConversation" {
+				target = c.TargetID
+			}
+		}
+		if target == "" {
+			t.Fatalf("the real implementation was not among %+v", res.Candidates)
+		}
 	}
-	if !strings.HasPrefix(string(res.Target), "conversation"+Sep) {
-		t.Fatalf("a non-primary target must carry its repo, got %q", res.Target)
+	if !strings.HasPrefix(string(target), "conversation"+Sep) {
+		t.Fatalf("a non-primary target must carry its repo, got %q", target)
 	}
 
-	f, err := w.Frame(res.Target)
+	f, err := w.Frame(target)
 	if err != nil {
-		t.Fatalf("Frame(%q): %v", res.Target, err)
+		t.Fatalf("Frame(%q): %v", target, err)
 	}
 	if !strings.Contains(f.Source, "func (s *ConversationServer) GetConversation") {
 		t.Errorf("frame is not the implementation:\n%s", f.Source)
@@ -270,6 +285,182 @@ func TestPlatformViewEdgesFollowIndexing(t *testing.T) {
 	for _, s := range pv2.Services {
 		if !s.Indexed {
 			t.Errorf("%s should be indexed now", s.Alias)
+		}
+	}
+}
+
+// A real service fronts its gRPC surface with decorators and ships generated
+// mocks beside the implementation, so several methods carry each RPC's name.
+// Discarding the link in that case left the row unopenable *and* permanently
+// unreachable, because reachability was computed from the very fields the
+// discard left empty.
+func TestAmbiguousImplementationsAreEnumeratedNotDropped(t *testing.T) {
+	w := open(t, ModeEager)
+	sv, err := w.ServiceViewOf("conversation", "")
+	if err != nil {
+		t.Fatalf("ServiceViewOf: %v", err)
+	}
+	var b *model.Binding
+	for i := range sv.Inbound {
+		if sv.Inbound[i].Key == "conversation.v1.ConversationService/GetConversation" {
+			b = &sv.Inbound[i]
+		}
+	}
+	if b == nil {
+		t.Fatalf("missing the declared RPC; got %+v", sv.Inbound)
+	}
+	if b.Stale {
+		t.Error("several implementations is not the same as none — not stale")
+	}
+	if b.Target != "" {
+		t.Fatalf("with a decorator present there is no single implementation, got %q", b.Target)
+	}
+	if len(b.Candidates) < 2 {
+		t.Fatalf("expected the implementations to be enumerated, got %+v", b.Candidates)
+	}
+	// The generated mock is a double, never an answer.
+	for _, c := range b.Candidates {
+		if strings.Contains(c.Label, "Mock") {
+			t.Errorf("a generated mock should not be offered as an implementation: %q", c.Label)
+		}
+	}
+	// Both the real server and the decorator are real answers.
+	labels := map[string]bool{}
+	for _, c := range b.Candidates {
+		labels[c.Label] = true
+	}
+	if !labels["ConversationServer.GetConversation"] || !labels["loggingServer.GetConversation"] {
+		t.Errorf("expected both the implementation and its decorator, got %v", labels)
+	}
+}
+
+// An enumerated binding must still be markable as reaching the anchor: an RPC
+// with three possible implementations is an entrypoint if any of them leads
+// there.
+func TestEnumeratedBindingStillReachesTheAnchor(t *testing.T) {
+	w := open(t, ModeEager)
+	anchor, err := w.LookupSymbol("conversation" + Sep + "reachMe")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	sv, err := w.ServiceViewOf("conversation", anchor)
+	if err != nil {
+		t.Fatalf("ServiceViewOf: %v", err)
+	}
+	for _, b := range sv.Inbound {
+		if b.Key != "conversation.v1.ConversationService/GetConversation" {
+			continue
+		}
+		if len(b.Candidates) == 0 {
+			t.Fatal("expected an enumerated binding for this test to mean anything")
+		}
+		if !b.ReachesAnchor {
+			t.Errorf("a candidate reaches the anchor, so the binding does: %+v", b)
+		}
+		return
+	}
+	t.Fatal("missing the declared RPC")
+}
+
+// The anchor badge means "this entrypoint leads to the anchored frame", which
+// only makes sense inbound: the closure runs backwards. An outbound row
+// labelled from that same closure states something true — this call is made
+// by code that reaches the anchor — but not what the badge claims.
+func TestOnlyInboundBindingsCarryTheAnchorBadge(t *testing.T) {
+	w := open(t, ModeEager)
+	anchor, err := w.LookupSymbol("showThread")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	sv, err := w.ServiceView(anchor)
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	if sv.Anchor == "" {
+		t.Fatal("anchor was not accepted; the rest of this test proves nothing")
+	}
+	for _, b := range sv.Outbound {
+		if b.ReachesAnchor {
+			t.Errorf("outbound bindings must not carry the anchor badge: %+v", b)
+		}
+	}
+}
+
+// Qualifying ids must not mutate the engine's own data. A Binding is handed
+// out by value, but its Candidates slice header still points at the array the
+// indexer stored — so rewriting in place prefixed that array, and prefixed it
+// again on every later request until the ids matched nothing and the anchor
+// badge silently stopped working.
+//
+// Every other test here makes a single call, which is exactly why none of
+// them caught it. This one calls twice.
+func TestRepeatedViewsDoNotCorruptIds(t *testing.T) {
+	w := open(t, ModeEager)
+	anchor, err := w.LookupSymbol("conversation" + Sep + "reachMe")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+
+	var first []model.Candidate
+	for call := 1; call <= 3; call++ {
+		sv, err := w.ServiceViewOf("conversation", anchor)
+		if err != nil {
+			t.Fatalf("call %d: %v", call, err)
+		}
+		var b *model.Binding
+		for i := range sv.Inbound {
+			if len(sv.Inbound[i].Candidates) > 0 {
+				b = &sv.Inbound[i]
+			}
+		}
+		if b == nil {
+			t.Fatalf("call %d: expected an enumerated binding", call)
+		}
+		for _, c := range b.Candidates {
+			if strings.Count(string(c.TargetID), Sep) != 1 {
+				t.Fatalf("call %d: id was qualified more than once: %q", call, c.TargetID)
+			}
+		}
+		if call == 1 {
+			first = b.Candidates
+			continue
+		}
+		if !reflect.DeepEqual(b.Candidates, first) {
+			t.Fatalf("call %d returned different ids than call 1:\n got %+v\nwant %+v",
+				call, b.Candidates, first)
+		}
+		// The badge depends on those ids matching the reachability closure,
+		// so corruption shows up here too.
+		if !b.ReachesAnchor {
+			t.Errorf("call %d: binding stopped reaching the anchor", call)
+		}
+	}
+}
+
+// The same hazard applies to frames from a non-primary repo.
+func TestRepeatedFramesDoNotCorruptIds(t *testing.T) {
+	w := open(t, ModeEager)
+	id, err := w.LookupSymbol("conversation" + Sep + "GetConversation")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	for call := 1; call <= 3; call++ {
+		f, err := w.Frame(id)
+		if err != nil {
+			t.Fatalf("call %d: %v", call, err)
+		}
+		if strings.Count(string(f.ID), Sep) != 1 {
+			t.Fatalf("call %d: frame id qualified more than once: %q", call, f.ID)
+		}
+		for _, c := range f.Calls {
+			if strings.Count(string(c.ID), Sep) != 1 {
+				t.Fatalf("call %d: call id qualified more than once: %q", call, c.ID)
+			}
+			for _, cand := range c.Candidates {
+				if strings.Count(string(cand.TargetID), Sep) != 1 {
+					t.Fatalf("call %d: candidate qualified more than once: %q", call, cand.TargetID)
+				}
+			}
 		}
 	}
 }

@@ -2730,3 +2730,54 @@ body.resizing {
   color: var(--muted);
   border-bottom: 1px solid var(--card-border);
 }
+
+/* An RPC with several implementations: the same "don't guess" affordance the
+   impl switcher gives interface call sites. */
+.impl-picker {
+  display: contents;
+}
+
+.impl-toggle {
+  font: inherit;
+  font-size: 0.68rem;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  padding: 0 0.4rem;
+  cursor: pointer;
+  flex: none;
+}
+
+.impl-toggle:hover,
+.impl-toggle--open {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.impl-list {
+  flex: 1 1 100%;
+  list-style: none;
+  margin: 0.1rem 0 0.2rem 0.8rem;
+  padding: 0;
+  border-left: 2px solid var(--card-border);
+}
+
+.impl-list button {
+  font: inherit;
+  font-size: 0.74rem;
+  background: none;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  width: 100%;
+  text-align: left;
+}
+
+.impl-list button:hover {
+  background: var(--call-bg);
+  color: var(--accent);
+}
