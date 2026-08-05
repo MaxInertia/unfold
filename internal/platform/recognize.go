@@ -213,10 +213,22 @@ func HTTPClientCalls(c Call) []model.Binding {
 // That's what lets an outbound edge join to an implementation in another repo
 // without inferring anything about client types or hostnames.
 func GRPCClientCalls(c Call) []model.Binding {
-	if c.CalleeInvoke == "" {
+	// Two ways the method path shows up, and both are needed.
+	//
+	// Usually it's inside the callee — a generated client states it in its
+	// own body — which is what CalleeInvoke carries. But code that calls
+	// grpc's Invoke or NewStream *directly* passes the path as an argument
+	// right here, and looking only at callee bodies misses every one of
+	// those: grpc.ClientConn.Invoke contains no literal of its own, so
+	// there's nothing downstream to find.
+	path := c.CalleeInvoke
+	if path == "" {
+		path = methodPathArg(c)
+	}
+	if path == "" {
 		return nil
 	}
-	key := strings.TrimPrefix(c.CalleeInvoke, "/")
+	key := strings.TrimPrefix(path, "/")
 	svc, method, ok := strings.Cut(key, "/")
 	if !ok || svc == "" || method == "" {
 		return nil
@@ -231,6 +243,72 @@ func GRPCClientCalls(c Call) []model.Binding {
 		Line:       c.Line,
 		Confidence: model.ConfExact,
 	}}
+}
+
+// methodPathArg returns a gRPC method path passed as an argument to this
+// call, if one is. The shape "/pkg.Service/Method" is distinctive enough to
+// key on directly, which keeps this working for hand-rolled clients and
+// generic helpers that take the method as a parameter — neither of which
+// state the path anywhere a callee-body search would reach.
+func methodPathArg(c Call) string {
+	for _, a := range c.Args {
+		if a.Known && IsMethodPath(a.Value) {
+			return a.Value
+		}
+	}
+	return ""
+}
+
+// IsMethodPath matches "/package.Service/Method" (and "/Service/Method" for
+// protos declaring no package). Exported so the engine applies the same test
+// when scanning a callee body.
+//
+// The shape alone isn't enough: "/api/health" also has two slashes and two
+// identifiers. What separates a gRPC path is that the service half is
+// fully-qualified or type-cased and the method half is an RPC name, which
+// proto style makes UpperCamelCase. Without that, every HTTP route registered
+// with a literal would be read as a gRPC call.
+func IsMethodPath(s string) bool {
+	if !strings.HasPrefix(s, "/") || strings.Count(s, "/") != 2 {
+		return false
+	}
+	svc, method, _ := strings.Cut(strings.TrimPrefix(s, "/"), "/")
+	if !isIdentPath(svc) || !isIdent(method) || !startsUpper(method) {
+		return false
+	}
+	return strings.Contains(svc, ".") || startsUpper(svc)
+}
+
+func startsUpper(s string) bool {
+	return s != "" && s[0] >= 'A' && s[0] <= 'Z'
+}
+
+func isIdentPath(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, part := range strings.Split(s, ".") {
+		if !isIdent(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeRoute trims a Go 1.22 pattern to a stable "METHOD /path" or

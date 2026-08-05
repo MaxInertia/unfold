@@ -323,6 +323,11 @@ func TestAmbiguousImplementationsAreEnumeratedNotDropped(t *testing.T) {
 		if strings.Contains(c.Label, "Mock") {
 			t.Errorf("a generated mock should not be offered as an implementation: %q", c.Label)
 		}
+		// Unrelated code that merely shares the method name must be gone:
+		// narrowing is by the generated server interface, not by name.
+		if strings.Contains(c.Label, "analyticsReporter") {
+			t.Errorf("a type that doesn't implement the service interface was offered: %q", c.Label)
+		}
 	}
 	// Both the real server and the decorator are real answers.
 	labels := map[string]bool{}
@@ -409,12 +414,14 @@ func TestRepeatedViewsDoNotCorruptIds(t *testing.T) {
 		}
 		var b *model.Binding
 		for i := range sv.Inbound {
-			if len(sv.Inbound[i].Candidates) > 0 {
+			// Name the RPC explicitly: several bindings carry candidates, and
+			// only this one's implementation reaches the anchor.
+			if sv.Inbound[i].Key == "conversation.v1.ConversationService/GetConversation" {
 				b = &sv.Inbound[i]
 			}
 		}
-		if b == nil {
-			t.Fatalf("call %d: expected an enumerated binding", call)
+		if b == nil || len(b.Candidates) == 0 {
+			t.Fatalf("call %d: expected an enumerated binding for GetConversation", call)
 		}
 		for _, c := range b.Candidates {
 			if strings.Count(string(c.TargetID), Sep) != 1 {
@@ -498,6 +505,42 @@ func TestUnderDirDoesNotMatchSiblingPrefixes(t *testing.T) {
 	for _, tt := range tests {
 		if got := underDir(tt.path, tt.dir); got != tt.want {
 			t.Errorf("underDir(%q, %q) = %v, want %v", tt.path, tt.dir, got, tt.want)
+		}
+	}
+}
+
+// Narrowing is structural, not nominal. Every type in the fixture declares
+// GetConversation, but only those implementing the generated
+// ConversationServiceServer interface are real answers — a decorator is, an
+// unrelated reporter that happens to share the name is not.
+func TestImplementationsNarrowedByServerInterface(t *testing.T) {
+	w := open(t, ModeEager)
+	sv, err := w.ServiceViewOf("conversation", "")
+	if err != nil {
+		t.Fatalf("ServiceViewOf: %v", err)
+	}
+	var labels []string
+	for _, b := range sv.Inbound {
+		if b.Key != "conversation.v1.ConversationService/GetConversation" {
+			continue
+		}
+		for _, c := range b.Candidates {
+			labels = append(labels, c.Label)
+		}
+		if b.TargetTitle != "" {
+			labels = append(labels, b.TargetTitle)
+		}
+	}
+	if len(labels) == 0 {
+		t.Fatal("expected at least one implementation")
+	}
+	want := map[string]bool{
+		"ConversationServer.GetConversation": true,
+		"loggingServer.GetConversation":      true,
+	}
+	for _, l := range labels {
+		if !want[l] {
+			t.Errorf("offered %q, which does not implement ConversationServiceServer", l)
 		}
 	}
 }

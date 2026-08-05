@@ -287,3 +287,51 @@ func assertBinding(t *testing.T, got []model.Binding, want *model.Binding) {
 		t.Errorf("detail: got %q, want %q", g.Detail, want.Detail)
 	}
 }
+
+// The method-path shape has to be tight enough that an HTTP route registered
+// with a literal isn't read as a gRPC call: "/api/health" has two slashes and
+// two identifiers too.
+func TestIsMethodPath(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"/accountgroup.v1.AccountGroupService/GetMulti", true},
+		{"/conversation.v1.ConversationService/Get", true},
+		{"/Service/Method", true}, // proto with no package
+		{"/api/health", false},
+		{"/v1/orders", false},
+		{"/api/orders/list", false},
+		{"POST /v1/orders", false},
+		{"/pkg.Service/lowercase", false},
+		{"", false},
+		{"/", false},
+	}
+	for _, tt := range tests {
+		if got := IsMethodPath(tt.in); got != tt.want {
+			t.Errorf("IsMethodPath(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+// A call that passes the method path itself — grpc's Invoke called directly,
+// or a generic helper taking the method as a parameter — must be recognized.
+// Only reading callee bodies missed every one of those, because
+// grpc.ClientConn.Invoke states no literal of its own.
+func TestGRPCClientCallsFromCallSiteLiteral(t *testing.T) {
+	got := GRPCClientCalls(Call{
+		PkgPath: "google.golang.org/grpc", Recv: "ClientConn", RecvPkg: "google.golang.org/grpc",
+		Func: "Invoke",
+		Args: []Arg{{}, lit("/accountgroup.v1.AccountGroupService/GetMulti"), {}, {}},
+		Site: "pkg.fetch",
+	})
+	if len(got) != 1 {
+		t.Fatalf("expected one binding, got %+v", got)
+	}
+	if got[0].Key != "accountgroup.v1.AccountGroupService/GetMulti" {
+		t.Errorf("key: got %q", got[0].Key)
+	}
+	if got[0].Confidence != model.ConfExact {
+		t.Errorf("a literal method path is exact, got %q", got[0].Confidence)
+	}
+}

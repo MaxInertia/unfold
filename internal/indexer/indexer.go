@@ -137,6 +137,10 @@ type Indexer struct {
 	// scanned once however many call sites reach it.
 	invokeCache map[TargetID]string
 
+	// bindingStub[n] marks a binding whose call site is the gRPC stub itself
+	// rather than a caller of one.
+	bindingStub []bool
+
 	// bindingCallee[n] is the target that bindings[n]'s call site invoked,
 	// for the pass that de-duplicates chain-discovered edges. Only valid for
 	// the code-derived prefix of bindings, before declared ones are appended.
@@ -244,6 +248,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.usagesByTarget = make(map[TargetID][]*usageInfo)
 	i.bindings = nil
 	i.bindingCallee = nil
+	i.bindingStub = nil
 	i.invokeCache = make(map[TargetID]string)
 	i.mf = nil
 	i.protoErr = ""
@@ -317,8 +322,15 @@ func (i *Indexer) Load(dir, pattern string) error {
 						// Remember what each binding's call site called, so
 						// an edge found by following a chain is attributed to
 						// the innermost site, not every caller above it.
-						for range found {
+						for _, b := range found {
 							i.bindingCallee = append(i.bindingCallee, facts.Callee)
+							// A gRPC binding recognized from a literal at
+							// *this* call site means the enclosing function
+							// is the client stub itself. Generated stubs are
+							// often in-repo, and the edge belongs to the code
+							// that calls them, not to the stub.
+							i.bindingStub = append(i.bindingStub,
+								b.Kind == "grpc.method" && facts.CalleeInvoke == "")
 						}
 					}
 				}
@@ -474,25 +486,52 @@ func (i *Indexer) dropRelayedBindings() {
 		site TargetID
 		key  string
 	}
-	sites := make(map[siteKey]bool, len(i.bindings))
-	for _, b := range i.bindings {
-		sites[siteKey{b.Site, b.Key}] = true
-	}
-	kept := i.bindings[:0]
-	keptCallee := i.bindingCallee[:0]
-	for n, b := range i.bindings {
-		callee := TargetID("")
-		if n < len(i.bindingCallee) {
-			callee = i.bindingCallee[n]
+	at := func(s []TargetID, n int) TargetID {
+		if n < len(s) {
+			return s[n]
 		}
-		if callee != "" && sites[siteKey{callee, b.Key}] {
+		return ""
+	}
+	isStub := func(n int) bool { return n < len(i.bindingStub) && i.bindingStub[n] }
+
+	// Which functions are called by some binding's call site, per key. A stub
+	// that somebody calls should not own the edge — the caller should — so
+	// this pass runs first, before the innermost-wins rule below.
+	calledBy := make(map[siteKey]bool, len(i.bindings))
+	for n, b := range i.bindings {
+		if callee := at(i.bindingCallee, n); callee != "" {
+			calledBy[siteKey{callee, b.Key}] = true
+		}
+	}
+	type entry struct {
+		b      model.Binding
+		callee TargetID
+	}
+	var stage []entry
+	for n, b := range i.bindings {
+		if isStub(n) && calledBy[siteKey{b.Site, b.Key}] {
+			continue // somebody calls this stub; they own the edge
+		}
+		stage = append(stage, entry{b, at(i.bindingCallee, n)})
+	}
+
+	// Innermost wins among what's left: a binding whose callee is itself the
+	// site of a binding for the same key is a relay from further out.
+	sites := make(map[siteKey]bool, len(stage))
+	for _, e := range stage {
+		sites[siteKey{e.b.Site, e.b.Key}] = true
+	}
+	i.bindings = i.bindings[:0]
+	i.bindingCallee = i.bindingCallee[:0]
+	i.bindingStub = i.bindingStub[:0]
+	for _, e := range stage {
+		if e.callee != "" && sites[siteKey{e.callee, e.b.Key}] {
 			continue
 		}
-		kept = append(kept, b)
-		keptCallee = append(keptCallee, callee)
+		i.bindings = append(i.bindings, e.b)
+		i.bindingCallee = append(i.bindingCallee, e.callee)
+		i.bindingStub = append(i.bindingStub, false)
 	}
-	i.bindings = kept
-	i.bindingCallee = keptCallee
 }
 
 // identify records what to call this project at the service level. The repo
@@ -586,7 +625,7 @@ func (i *Indexer) declaredBindings() []model.Binding {
 				// from "several candidates, couldn't tell which" (not stale;
 				// the RPC is fine, the *link* is what's missing). Conflating
 				// them would report a healthy service as rotten.
-				target, candidates := i.implementationOf(m.Name)
+				target, candidates := i.implementationOfRPC(m.Service, m.Name)
 				switch {
 				case target != "":
 					b.Target = target
@@ -704,6 +743,78 @@ func routePath(key string) string {
 // candidates are returned so the caller can offer them all rather than
 // dropping the link.
 func (i *Indexer) implementationOf(name string) (TargetID, []TargetID) {
+	return i.implementationOfRPC("", name)
+}
+
+// implementationOfRPC narrows by the generated server interface when the
+// service is known.
+//
+// Matching on the method name alone is far too loose in a real service: a
+// decorator, a metrics wrapper, an auth layer and the server itself all
+// declare the same method, and enumerating all of them is barely better than
+// guessing. But gRPC generates an interface per service — `<Service>Server`,
+// carrying exactly that service's methods — so the types implementing it are
+// the only real answers. That's a structural test, not a naming one: a
+// decorator implements the interface and belongs in the list; a helper that
+// merely shares a method name does not.
+func (i *Indexer) implementationOfRPC(service, name string) (TargetID, []TargetID) {
+	if impls := i.serverImplementors(service); impls != nil {
+		var narrowed []TargetID
+		_, all := i.implementationByName(name)
+		for _, id := range all {
+			if fi := i.funcs[id]; fi != nil {
+				if recv, _ := receiverParts(fi); impls[recv] {
+					narrowed = append(narrowed, id)
+				}
+			}
+		}
+		if len(narrowed) == 1 {
+			return narrowed[0], narrowed
+		}
+		if len(narrowed) > 1 {
+			return "", narrowed
+		}
+		// The interface exists but nothing indexed implements it; fall
+		// through rather than claiming the RPC is unimplemented.
+	}
+	return i.implementationByName(name)
+}
+
+// serverImplementors returns the receiver types implementing <service>Server,
+// or nil when no such interface is in the index.
+func (i *Indexer) serverImplementors(service string) map[string]bool {
+	if service == "" {
+		return nil
+	}
+	bare := service[strings.LastIndex(service, ".")+1:]
+	want := bare + "Server"
+	out := map[string]bool{}
+	for key, impls := range i.interfaceImpls {
+		if key[strings.LastIndex(key, ".")+1:] != want {
+			continue
+		}
+		for _, t := range impls {
+			if n, _ := namedTypeParts(t); n != "" {
+				out[n] = true
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// receiverParts returns a method's receiver type name and package.
+func receiverParts(fi *funcInfo) (name, pkgPath string) {
+	sig, _ := fi.obj.Type().(*types.Signature)
+	if sig == nil || sig.Recv() == nil {
+		return "", ""
+	}
+	return namedTypeParts(sig.Recv().Type())
+}
+
+func (i *Indexer) implementationByName(name string) (TargetID, []TargetID) {
 	var local, any []TargetID
 	for id, fi := range i.funcs {
 		if fi.obj.Name() != name {
@@ -849,8 +960,7 @@ func (i *Indexer) invokePath(target TargetID) string {
 			case "Invoke", "NewStream":
 				for _, a := range ce.Args {
 					// A gRPC method path is exactly "/pkg.Service/Method".
-					if v := argFacts(info, a); v.Known &&
-						strings.HasPrefix(v.Value, "/") && strings.Count(v.Value, "/") == 2 {
+					if v := argFacts(info, a); v.Known && platform.IsMethodPath(v.Value) {
 						found = v.Value
 						return false
 					}

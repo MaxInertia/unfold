@@ -84,7 +84,15 @@ The service view is a two-sided card, not a graph:
   folds to the same string). Since a service's SDK is in the module graph of
   anything that calls it, that literal is already indexed.
 
-  Hand-written SDKs wrap that client, so the search follows calls out of a
+  Code that calls grpc's `Invoke`/`NewStream` **directly** passes the path as
+  an argument rather than hiding it in a callee, so a literal of that shape at
+  a call site is recognized too. The shape has to be tight — `/api/health` also
+  has two slashes — so the service half must be qualified or type-cased and the
+  method half UpperCamelCase. A generated stub that something else calls yields
+  the edge to its caller, since the useful attribution is the code doing the
+  calling, not the stub.
+
+  Hand-written SDKs wrap that client, so the search also follows calls out of a
   callee's body — through plain functions as well as methods, to any depth.
   Two rules keep that from turning into noise: only *this module's* call sites
   produce bindings (a dependency's internal calls aren't your service's
@@ -136,11 +144,13 @@ microservice:
   on the calling side, which is what will join the two ends of a cross-service
   edge once more than one repo is indexed.
 
-  Linking an RPC to its Go implementation uses the name (gRPC forces them to
-  match), narrowed to methods that aren't generated clients — identified by
-  the same `Invoke` literal the outbound recognizer reads — aren't
-  `Unimplemented*` stubs, aren't test doubles, aren't in `_test.go` files, and
-  are in the main module when any candidate is.
+  Linking an RPC to its Go implementation narrows by the **generated server
+  interface**: gRPC emits a `<Service>Server` interface carrying exactly that
+  service's methods, so the types implementing it are the real answers. That's
+  structural, not nominal — a decorator implements the interface and belongs in
+  the list; a helper that merely shares a method name doesn't. Where no such
+  interface is indexed it falls back to the name, minus generated clients,
+  `Unimplemented*` stubs, test doubles and `_test.go` declarations.
 
   **Zero** candidates means nothing implements the RPC: that's stale.
   **Several** means unfold can't tell which — a service behind decorators, say
