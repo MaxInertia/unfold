@@ -2439,13 +2439,104 @@ body.resizing {
   color: var(--goroutine-fg);
 }
 
-.platform-grid {
-  list-style: none;
-  margin: 0;
-  padding: 0.6rem;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 0.4rem;
+/* The layered graph. Positioned absolutely over an SVG edge layer so the
+   nodes stay real buttons — a <foreignObject> would work but loses focus and
+   hover behaviour that comes free with plain DOM. */
+/* A deep workspace is wider than the card, so the graph scrolls inside itself
+   rather than stretching the page — the same rule the rest of the UI follows
+   for wide content. */
+.graph-scroll {
+  margin: 0.6rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.graph {
+  position: relative;
+}
+
+.graph-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.graph-edge {
+  fill: none;
+  stroke: var(--call-border);
+  transition: opacity 0.12s ease;
+}
+
+/* A back edge points against the layering — the graph has a cycle there, and
+   drawing it distinctly beats pretending the layering was clean. */
+.graph-edge--back {
+  stroke: var(--goroutine-border);
+  stroke-dasharray: 4 3;
+}
+
+.graph-edge--faded {
+  opacity: 0.12;
+}
+
+.graph-edge-label {
+  fill: var(--muted);
+  font-size: 9px;
+  text-anchor: middle;
+}
+
+.graph-node {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  padding: 0 0.35rem;
+  transition: opacity 0.12s ease;
+}
+
+.graph-node--primary {
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+/* Not indexed: its incoming edges are known (they come from other services'
+   code) but its outgoing ones aren't, so it reads as provisional. */
+.graph-node--unindexed {
+  border-style: dashed;
+  opacity: 0.75;
+}
+
+.graph-node--dim {
+  opacity: 0.2;
+}
+
+.graph-node-open {
+  font: inherit;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  background: none;
+  border: none;
+  text-align: left;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0;
+}
+
+.graph-node-name {
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-node-meta {
+  font-size: 0.65rem;
+  color: var(--muted);
 }
 
 .platform-card {

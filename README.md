@@ -306,12 +306,21 @@ So a service that hasn't been indexed contributes no *outgoing* edges, and the
 view says so rather than showing it as a leaf that calls nothing. Each such
 service carries an **index** button that reads just that one.
 
-Picking a service draws the slice around it — callers on the left, it in the
-middle, callees on the right, with the individual RPCs on each edge. Every one
-of those lines opens the real call site, so the level changes but the
-destination doesn't. That's deliberately not an all-pairs canvas: a drawn
-graph of every service at once is the hairball the service view already avoids,
-and the slice stays legible at any workspace size.
+The overview is a **layered graph**: dependency direction runs left to right,
+so the shape itself is the information — which services are entry points,
+which are shared leaves, how deep the platform is. Edge thickness is the
+number of RPCs along it. An edge pointing against the layering is a cycle and
+is drawn dashed rather than quietly reordered. Layout is deterministic (layer
+assignment plus barycenter ordering, no force simulation) so the picture is
+the same every load and can be talked about.
+
+Hovering a service dims everything it isn't connected to, which is how a large
+workspace stays readable without hiding anything.
+
+Picking a service drops to the slice around it — callers on the left, it in
+the middle, callees on the right, with the individual RPCs on each edge. Every
+one of those lines opens the real call site, so the level changes but the
+destination doesn't.
 
 ### The sidebar follows the level
 

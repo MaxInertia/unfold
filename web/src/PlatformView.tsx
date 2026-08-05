@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchPlatformView, indexRepo } from "./api";
+import { edgePath, layout, NODE_H, NODE_W } from "./platformLayout";
 import type { PlatformEdge, PlatformService, PlatformView as PlatformViewT, TargetID } from "./types";
 
 // The L0 (platform) zoom level: every service in the workspace and the calls
 // between them.
 //
-// This is where node-link rendering earns its place — the node count is the
-// number of services, not the number of routes — but only once something is
-// selected. An all-pairs canvas is the hairball the service view deliberately
-// avoids, so the default is an overview grid, and picking a service draws the
-// slice that concerns it: callers on the left, it in the middle, callees on
-// the right. Same two-sided shape as the service view, one granularity up.
+// This is where node-link rendering earns its place: the node count is the
+// number of services, not the number of routes. The overview is a layered
+// graph — dependency direction left to right — so the shape itself carries
+// the information a grid of count badges couldn't: which services are entry
+// points, which are shared leaves, where the depth and the cycles are.
+//
+// Picking a service still drops to the slice around it — callers, it,
+// callees, with the individual RPCs on each edge — because that answers a
+// different question and stays readable however large the workspace grows.
 export function PlatformView({
   filter,
   selected,
@@ -83,20 +87,16 @@ export function PlatformView({
           onOpenService={onOpenService}
           onOpenSite={onOpenSite}
         />
+      ) : services.length === 0 ? (
+        <p className="platform-empty">No service matches “{filter}”.</p>
       ) : (
-        <ul className="platform-grid">
-          {services.map((s) => (
-            <ServiceCard
-              key={s.alias}
-              service={s}
-              view={view}
-              busy={busy === s.alias}
-              onSelect={() => onSelect(s.alias)}
-              onIndex={() => void index(s.alias)}
-            />
-          ))}
-          {services.length === 0 && <li className="platform-empty">No service matches “{filter}”.</li>}
-        </ul>
+        <Graph
+          services={services}
+          edges={view.edges}
+          busy={busy}
+          onSelect={onSelect}
+          onIndex={(a) => void index(a)}
+        />
       )}
     </div>
   );
@@ -108,46 +108,113 @@ function edgeCounts(view: PlatformViewT, alias: string) {
   return { out, inc };
 }
 
-function ServiceCard({
-  service,
-  view,
+// The overview as a layered graph. Dependency direction runs left to right,
+// so the shape itself is the information — which services are entry points,
+// which are shared leaves, where the depth is. A grid of cards with counts
+// couldn't show any of that.
+function Graph({
+  services,
+  edges,
   busy,
   onSelect,
   onIndex,
 }: {
-  service: PlatformService;
-  view: PlatformViewT;
-  busy: boolean;
-  onSelect: () => void;
-  onIndex: () => void;
+  services: PlatformService[];
+  edges: PlatformEdge[];
+  busy: string | null;
+  onSelect: (alias: string) => void;
+  onIndex: (alias: string) => void;
 }) {
-  const { out, inc } = edgeCounts(view, service.alias);
+  const [hover, setHover] = useState<string | null>(null);
+  const l = useMemo(() => layout(services, edges), [services, edges]);
+
+  // Hovering a service dims everything it isn't connected to. That's the
+  // filtering that keeps a large workspace readable without hiding anything.
+  const lit = new Set<string>();
+  if (hover) {
+    lit.add(hover);
+    for (const e of l.edges) {
+      if (e.edge.from === hover) lit.add(e.edge.to);
+      if (e.edge.to === hover) lit.add(e.edge.from);
+    }
+  }
+  const dim = (alias: string) => hover !== null && !lit.has(alias);
+
   return (
-    <li className={`platform-card${service.primary ? " platform-card--primary" : ""}`}>
-      <button type="button" className="platform-card-open" onClick={onSelect} title={service.dir}>
-        <span className="platform-card-name">{service.name}</span>
-        <span className="platform-card-meta">
-          {inc.length > 0 && <span title="services that call it">← {inc.length}</span>}
-          {out.length > 0 && <span title="services it calls">{out.length} →</span>}
-          {service.methods ? <span title="RPCs it declares">{service.methods} rpc</span> : null}
-        </span>
-      </button>
-      {service.error ? (
-        <span className="platform-card-error" title={service.error}>
-          failed
-        </span>
-      ) : !service.indexed ? (
-        <button
-          type="button"
-          className="platform-index"
-          onClick={onIndex}
-          disabled={busy}
-          title="read this service's code so its outgoing calls appear"
-        >
-          {busy ? "indexing…" : "index"}
-        </button>
-      ) : null}
-    </li>
+    <div className="graph-scroll">
+      <div className="graph" style={{ width: l.width, height: l.height }}>
+        <svg className="graph-edges" width={l.width} height={l.height} aria-hidden="true">
+          {l.edges.map((e) => {
+            const faded = hover !== null && e.edge.from !== hover && e.edge.to !== hover;
+            return (
+              <g key={`${e.edge.from}->${e.edge.to}:${e.edge.kind}`}>
+                <path
+                  d={edgePath(e)}
+                  className={`graph-edge${e.back ? " graph-edge--back" : ""}${
+                    faded ? " graph-edge--faded" : ""
+                  }`}
+                  // Weight carries how much traffic-by-surface flows along the
+                  // edge; one RPC and twenty shouldn't look the same.
+                  strokeWidth={Math.min(4, 1 + Math.log2(e.edge.calls.length + 1))}
+                />
+                {!faded && e.edge.calls.length > 1 && (
+                  <text
+                    className="graph-edge-label"
+                    x={(e.from.x + NODE_W + e.to.x) / 2}
+                    y={(e.from.y + e.to.y) / 2 + NODE_H / 2 - 4}
+                  >
+                    {e.edge.calls.length}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+
+        {l.nodes.map((n) => (
+          <div
+            key={n.service.alias}
+            className={`graph-node${n.service.primary ? " graph-node--primary" : ""}${
+              n.service.indexed ? "" : " graph-node--unindexed"
+            }${dim(n.service.alias) ? " graph-node--dim" : ""}`}
+            style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H }}
+            onMouseEnter={() => setHover(n.service.alias)}
+            onMouseLeave={() => setHover(null)}
+          >
+            <button
+              type="button"
+              className="graph-node-open"
+              onClick={() => onSelect(n.service.alias)}
+              title={
+                n.service.indexed
+                  ? n.service.dir
+                  : `${n.service.dir} — not indexed, so its outgoing calls are unknown`
+              }
+            >
+              <span className="graph-node-name">{n.service.name}</span>
+              {n.service.methods ? (
+                <span className="graph-node-meta">{n.service.methods} rpc</span>
+              ) : null}
+            </button>
+            {n.service.error ? (
+              <span className="platform-card-error" title={n.service.error}>
+                failed
+              </span>
+            ) : !n.service.indexed ? (
+              <button
+                type="button"
+                className="platform-index"
+                onClick={() => onIndex(n.service.alias)}
+                disabled={busy === n.service.alias}
+                title="read this service's code so its outgoing calls appear"
+              >
+                {busy === n.service.alias ? "…" : "index"}
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
