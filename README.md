@@ -243,7 +243,14 @@ unfold --workspace ~/src --proto-root ~/src/platform-protos ./...
 
 The repo you're standing in is the **primary**: the service view is about it,
 and its ids stay unprefixed so existing URLs and bookmarks keep working. Other
-repos are namespaced `<repo>::<id>`.
+repos are namespaced `<repo>::<id>`. Running from a subdirectory of a repo
+still picks that repo; running from *outside* every repo has to fall back to
+one of them, and says so on stderr rather than leaving you looking at a
+service you didn't ask for.
+
+Each repo logs a line as it's indexed — `indexed orders — 12 inbound, 4
+outbound (7 declared rpc)` — because an empty column is otherwise
+indistinguishable from a recognizer that found nothing.
 
 Each outbound row then carries two actions — the key opens the **caller** in
 this repo, and `→ <service>` opens the **implementation** in the other one.

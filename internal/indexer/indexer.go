@@ -310,7 +310,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 				// invokePath follows chains without a depth limit, admitting
 				// dependency sites would bury the real edges under library
 				// plumbing.
-				if isMainModule(fi.pkg) {
+				if i.ownsCode(fi) {
 					if facts, ok := i.callFacts(fi, node); ok {
 						found := platform.Extract(facts)
 						i.bindings = append(i.bindings, found...)
@@ -724,7 +724,7 @@ func (i *Indexer) implementationOf(name string) (TargetID, []TargetID) {
 			continue
 		}
 		any = append(any, id)
-		if isMainModule(fi.pkg) {
+		if i.ownsCode(fi) {
 			local = append(local, id)
 		}
 	}
@@ -1163,10 +1163,41 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 	return ci
 }
 
-// isMainModule reports whether a package belongs to the module being read,
-// as opposed to a dependency.
-func isMainModule(pkg *packages.Package) bool {
-	return pkg != nil && pkg.Module != nil && pkg.Module.Main
+// ownsCode reports whether a function is part of the project being read, as
+// opposed to a dependency.
+//
+// This is decided by file path, not by module metadata. `pkg.Module` is nil
+// under vendored builds and some go.work configurations, and the previous
+// `Module.Main` test then answered "no" for *every* function — which silently
+// dropped every code-derived binding while the declared surface, which comes
+// from protos rather than code, carried on looking fine. Path containment is
+// what "this repo's own code" means anyway, and it's always available.
+func (i *Indexer) ownsCode(fi *funcInfo) bool {
+	if fi == nil {
+		return false
+	}
+	if i.rootDir == "" {
+		// Nothing to compare against; fall back to module metadata.
+		return fi.pkg != nil && fi.pkg.Module != nil && fi.pkg.Module.Main
+	}
+	if fi.decl == nil {
+		return false
+	}
+	return underDir(i.fset.Position(fi.decl.Pos()).Filename, i.rootDir)
+}
+
+// underDir reports whether path lies inside dir, comparing whole path
+// segments so a sibling checkout like "orders-v2" isn't read as being inside
+// "orders".
+func underDir(path, dir string) bool {
+	if path == "" || dir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(dir, filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func isInterface(t types.Type) bool {

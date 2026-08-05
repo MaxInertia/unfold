@@ -464,3 +464,40 @@ func TestRepeatedFramesDoNotCorruptIds(t *testing.T) {
 		}
 	}
 }
+
+// Launching from inside a repo but below its root is a normal way to run
+// this, and it must not fall through to "some other service".
+func TestPrimaryResolvesFromASubdirectory(t *testing.T) {
+	dirs, err := Discover(abs(t, "testdata/ws"))
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	sub := filepath.Join(abs(t, "testdata/ws/conversation"), "does", "not", "exist")
+	w, err := Open(dirs, sub, abs(t, "testdata/protoroot"), ModeLazy)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if w.primary != "conversation" {
+		t.Errorf("primary: got %q, want conversation (the repo containing the cwd)", w.primary)
+	}
+}
+
+func TestUnderDirDoesNotMatchSiblingPrefixes(t *testing.T) {
+	tests := []struct {
+		path, dir string
+		want      bool
+	}{
+		{"/src/orders/internal/a.go", "/src/orders", true},
+		{"/src/orders", "/src/orders", true},
+		// The hazard: a sibling checkout whose name extends another's.
+		{"/src/orders-v2/main.go", "/src/orders", false},
+		{"/src/other/main.go", "/src/orders", false},
+		{"", "/src/orders", false},
+		{"/src/orders/main.go", "", false},
+	}
+	for _, tt := range tests {
+		if got := underDir(tt.path, tt.dir); got != tt.want {
+			t.Errorf("underDir(%q, %q) = %v, want %v", tt.path, tt.dir, got, tt.want)
+		}
+	}
+}

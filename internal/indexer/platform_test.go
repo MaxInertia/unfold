@@ -469,3 +469,39 @@ func TestDependencyCallSitesAreNotThisServicesSurface(t *testing.T) {
 		}
 	}
 }
+
+// Ownership decides which call sites produce bindings, and it must not depend
+// on module metadata: pkg.Module is nil under vendored builds and some go.work
+// setups, and testing Module.Main then answered "no" for every function. The
+// declared surface comes from protos and kept working, so the symptom was a
+// service that appeared to make no outbound calls at all.
+func TestOwnershipIsByPathNotModuleMetadata(t *testing.T) {
+	idx := loadDeclared(t, "testdata/protoroot")
+
+	// Simulate the failing environment: strip the module metadata that the
+	// old test relied on. Path containment must carry it regardless.
+	for _, fi := range idx.funcs {
+		if fi.pkg != nil {
+			fi.pkg.Module = nil
+		}
+	}
+	for _, fi := range idx.funcs {
+		if !strings.Contains(idx.fset.Position(fi.decl.Pos()).Filename, "testdata/declared") {
+			continue
+		}
+		if !idx.ownsCode(fi) {
+			t.Fatalf("%s is in the indexed project but wasn't recognized as its code", fi.id)
+		}
+		break
+	}
+	// A dependency stays a dependency.
+	for _, fi := range idx.funcs {
+		if strings.Contains(idx.fset.Position(fi.decl.Pos()).Filename, "testdata/agsdk") {
+			if idx.ownsCode(fi) {
+				t.Errorf("%s is a dependency and must not count as this project's code", fi.id)
+			}
+			return
+		}
+	}
+	t.Skip("no dependency function found to check the negative case")
+}

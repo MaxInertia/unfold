@@ -112,6 +112,20 @@ func Discover(root string) ([]string, error) {
 	return dirs, nil
 }
 
+// underDir reports whether path lies inside dir, comparing whole path
+// segments so a sibling checkout like "orders-v2" isn't read as being inside
+// "orders".
+func underDir(path, dir string) bool {
+	if path == "" || dir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(dir, filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func isModule(dir string) bool {
 	fi, err := os.Stat(filepath.Join(dir, "go.mod"))
 	return err == nil && !fi.IsDir()
@@ -145,10 +159,26 @@ func Open(dirs []string, primaryDir, protoRoot string, mode Mode) (*Workspace, e
 		}
 	}
 	if w.primary == "" {
-		// Pointed somewhere that isn't one of the discovered repos (or at the
-		// workspace root itself): fall back to the first, so the view always
-		// has a service to be about.
+		// Launched inside a repo but below its root — a common way to run
+		// this — so the repo containing the cwd is the one being read.
+		for _, alias := range w.order {
+			if underDir(primaryAbs, w.repos[alias].dir) {
+				w.primary = alias
+				break
+			}
+		}
+	}
+	if w.primary == "" {
+		// Launched outside every repo (at the workspace root, typically).
+		// Something has to be the service in view, but picking the
+		// alphabetically first one silently is how you end up staring at an
+		// empty surface wondering what broke.
+		sort.Strings(w.order)
 		w.primary = w.order[0]
+		fmt.Fprintf(os.Stderr,
+			"unfold: %s is not one of the workspace's repositories; showing %q. "+
+				"Run from inside a repo, or pass --dir, to start there.\n",
+			primaryAbs, w.primary)
 	}
 	sort.Strings(w.order)
 	w.readDeclarations()
@@ -265,6 +295,14 @@ func (w *Workspace) load(alias string) error {
 	}
 	r.idx = idx
 	r.loaded = true
+
+	// A one-line summary per repo, because "0 outbound" is otherwise
+	// indistinguishable from "recognized nothing" and there's no way to tell
+	// from the UI which one you're looking at.
+	if sv, err := idx.ServiceView(""); err == nil {
+		fmt.Fprintf(os.Stderr, "unfold: indexed %s — %d inbound, %d outbound (%d declared rpc)\n",
+			r.name, len(sv.Inbound), len(sv.Outbound), len(r.methods))
+	}
 	return nil
 }
 
