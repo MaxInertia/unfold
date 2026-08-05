@@ -111,11 +111,27 @@ that still matter are tracked inline.
 
 ---
 
-## Platform unfold — one repo to the whole system (2026-08-05)
+## Platform unfold — one repo to the whole system (2026-08-05) — SLICE B SHIPPED
 
 Extend unfolding past the boundary of a single repository, so a reading session follows execution *and information* across services, brokers, databases, and observability tooling. Have a Pub/Sub subscriber? See the topic, where it's published, and every other consumer. Call another microservice you own? Unfold into the handler in that service. A `vstore`-tagged struct field? Jump to that model's page, and to BigQuery where a secondary index exists. Same thesis as today — collapse the distance between pieces of information you'd otherwise hunt down — at platform scale.
 
 Full design record in the vault: `docs/2026-08-05-unfold-platform-graph.md`.
+
+### Status — slice B shipped 2026-08-05 (`feat/platform-service-view`)
+
+The L1 service view for a single repo is in: `internal/platform` recognizers
+(net/http routes, GCP Pub/Sub topics/subscriptions, outbound net/http calls),
+`model.Binding` with confidence tiering, the optional `model.PlatformEngine`,
+`GET /api/service[?anchor=]`, and the web UI — two-sided service card, anchor
+highlighting, the zoom trail, both zoom gestures, and alt+↑/↓. See the README's
+"Zooming out" section for behaviour and limitations. What's below stands as the
+design record; the parts still unbuilt are called out inline.
+
+Not yet built from this entry: the federating engine and cross-repo key joins
+(so outbound keys resolve to nothing), junction cards, vstore/BigQuery resource
+nodes, the L0 platform level, Terraform-derived metadata, and the L1.5
+entrypoints level as its own screen — L1.5 exists as *data* (which inbound
+bindings reach the anchor) but has no view of its own.
 
 ### Sketch
 
