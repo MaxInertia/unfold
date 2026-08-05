@@ -202,7 +202,12 @@ Leaning **B first, then A**: cheaper, and it de-risks the recognizer layer befor
 - **Zooming out preserves expansion state and location**, via the anchor.
 - **No file rung** in the ladder — reachability, not containment.
 - **Filtering, not domain clustering,** at L0 — unless `microservice.yaml` turns out to carry a team/domain field, in which case clustering is *declared* rather than inferred and becomes free instead of arbitrary. Check before ruling it out.
-- **Service naming:** most microservices here declare it in a `microservice.yaml` at the repo root — use that as canonical, repo name as fallback. Read a real one before designing this or the clustering question; it likely carries team ownership, which would settle L0 clustering as *declared* (the only version worth having).
+- **Service naming:** most microservices here declare it in a `microservice.yaml` at the repo root — use that as canonical, repo name as fallback. (The shipped slice uses the repo directory only.)
+- **No declared clustering** (confirmed 2026-08-05): `microservice.yaml` carries no owner/team field, so clustering can't be made declared. Filtering it is, permanently.
+
+**What `microservice.yaml` carries** — `microservice.name`, `microservice.protopaths.{path,excludeFromSdk}`, `microservice.publicRoutes`. `protopaths` reorders the priorities: with protos declared per repo, a cross-service SDK call isn't "one hop from the transport call to the remote handler", it's a **declared** join on `grpc:<proto package>.<Service>/<Method>` — the proto is the artifact both sides are generated from, so no dataflow and no heuristics. gRPC/SDK edges end up *easier* to resolve than HTTP ones here. `excludeFromSdk` is useful negative space (surface that exists but isn't cross-service callable, so later "nobody calls this" conclusions don't fire falsely). `publicRoutes` splits inbound by reachability — public / platform / internal — which is a better primary grouping than kind, and gives the first real drift check: a declared route nothing registers is stale, a proto method with no implementation is stale, a code-registered route in neither list is internal.
+
+Before building it: the exact YAML shape (is `protopaths` a list of objects? is `publicRoutes` strings or objects?), whether to take a YAML dependency (the module has only `fsnotify` + `x/tools`), and whether to parse `.proto` properly or scan for `service`/`rpc` declarations.
 - **The trail keeps every entry**, styling the active level rather than truncating on zoom-out. Descending a different branch rewrites from that slot down.
 - **Anchor history with back/forward** so lateral moves are reversible; trail = vertical, history = lateral; entries are whole view-states.
 
