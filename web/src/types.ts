@@ -154,6 +154,10 @@ export interface Resolution {
 export interface PlatformView {
   services: PlatformService[];
   edges: PlatformEdge[];
+  // The frame this view was zoomed out from, carried up so the platform level
+  // marks what reaches it — the same anchor the service level uses.
+  anchor?: TargetID;
+  anchorTitle?: string;
 }
 
 export interface PlatformService {
@@ -164,6 +168,7 @@ export interface PlatformService {
   indexed?: boolean;
   error?: string;
   methods?: number; // RPCs it declares, known from protos alone
+  reachesAnchor?: boolean; // holds the anchor, or calls an API leading to it
 }
 
 export interface PlatformEdge {
@@ -171,10 +176,12 @@ export interface PlatformEdge {
   to: string;
   kind: string;
   calls: PlatformCall[];
+  reachesAnchor?: boolean;
 }
 
 export interface PlatformCall {
   key: string;
+  reachesAnchor?: boolean;
   site?: TargetID;
   siteTitle?: string;
   file?: string;

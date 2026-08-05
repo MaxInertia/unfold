@@ -356,6 +356,12 @@ type Resolution struct {
 type PlatformView struct {
 	Services []PlatformService `json:"services"`
 	Edges    []PlatformEdge    `json:"edges"`
+
+	// Anchor is the frame this view was zoomed out from, carried up so the
+	// platform level can mark what reaches it — the same anchor the service
+	// level uses, one granularity further out.
+	Anchor      TargetID `json:"anchor,omitempty"`
+	AnchorTitle string   `json:"anchorTitle,omitempty"`
 }
 
 // PlatformService is one node.
@@ -371,6 +377,9 @@ type PlatformService struct {
 	Error   string `json:"error,omitempty"`
 	// Methods counts the RPCs it declares, which is known from protos alone.
 	Methods int `json:"methods,omitempty"`
+	// ReachesAnchor is set on the service the anchor lives in, and on any
+	// service calling an API of it that leads to the anchor.
+	ReachesAnchor bool `json:"reachesAnchor,omitempty"`
 }
 
 // PlatformEdge is every call from one service to another, of one kind.
@@ -379,23 +388,28 @@ type PlatformEdge struct {
 	To    string         `json:"to"`
 	Kind  string         `json:"kind"`
 	Calls []PlatformCall `json:"calls"`
+	// ReachesAnchor is set when any call along this edge lands on an API
+	// whose implementation reaches the anchor.
+	ReachesAnchor bool `json:"reachesAnchor,omitempty"`
 }
 
 // PlatformCall is one call site behind an edge, so a platform-level line can
 // be opened as code.
 type PlatformCall struct {
-	Key       string   `json:"key"`
-	Site      TargetID `json:"site,omitempty"`
-	SiteTitle string   `json:"siteTitle,omitempty"`
-	File      string   `json:"file,omitempty"`
-	Line      int      `json:"line,omitempty"`
+	Key string `json:"key"`
+	// ReachesAnchor marks this specific RPC as one that leads to the anchor.
+	ReachesAnchor bool     `json:"reachesAnchor,omitempty"`
+	Site          TargetID `json:"site,omitempty"`
+	SiteTitle     string   `json:"siteTitle,omitempty"`
+	File          string   `json:"file,omitempty"`
+	Line          int      `json:"line,omitempty"`
 }
 
 // WorkspaceEngine is implemented by engines that can describe a whole
 // workspace. Separate from PlatformEngine because a single repo has a service
 // view but no platform above it.
 type WorkspaceEngine interface {
-	PlatformView() (*PlatformView, error)
+	PlatformView(anchor TargetID) (*PlatformView, error)
 	// ServiceViewOf describes any service in the workspace, not just the one
 	// unfold was pointed at — otherwise picking a service at the platform
 	// level would zoom in on somebody else.

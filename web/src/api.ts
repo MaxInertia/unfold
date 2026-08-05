@@ -73,8 +73,9 @@ export function fetchServiceView(
 }
 
 // The workspace-level view: services and the calls between them.
-export function fetchPlatformView(): Promise<PlatformView> {
-  return getJSON<PlatformView>("/api/platform");
+export function fetchPlatformView(anchor?: TargetID | null): Promise<PlatformView> {
+  const qs = anchor ? `?anchor=${encodeURIComponent(anchor)}` : "";
+  return getJSON<PlatformView>(`/api/platform${qs}`);
 }
 
 // Index one service's code, filling in its outgoing edges. Expensive and

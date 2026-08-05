@@ -2872,3 +2872,19 @@ body.resizing {
   background: var(--call-bg);
   color: var(--accent);
 }
+
+/* Anchored at the platform level: the services whose calls lead to the frame
+   you zoomed out from, marked the same way entrypoints are one level down. */
+.graph-node--reaches {
+  border-color: var(--call-border);
+  box-shadow: 0 0 0 2px var(--call-bg);
+}
+
+.graph-node--reaches .graph-node-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.graph-edge--reaches {
+  stroke: var(--accent);
+}

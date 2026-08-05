@@ -335,13 +335,13 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 // GET /api/platform — every service in the workspace and the calls between
 // them. Available only with a workspace open; a single repo has a service
 // view but nothing above it.
-func (s *Server) handlePlatform(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handlePlatform(w http.ResponseWriter, r *http.Request) {
 	we, ok := s.engine.(model.WorkspaceEngine)
 	if !ok {
 		writeError(w, http.StatusNotImplemented, model.ErrNoWorkspace.Error())
 		return
 	}
-	pv, err := we.PlatformView()
+	pv, err := we.PlatformView(model.TargetID(r.URL.Query().Get("anchor")))
 	if err != nil {
 		if errors.Is(err, model.ErrNoWorkspace) {
 			writeError(w, http.StatusNotImplemented, err.Error())

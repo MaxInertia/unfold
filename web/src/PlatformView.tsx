@@ -16,12 +16,16 @@ import type { PlatformEdge, PlatformService, PlatformView as PlatformViewT, Targ
 // callees, with the individual RPCs on each edge — because that answers a
 // different question and stays readable however large the workspace grows.
 export function PlatformView({
+  anchor,
   filter,
   selected,
   onSelect,
   onOpenService,
   onOpenSite,
 }: {
+  // The frame zoomed out from. Carried all the way up: at this level it marks
+  // the services whose calls lead to it.
+  anchor: TargetID | null;
   filter: string;
   selected: string | null;
   onSelect: (alias: string | null) => void;
@@ -35,13 +39,13 @@ export function PlatformView({
 
   useEffect(() => {
     let alive = true;
-    fetchPlatformView()
+    fetchPlatformView(anchor)
       .then((v) => alive && setView(v))
       .catch((e: Error) => alive && setError(e.message));
     return () => {
       alive = false;
     };
-  }, [revision]);
+  }, [anchor, revision]);
 
   async function index(alias: string) {
     setBusy(alias);
@@ -61,6 +65,7 @@ export function PlatformView({
   const q = filter.trim().toLowerCase();
   const services = view.services.filter((s) => !q || s.name.toLowerCase().includes(q));
   const unindexed = view.services.filter((s) => !s.indexed).length;
+  const reaching = view.services.filter((s) => s.reachesAnchor).length;
 
   return (
     <div className="platform">
@@ -70,6 +75,13 @@ export function PlatformView({
           {view.services.length} service{view.services.length === 1 ? "" : "s"} ·{" "}
           {view.edges.length} edge{view.edges.length === 1 ? "" : "s"}
         </span>
+        {view.anchorTitle && (
+          <span className="service-anchor" title="the frame you zoomed out from">
+            anchored on <b>{view.anchorTitle}</b>
+            {" · "}
+            {reaching} service{reaching === 1 ? "" : "s"} reach it
+          </span>
+        )}
         {/* Say what's missing rather than letting an unindexed service read
             as one that calls nothing. */}
         {unindexed > 0 && (
@@ -93,6 +105,7 @@ export function PlatformView({
         <Graph
           services={services}
           edges={view.edges}
+          anchored={!!view.anchorTitle}
           busy={busy}
           onSelect={onSelect}
           onIndex={(a) => void index(a)}
@@ -115,12 +128,14 @@ function edgeCounts(view: PlatformViewT, alias: string) {
 function Graph({
   services,
   edges,
+  anchored,
   busy,
   onSelect,
   onIndex,
 }: {
   services: PlatformService[];
   edges: PlatformEdge[];
+  anchored: boolean;
   busy: string | null;
   onSelect: (alias: string) => void;
   onIndex: (alias: string) => void;
@@ -138,21 +153,33 @@ function Graph({
       if (e.edge.to === hover) lit.add(e.edge.from);
     }
   }
-  const dim = (alias: string) => hover !== null && !lit.has(alias);
+  // Hover is a transient focus and wins while it's held; otherwise the
+  // anchor decides. Both answer the same question — "what is connected to the
+  // thing I care about" — so they share the dimming rather than fighting over
+  // it.
+  const byAlias = new Map(services.map((s) => [s.alias, s]));
+  const dim = (alias: string) => {
+    if (hover !== null) return !lit.has(alias);
+    return anchored && !byAlias.get(alias)?.reachesAnchor;
+  };
+  const dimEdge = (e: PlatformEdge) => {
+    if (hover !== null) return e.from !== hover && e.to !== hover;
+    return anchored && !e.reachesAnchor;
+  };
 
   return (
     <div className="graph-scroll">
       <div className="graph" style={{ width: l.width, height: l.height }}>
         <svg className="graph-edges" width={l.width} height={l.height} aria-hidden="true">
           {l.edges.map((e) => {
-            const faded = hover !== null && e.edge.from !== hover && e.edge.to !== hover;
+            const faded = dimEdge(e.edge);
             return (
               <g key={`${e.edge.from}->${e.edge.to}:${e.edge.kind}`}>
                 <path
                   d={edgePath(e)}
                   className={`graph-edge${e.back ? " graph-edge--back" : ""}${
                     faded ? " graph-edge--faded" : ""
-                  }`}
+                  }${!faded && anchored && e.edge.reachesAnchor ? " graph-edge--reaches" : ""}`}
                   // Weight carries how much traffic-by-surface flows along the
                   // edge; one RPC and twenty shouldn't look the same.
                   strokeWidth={Math.min(4, 1 + Math.log2(e.edge.calls.length + 1))}
@@ -176,7 +203,9 @@ function Graph({
             key={n.service.alias}
             className={`graph-node${n.service.primary ? " graph-node--primary" : ""}${
               n.service.indexed ? "" : " graph-node--unindexed"
-            }${dim(n.service.alias) ? " graph-node--dim" : ""}`}
+            }${dim(n.service.alias) ? " graph-node--dim" : ""}${
+            anchored && n.service.reachesAnchor ? " graph-node--reaches" : ""
+          }`}
             style={{ left: n.x, top: n.y, width: NODE_W, height: NODE_H }}
             onMouseEnter={() => setHover(n.service.alias)}
             onMouseLeave={() => setHover(null)}

@@ -346,6 +346,7 @@ function AppShell() {
           {loading && <div className="app-loading">loading…</div>}
           {zoom === "platform" ? (
             <PlatformView
+              anchor={rootFrame?.id ?? null}
               filter={platformFilter}
               selected={selectedService}
               onSelect={setSelectedService}

@@ -347,10 +347,22 @@ func (w *Workspace) Resolve(kind, key string) (*model.Resolution, error) {
 // outgoing edges. It still receives them, since those come from other
 // services' code, and the view marks it so a lazily-loaded workspace doesn't
 // read as "this service calls nothing".
-func (w *Workspace) PlatformView() (*model.PlatformView, error) {
+func (w *Workspace) PlatformView(anchor model.TargetID) (*model.PlatformView, error) {
+	// Which RPCs of which service lead to the anchor. Computed once, from the
+	// anchor's own repo, and then used to mark the edges pointing at it — the
+	// platform-level answer to the question the service level answers with
+	// entrypoints: what would have to run for this code to run.
+	anchorRepo, reachingKeys := w.keysReachingAnchor(anchor)
+
 	pv := &model.PlatformView{
 		Services: make([]model.PlatformService, 0, len(w.order)),
 		Edges:    []model.PlatformEdge{},
+	}
+	if anchorRepo != "" {
+		pv.Anchor = anchor
+		if sv, err := w.ServiceViewOf(anchorRepo, anchor); err == nil {
+			pv.AnchorTitle = sv.AnchorTitle
+		}
 	}
 	// grouped is keyed by from→to→kind so several calls between the same
 	// pair collapse into one edge carrying its call sites.
@@ -369,6 +381,8 @@ func (w *Workspace) PlatformView() (*model.PlatformView, error) {
 			Primary: alias == w.primary,
 			Indexed: loaded,
 			Methods: len(r.methods),
+			// The anchor's own service always counts: the code is in it.
+			ReachesAnchor: anchorRepo != "" && alias == anchorRepo,
 		}
 		if loadErr != nil {
 			svc.Error = loadErr.Error()
@@ -398,11 +412,29 @@ func (w *Workspace) PlatformView() (*model.PlatformView, error) {
 		}
 	}
 
+	byAlias := map[string]*model.PlatformService{}
+	for n := range pv.Services {
+		byAlias[pv.Services[n].Alias] = &pv.Services[n]
+	}
 	for k, calls := range grouped {
 		sort.Slice(calls, func(a, b int) bool { return calls[a].Key < calls[b].Key })
-		pv.Edges = append(pv.Edges, model.PlatformEdge{
-			From: k[0], To: k[1], Kind: k[2], Calls: calls,
-		})
+		e := model.PlatformEdge{From: k[0], To: k[1], Kind: k[2], Calls: calls}
+		if k[1] == anchorRepo {
+			for n := range e.Calls {
+				if reachingKeys[declKey(e.Kind, e.Calls[n].Key)] {
+					e.Calls[n].ReachesAnchor = true
+					e.ReachesAnchor = true
+				}
+			}
+			// A service calling an API that leads to the anchor is on the
+			// path to it, which is exactly what the level should highlight.
+			if e.ReachesAnchor {
+				if s := byAlias[e.From]; s != nil {
+					s.ReachesAnchor = true
+				}
+			}
+		}
+		pv.Edges = append(pv.Edges, e)
 	}
 	sort.Slice(pv.Edges, func(a, b int) bool {
 		if pv.Edges[a].From != pv.Edges[b].From {
@@ -411,6 +443,36 @@ func (w *Workspace) PlatformView() (*model.PlatformView, error) {
 		return pv.Edges[a].To < pv.Edges[b].To
 	})
 	return pv, nil
+}
+
+// keysReachingAnchor returns the anchor's repo and the set of that repo's
+// inbound keys whose implementation reaches the anchor.
+//
+// It reuses the service view rather than re-deriving reachability: the same
+// backwards walk that answers "which entrypoints run this code" at L1 answers
+// "which of my APIs lead here" at L0. Only the framing changes.
+func (w *Workspace) keysReachingAnchor(anchor model.TargetID) (string, map[string]bool) {
+	if anchor == "" {
+		return "", nil
+	}
+	alias, _ := split(string(anchor))
+	if alias == "" {
+		alias = w.primary
+	}
+	if _, ok := w.repos[alias]; !ok {
+		return "", nil
+	}
+	sv, err := w.ServiceViewOf(alias, anchor)
+	if err != nil || sv.Anchor == "" {
+		return "", nil
+	}
+	keys := map[string]bool{}
+	for _, b := range sv.Inbound {
+		if b.ReachesAnchor {
+			keys[declKey(b.Kind, b.Key)] = true
+		}
+	}
+	return alias, keys
 }
 
 // IndexRepo loads one service's code on demand, so the platform view can be

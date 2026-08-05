@@ -238,7 +238,7 @@ func TestAutoModeEagerBelowLimit(t *testing.T) {
 func TestPlatformViewEdgesFollowIndexing(t *testing.T) {
 	w := open(t, ModeLazy)
 
-	pv, err := w.PlatformView()
+	pv, err := w.PlatformView("")
 	if err != nil {
 		t.Fatalf("PlatformView: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestPlatformViewEdgesFollowIndexing(t *testing.T) {
 	if err := w.IndexRepo("conversation"); err != nil {
 		t.Fatalf("IndexRepo: %v", err)
 	}
-	pv2, err := w.PlatformView()
+	pv2, err := w.PlatformView("")
 	if err != nil {
 		t.Fatalf("PlatformView: %v", err)
 	}
@@ -541,6 +541,77 @@ func TestImplementationsNarrowedByServerInterface(t *testing.T) {
 	for _, l := range labels {
 		if !want[l] {
 			t.Errorf("offered %q, which does not implement ConversationServiceServer", l)
+		}
+	}
+}
+
+// The anchor carries up a level. At L1 it marks the entrypoints that run the
+// code; at L0 it should mark the *services* whose calls lead there — same
+// question, one granularity out, and the reason the trail keeps the anchor
+// visible at every level.
+func TestPlatformViewMarksServicesReachingTheAnchor(t *testing.T) {
+	w := open(t, ModeEager)
+	anchor, err := w.LookupSymbol("conversation" + Sep + "reachMe")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+
+	pv, err := w.PlatformView(anchor)
+	if err != nil {
+		t.Fatalf("PlatformView: %v", err)
+	}
+	if pv.Anchor == "" || pv.AnchorTitle != "ConversationServer.reachMe" {
+		t.Fatalf("the anchor should be echoed: %q / %q", pv.Anchor, pv.AnchorTitle)
+	}
+
+	reach := map[string]bool{}
+	for _, s := range pv.Services {
+		reach[s.Alias] = s.ReachesAnchor
+	}
+	// The anchor's own service holds the code.
+	if !reach["conversation"] {
+		t.Error("the service containing the anchor should be marked")
+	}
+	// inbox calls GetConversation, whose implementation reaches reachMe.
+	if !reach["inbox"] {
+		t.Error("a service calling an API that leads to the anchor should be marked")
+	}
+
+	var marked int
+	for _, e := range pv.Edges {
+		if e.ReachesAnchor {
+			marked++
+			for _, c := range e.Calls {
+				if c.Key == "conversation.v1.ConversationService/GetConversation" && !c.ReachesAnchor {
+					t.Error("the specific RPC leading to the anchor should be marked")
+				}
+			}
+		}
+	}
+	if marked == 0 {
+		t.Error("expected the inbox→conversation edge to be marked")
+	}
+}
+
+// Without an anchor nothing is marked, so the view doesn't imply a focus that
+// was never asked for.
+func TestPlatformViewUnanchored(t *testing.T) {
+	w := open(t, ModeEager)
+	pv, err := w.PlatformView("")
+	if err != nil {
+		t.Fatalf("PlatformView: %v", err)
+	}
+	if pv.Anchor != "" || pv.AnchorTitle != "" {
+		t.Errorf("no anchor was asked for: %q / %q", pv.Anchor, pv.AnchorTitle)
+	}
+	for _, s := range pv.Services {
+		if s.ReachesAnchor {
+			t.Errorf("%s marked without an anchor", s.Alias)
+		}
+	}
+	for _, e := range pv.Edges {
+		if e.ReachesAnchor {
+			t.Errorf("edge %s->%s marked without an anchor", e.From, e.To)
 		}
 	}
 }

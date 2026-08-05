@@ -158,14 +158,14 @@ func (r *Reloadable) Resolve(kind, key string) (*model.Resolution, error) {
 }
 
 // PlatformView forwards the workspace-level view when one is open.
-func (r *Reloadable) PlatformView() (*model.PlatformView, error) {
+func (r *Reloadable) PlatformView(anchor model.TargetID) (*model.PlatformView, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	we, ok := r.cur.(model.WorkspaceEngine)
 	if !ok {
 		return nil, model.ErrNoWorkspace
 	}
-	return we.PlatformView()
+	return we.PlatformView(anchor)
 }
 
 // ServiceViewOf forwards the view of a named workspace service.

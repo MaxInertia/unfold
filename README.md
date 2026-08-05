@@ -314,8 +314,15 @@ is drawn dashed rather than quietly reordered. Layout is deterministic (layer
 assignment plus barycenter ordering, no force simulation) so the picture is
 the same every load and can be talked about.
 
-Hovering a service dims everything it isn't connected to, which is how a large
-workspace stays readable without hiding anything.
+The **anchor carries up to this level too**. Zoom out from a frame and the
+services whose calls lead to it are lit while the rest dim — the same question
+the service level answers with entrypoints, one granularity out. The RPCs that
+lead there are marked individually, so an edge says *which* of its calls
+matter.
+
+Hovering a service dims everything it isn't connected to, and takes precedence
+while held. Both answer "what is connected to the thing I care about", so they
+share the dimming rather than competing for it.
 
 Picking a service drops to the slice around it — callers on the left, it in
 the middle, callees on the right, with the individual RPCs on each edge. Every
@@ -336,6 +343,11 @@ mechanism across both upper levels rather than two bolted onto each view.
   walking deeper would index vendored copies and testdata modules.
 - **Only gRPC edges join.** HTTP outbound keys are collected but not yet
   matched against other repos' route registrations.
+- **Anchor marking at the platform level is one hop.** A service is lit when it
+  calls an API of the anchor's service that leads to the anchor. A service that
+  reaches it only *through* another service isn't lit — that needs forward
+  reachability from each repo's inbound handlers to its outbound call sites,
+  which doesn't exist yet.
 - **A lazy workspace searches only what it has indexed.** Opening something in
   a repo indexes it and it stays in the results afterwards.
 
