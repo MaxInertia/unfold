@@ -475,13 +475,28 @@ func (i *Indexer) ProtoRoot() string {
 	return i.protoRoot
 }
 
+// sortBindings orders the surface deterministically.
+//
+// The location tiebreak matters: pass 2 walks functions in map order, so two
+// call sites sharing a kind and key would otherwise swap places between runs.
+// That makes output unstable for anyone diffing it and quietly flaky for
+// tests that pick "the" binding for a key.
 func (i *Indexer) sortBindings() {
 	sort.SliceStable(i.bindings, func(a, b int) bool {
 		x, y := i.bindings[a], i.bindings[b]
 		if x.Kind != y.Kind {
 			return x.Kind < y.Kind
 		}
-		return x.Key < y.Key
+		if x.Key != y.Key {
+			return x.Key < y.Key
+		}
+		if x.File != y.File {
+			return x.File < y.File
+		}
+		if x.Line != y.Line {
+			return x.Line < y.Line
+		}
+		return x.SiteTitle < y.SiteTitle
 	})
 }
 

@@ -437,21 +437,38 @@ func TestGRPCThroughAHandWrittenSDK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ServiceView: %v", err)
 	}
-	b := findBinding(sv.Outbound, "grpc.method", "accountgroup.v1.AccountGroupService/GetMulti")
-	if b == nil {
+	// Two functions here call GetMulti, and both are real edges — so assert
+	// over the set rather than picking "the" binding, which map-order made a
+	// coin flip.
+	var sites []string
+	for _, b := range sv.Outbound {
+		if b.Kind == "grpc.method" && b.Key == "accountgroup.v1.AccountGroupService/GetMulti" {
+			sites = append(sites, b.SiteTitle)
+			if b.Confidence != model.ConfExact {
+				t.Errorf("confidence: got %q, want exact", b.Confidence)
+			}
+		}
+	}
+	if len(sites) == 0 {
 		var keys []string
 		for _, o := range sv.Outbound {
 			keys = append(keys, o.Kind+" "+o.Key)
 		}
 		t.Fatalf("the SDK call was not recognized; outbound edges were %v", keys)
 	}
-	if b.Confidence != model.ConfExact {
-		t.Errorf("confidence: got %q, want exact", b.Confidence)
-	}
 	// The SDK is a dependency, so its own internal call sites don't count as
 	// this service's surface — the edge belongs to the caller in this repo.
-	if b.SiteTitle != "Server.listAccounts" {
-		t.Errorf("site: got %q, want Server.listAccounts", b.SiteTitle)
+	var found bool
+	for _, s := range sites {
+		if s == "Server.listAccounts" {
+			found = true
+		}
+		if strings.Contains(s, "Client") {
+			t.Errorf("the edge was attributed to the SDK rather than its caller: %q", s)
+		}
+	}
+	if !found {
+		t.Errorf("sites: got %v, want Server.listAccounts among them", sites)
 	}
 }
 
