@@ -184,6 +184,11 @@ rather than leaving a stale one on screen. Failures are per-file, though: one
 unreadable proto doesn't hide the surface the others declare — it warns and
 keeps going.
 
+gRPC entries — inbound and outbound alike — cluster under their service, so
+`FooService` is stated once and its rows are just `Foo` and `Bar`. Flat
+fully-qualified names repeat the package on every line and push the part that
+actually differs to the far end, where truncation eats it.
+
 ### Inbound is grouped by reach
 
 What you want to know about an entrypoint first is who can get to it, so the

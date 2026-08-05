@@ -214,16 +214,31 @@ function Column({
             >
               {group}
             </div>
-            <ul className="service-list">
-              {list.map((b, i) => (
-                <BindingRow
-                  key={`${b.kind}:${b.key}:${b.file}:${b.line}:${i}`}
-                  binding={b}
-                  anchored={anchored}
-                  onOpen={onOpen}
-                />
-              ))}
-            </ul>
+            {/* RPCs belong to a service, and reading them as a flat list of
+                fully-qualified names buries that: the package prefix repeats
+                on every row while the thing that differs — the method — sits
+                at the far end where truncation eats it. Grouped, the service
+                is stated once and the rows are just its methods. */}
+            {subgroups(list).map(([service, rows]) => (
+              <div key={service} className={service ? "rpc-group" : ""}>
+                {service && (
+                  <div className="rpc-group-service" title={service}>
+                    {bareService(service)}
+                  </div>
+                )}
+                <ul className="service-list">
+                  {rows.map((b, i) => (
+                    <BindingRow
+                      key={`${b.kind}:${b.key}:${b.file}:${b.line}:${i}`}
+                      binding={b}
+                      anchored={anchored}
+                      grouped={!!service}
+                      onOpen={onOpen}
+                    />
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
         ))
       )}
@@ -231,13 +246,44 @@ function Column({
   );
 }
 
+// subgroups splits a column group so gRPC methods cluster under their
+// service. Everything else stays in one flat bucket, keyed "", which renders
+// without a header.
+function subgroups(list: Binding[]): [string, Binding[]][] {
+  const m = new Map<string, Binding[]>();
+  for (const b of list) {
+    const k = b.kind === "grpc.method" ? grpcService(b.key) : "";
+    const cur = m.get(k);
+    if (cur) cur.push(b);
+    else m.set(k, [b]);
+  }
+  // Flat rows first, then services alphabetically by their bare name.
+  return [...m].sort((a, b) => {
+    if (!a[0]) return -1;
+    if (!b[0]) return 1;
+    return bareService(a[0]).localeCompare(bareService(b[0]));
+  });
+}
+
+function grpcService(key: string): string {
+  const i = key.indexOf("/");
+  return i > 0 ? key.slice(0, i) : "";
+}
+
+function bareService(fq: string): string {
+  return fq.slice(fq.lastIndexOf(".") + 1);
+}
+
 function BindingRow({
   binding,
   anchored,
+  grouped,
   onOpen,
 }: {
   binding: Binding;
   anchored: boolean;
+  // Rendered under a service header, so the row shows only the method.
+  grouped?: boolean;
   onOpen: (id: TargetID) => void;
 }) {
   // With an anchor loaded, the entrypoints that reach it are lit and the rest
@@ -273,7 +319,7 @@ function BindingRow({
   const body = (
     <>
       <span className="service-key" title={binding.key}>
-        {displayKey(binding)}
+        {grouped ? binding.key.slice(binding.key.indexOf("/") + 1) : displayKey(binding)}
       </span>
       <span className="service-item-meta">
         {binding.targetTitle ? (

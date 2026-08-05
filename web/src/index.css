@@ -2888,3 +2888,21 @@ body.resizing {
 .graph-edge--reaches {
   stroke: var(--accent);
 }
+
+/* RPCs clustered under their service: the service is stated once and the rows
+   are its methods, instead of the package prefix repeating on every line. */
+.rpc-group {
+  margin-top: 0.25rem;
+}
+
+.rpc-group-service {
+  font-size: 0.74rem;
+  color: var(--fg);
+  opacity: 0.85;
+}
+
+.rpc-group .service-list {
+  margin-left: 0.7rem;
+  border-left: 1px solid var(--card-border);
+  padding-left: 0.4rem;
+}
