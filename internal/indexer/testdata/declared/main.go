@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"net/http"
+
+	"example.com/agsdk"
 )
 
 type Server struct{}
@@ -30,7 +32,14 @@ func (s *Server) fetchConversation() {
 	_ = c.GetConversation(context.Background())
 }
 
+// listAccounts calls another service through a hand-written SDK. Nothing here
+// names the RPC — the key is three hops away, inside the dependency.
+func (s *Server) listAccounts(ctx context.Context) error {
+	return agsdk.New().GetMulti(ctx)
+}
+
 func main() {
 	_ = (&Server{}).Handler()
 	(&Server{}).fetchConversation()
+	_ = (&Server{}).listAccounts(context.Background())
 }

@@ -82,9 +82,14 @@ The service view is a two-sided card, not a graph:
   literal in its own body (`cc.Invoke(ctx, "/pkg.Service/Method", …)`, or the
   `..._FullMethodName` constant newer codegen emits, which the type checker
   folds to the same string). Since a service's SDK is in the module graph of
-  anything that calls it, that literal is already indexed. Hand-written
-  wrappers are followed a few levels, and the edge is attributed to the
-  innermost call site rather than to every caller above it.
+  anything that calls it, that literal is already indexed.
+
+  Hand-written SDKs wrap that client, so the search follows calls out of a
+  callee's body — through plain functions as well as methods, to any depth.
+  Two rules keep that from turning into noise: only *this module's* call sites
+  produce bindings (a dependency's internal calls aren't your service's
+  surface), and an edge found down a chain is attributed to the innermost
+  qualifying call site rather than to every caller above it.
 
 ### The anchor
 
@@ -220,6 +225,48 @@ function, constant-folded args), never an AST.
   yet, so a service using one shows an empty inbound surface.
 - **Handlers must be named functions.** A route registered with an inline
   closure has no target to open, so it falls back to the registration site.
+
+## Workspaces — following a call into the other repo
+
+Point unfold at a directory of sibling checkouts and every module under it is
+opened together, so an outbound call can be followed into the service that
+implements it:
+
+```
+unfold --workspace ~/src --proto-root ~/src/platform-protos ./...
+```
+
+The repo you're standing in is the **primary**: the service view is about it,
+and its ids stay unprefixed so existing URLs and bookmarks keep working. Other
+repos are namespaced `<repo>::<id>`.
+
+Each outbound row then carries two actions — the key opens the **caller** in
+this repo, and `→ <service>` opens the **implementation** in the other one.
+Rows nothing serves stay as they are; within a single repo that's the normal
+state, not an error.
+
+### Two layers, because they cost differently
+
+- **Declarations** — every repo's `microservice.yaml` and protos, read at
+  startup. Milliseconds, no Go compilation, and already enough to answer
+  *which service serves this key*. That's what makes `→ conversation` appear
+  instantly even in a workspace of fifty repos.
+- **Code** — a full index per repo: seconds and hundreds of megabytes each.
+  Needed only to render a frame, so it's deferred until you actually jump.
+
+`--index` selects when the code layer is built: `eager` up front, `lazy` on
+demand, or `auto` (the default) which is eager for a small workspace and lazy
+beyond four repos. The workspace strip at the top of the service view shows
+which repos are indexed; search and cross-linking cover the ones that are.
+
+### Limitations
+
+- **Discovery is one level deep.** A workspace is a directory of checkouts;
+  walking deeper would index vendored copies and testdata modules.
+- **Only gRPC edges join.** HTTP outbound keys are collected but not yet
+  matched against other repos' route registrations.
+- **A lazy workspace searches only what it has indexed.** Opening something in
+  a repo indexes it and it stays in the results afterwards.
 
 ## Diff mode
 

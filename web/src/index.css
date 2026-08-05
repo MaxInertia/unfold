@@ -2026,14 +2026,18 @@ body.resizing {
   padding: 0;
 }
 
+/* Rows stay on one line when there's room; an outbound row carrying a
+   cross-repo action wraps rather than crushing the key it's scanned by. */
 .service-item {
   display: flex;
   align-items: baseline;
   gap: 0.4rem;
+  flex-wrap: wrap;
   padding: 0.15rem 0;
 }
 
 .service-item-open {
+  flex: 1 1 15rem;
   font: inherit;
   text-align: left;
   background: none;
@@ -2326,4 +2330,69 @@ body.resizing {
 .proto-actions {
   display: flex;
   gap: 0.4rem;
+}
+
+/* ----- workspace / cross-repo ----- */
+
+.service-repos {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.35rem 0.8rem;
+  border-bottom: 1px solid var(--card-border);
+  font-size: 0.7rem;
+}
+
+.service-repos-label {
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Un-indexed repos read as dimmer: a lazy workspace can only cross-link and
+   search what it has loaded, and showing that beats looking broken. */
+.service-repo {
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 0 0.45rem;
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.service-repo--indexed {
+  opacity: 1;
+}
+
+.service-repo--primary {
+  color: var(--fg);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+  opacity: 1;
+}
+
+.service-cross {
+  font: inherit;
+  font-size: 0.7rem;
+  border: 1px solid var(--call-border);
+  border-radius: 999px;
+  background: var(--call-bg);
+  color: var(--accent);
+  padding: 0 0.45rem;
+  cursor: pointer;
+  flex: none;
+}
+
+.service-cross:hover:not(:disabled) {
+  background: var(--call-bg-hover);
+}
+
+.service-cross:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.service-cross-error {
+  font-size: 0.68rem;
+  color: var(--error);
 }

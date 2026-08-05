@@ -85,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/service", s.handleService)
 	mux.HandleFunc("/api/proto-root", s.handleProtoRoot)
 	mux.HandleFunc("/api/dirs", s.handleDirs)
+	mux.HandleFunc("/api/resolve", s.handleResolve)
 	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
@@ -279,6 +280,38 @@ func (s *Server) handleProtoRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"protoRoot": dir})
+}
+
+// GET /api/resolve?kind=<binding kind>&key=<join key> — open the
+// implementation of an outbound edge in whichever workspace repo serves it.
+//
+// Split from /api/service because the two cost different amounts: the service
+// view answers "who serves this" from declarations alone, instantly, while
+// this is where a lazily-indexed repo's Go code actually gets built. Keeping
+// them apart is what lets a large workspace stay responsive until you commit
+// to the jump.
+func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
+	cr, ok := s.engine.(model.CrossRepoResolver)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, model.ErrNoWorkspace.Error())
+		return
+	}
+	q := r.URL.Query()
+	kind, key := q.Get("kind"), q.Get("key")
+	if kind == "" || key == "" {
+		writeError(w, http.StatusBadRequest, "missing required query params: kind, key")
+		return
+	}
+	res, err := cr.Resolve(kind, key)
+	if err != nil {
+		if errors.Is(err, model.ErrNoWorkspace) {
+			writeError(w, http.StatusNotImplemented, err.Error())
+			return
+		}
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // GET /api/dirs?path=<dir> — the subdirectories of path, so the UI can offer

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchServiceView } from "./api";
+import { fetchServiceView, resolveBinding } from "./api";
 import { ProtoRootPicker } from "./ProtoRootPicker";
 import type { Binding, BindingVisibility, ServiceView as ServiceViewT, TargetID } from "./types";
 
@@ -55,6 +55,29 @@ export function ServiceView({
           </span>
         )}
       </header>
+
+      {view.repos && view.repos.length > 1 && (
+        <div className="service-repos">
+          <span className="service-repos-label">workspace</span>
+          {view.repos.map((r) => (
+            <span
+              key={r.alias}
+              className={`service-repo${r.primary ? " service-repo--primary" : ""}${
+                r.indexed ? " service-repo--indexed" : ""
+              }`}
+              title={
+                r.error
+                  ? `${r.dir} — ${r.error}`
+                  : r.indexed
+                    ? `${r.dir} — indexed`
+                    : `${r.dir} — not indexed yet; opening something here will index it`
+              }
+            >
+              {r.name}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* An empty gRPC surface and a misconfigured proto root look identical
           without this, so a missing declared surface says why — and offers
@@ -247,6 +270,7 @@ function BindingRow({
           {body}
         </span>
       )}
+      {binding.role === "outbound" && <CrossRepoLink binding={binding} onOpen={onOpen} />}
       {binding.stale && (
         <span
           className="service-badge service-badge--stale"
@@ -288,6 +312,58 @@ function displayKey(b: Binding): string {
   if (!method) return b.key;
   const bare = service.slice(service.lastIndexOf(".") + 1);
   return `${bare}/${method}`;
+}
+
+// The far end of an outbound edge. Kept as its own action rather than
+// replacing the row's click: one end is the call site in this repo, the other
+// is the implementation in another, and both are things you want one click
+// from the same row.
+function CrossRepoLink({
+  binding,
+  onOpen,
+}: {
+  binding: Binding;
+  onOpen: (id: TargetID) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!binding.servedBy) {
+    // Only say "nothing serves this" for keys a workspace could plausibly
+    // join. Without a workspace open, silence is honest — we haven't looked.
+    return null;
+  }
+
+  async function jump() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await resolveBinding(binding.kind, binding.key);
+      if (res.target) onOpen(res.target);
+      else setError(res.note ?? `${res.service} has no linkable implementation`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="service-cross"
+        onClick={() => void jump()}
+        disabled={busy}
+        title={`open the implementation in ${binding.servedBy}${
+          binding.servedByRepo ? "" : ""
+        } — indexes that repo on first visit`}
+      >
+        {busy ? "indexing…" : `→ ${binding.servedBy}`}
+      </button>
+      {error && <span className="service-cross-error">{error}</span>}
+    </>
+  );
 }
 
 function shortFile(p: string): string {

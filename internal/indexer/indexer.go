@@ -303,14 +303,23 @@ func (i *Indexer) Load(dir, pattern string) error {
 				// recognized call site (mux.HandleFunc) is an ordinary
 				// resolvable call *and* a platform edge, and a call whose
 				// target we can't resolve can still carry a usable key.
-				if facts, ok := i.callFacts(fi, node); ok {
-					found := platform.Extract(facts)
-					i.bindings = append(i.bindings, found...)
-					// Remember what each binding's call site called, so an
-					// edge discovered by following a chain can be attributed
-					// to the innermost site rather than every caller above it.
-					for range found {
-						i.bindingCallee = append(i.bindingCallee, facts.Callee)
+				//
+				// Only this module's own call sites count. A route a
+				// dependency registers, or a gRPC call it makes internally,
+				// isn't part of *this* service's surface — and since
+				// invokePath follows chains without a depth limit, admitting
+				// dependency sites would bury the real edges under library
+				// plumbing.
+				if isMainModule(fi.pkg) {
+					if facts, ok := i.callFacts(fi, node); ok {
+						found := platform.Extract(facts)
+						i.bindings = append(i.bindings, found...)
+						// Remember what each binding's call site called, so
+						// an edge found by following a chain is attributed to
+						// the innermost site, not every caller above it.
+						for range found {
+							i.bindingCallee = append(i.bindingCallee, facts.Callee)
+						}
 					}
 				}
 				ci := i.resolveCall(fi, node)
@@ -688,11 +697,11 @@ func (i *Indexer) implementationOf(name string) (TargetID, int) {
 		if recv, _ := namedTypeParts(sig.Recv().Type()); strings.HasPrefix(recv, "Unimplemented") {
 			continue
 		}
-		if i.invokePath(id, 0) != "" {
+		if i.invokePath(id) != "" {
 			continue // a generated client method, not a server implementation
 		}
 		any = append(any, id)
-		if fi.pkg != nil && fi.pkg.Module != nil && fi.pkg.Module.Main {
+		if isMainModule(fi.pkg) {
 			local = append(local, id)
 		}
 	}
@@ -744,14 +753,9 @@ func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool
 		c.Args = append(c.Args, argFacts(info, a))
 	}
 	c.Callee = TargetID(obj.FullName())
-	c.CalleeInvoke = i.invokePath(c.Callee, 0)
+	c.CalleeInvoke = i.invokePath(c.Callee)
 	return c, true
 }
-
-// grpcInvokeDepth bounds how far invokePath follows a call chain. A generated
-// client calls Invoke directly (depth 0); a hand-written SDK usually wraps it
-// once or twice. Beyond that a "match" would be coincidence.
-const grpcInvokeDepth = 3
 
 // invokePath returns the gRPC method path a function ultimately invokes, or
 // "".
@@ -763,22 +767,36 @@ const grpcInvokeDepth = 3
 // anything that calls it, that literal is already indexed here. So an
 // outbound call resolves to an exact key by reading the callee, with no
 // dataflow analysis and no guessing at which client type means what.
-func (i *Indexer) invokePath(target TargetID, depth int) string {
-	if depth > grpcInvokeDepth {
-		return ""
-	}
+//
+// Hand-written SDKs wrap the generated client, sometimes several layers deep,
+// so the search follows calls out of the body. Two properties keep that from
+// exploding:
+//
+//   - Each target is computed by its own traversal and memoized, so a result
+//     never depends on the path that reached it. Sharing one depth counter
+//     across the recursion silently poisoned the memo instead: a function
+//     first reached near the limit cached "" and kept it forever, which is
+//     why most real SDK calls went unrecognized.
+//   - Chain length is unbounded, but dropRelayedBindings attributes the edge
+//     to the innermost call site and extraction only runs on main-module
+//     sites, so a long chain can't fill the view with a dependency's guts.
+func (i *Indexer) invokePath(target TargetID) string {
 	if v, ok := i.invokeCache[target]; ok {
 		return v
 	}
 	fi := i.funcs[target]
-	if fi == nil || fi.decl.Body == nil {
+	if fi == nil || fi.decl == nil || fi.decl.Body == nil {
+		i.invokeCache[target] = ""
 		return ""
 	}
-	// Guard against recursion while this target is in progress.
+	// Cycle guard: a recursive chain resolves to "" while in progress, then
+	// gets its real answer written below.
 	i.invokeCache[target] = ""
 
-	var found string
-	var nested []TargetID
+	var (
+		found  string
+		nested []TargetID
+	)
 	info := fi.pkg.TypesInfo
 	ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
 		if found != "" {
@@ -788,35 +806,32 @@ func (i *Indexer) invokePath(target TargetID, depth int) string {
 		if !ok {
 			return true
 		}
-		sel, ok := ce.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
+		if name := nameIdent(ce.Fun); name != nil {
+			switch name.Name {
+			case "Invoke", "NewStream":
+				for _, a := range ce.Args {
+					// A gRPC method path is exactly "/pkg.Service/Method".
+					if v := argFacts(info, a); v.Known &&
+						strings.HasPrefix(v.Value, "/") && strings.Count(v.Value, "/") == 2 {
+						found = v.Value
+						return false
+					}
+				}
+				return true
+			}
 		}
-		switch sel.Sel.Name {
-		case "Invoke", "NewStream":
-			for _, a := range ce.Args {
-				if v := argFacts(info, a); v.Known && strings.HasPrefix(v.Value, "/") &&
-					strings.Count(v.Value, "/") == 2 {
-					found = v.Value
-					return false
-				}
-			}
-		default:
-			// Remember calls worth following if this body isn't the one.
-			if fnObj, ok := info.Uses[sel.Sel].(*types.Func); ok {
-				nested = append(nested, TargetID(fnObj.FullName()))
-			} else if s, ok := info.Selections[sel]; ok {
-				if fnObj, ok := s.Obj().(*types.Func); ok {
-					nested = append(nested, TargetID(fnObj.FullName()))
-				}
-			}
+		// Otherwise remember the callee — plain function or method alike. An
+		// SDK wrapper is as often `invokeGet(...)` as `c.client.Get(...)`,
+		// and following only selectors missed the first kind entirely.
+		if callee := calleeOf(info, ce.Fun); callee != "" {
+			nested = append(nested, callee)
 		}
 		return true
 	})
 
 	if found == "" {
 		for _, n := range nested {
-			if v := i.invokePath(n, depth+1); v != "" {
+			if v := i.invokePath(n); v != "" {
 				found = v
 				break
 			}
@@ -824,6 +839,34 @@ func (i *Indexer) invokePath(target TargetID, depth int) string {
 	}
 	i.invokeCache[target] = found
 	return found
+}
+
+// calleeOf resolves a call's function expression to the target it names.
+func calleeOf(info *types.Info, fun ast.Expr) TargetID {
+	if info == nil {
+		return ""
+	}
+	switch f := fun.(type) {
+	case *ast.Ident:
+		if obj, ok := info.Uses[f].(*types.Func); ok {
+			return TargetID(obj.FullName())
+		}
+	case *ast.SelectorExpr:
+		if sel, ok := info.Selections[f]; ok {
+			if obj, ok := sel.Obj().(*types.Func); ok {
+				return TargetID(obj.FullName())
+			}
+		} else if obj, ok := info.Uses[f.Sel].(*types.Func); ok {
+			return TargetID(obj.FullName())
+		}
+	case *ast.IndexExpr:
+		return calleeOf(info, f.X)
+	case *ast.IndexListExpr:
+		return calleeOf(info, f.X)
+	case *ast.ParenExpr:
+		return calleeOf(info, f.X)
+	}
+	return ""
 }
 
 // namedTypeParts unwraps a receiver type to its bare name and package, so a
@@ -1058,6 +1101,12 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 	}
 
 	return ci
+}
+
+// isMainModule reports whether a package belongs to the module being read,
+// as opposed to a dependency.
+func isMainModule(pkg *packages.Package) bool {
+	return pkg != nil && pkg.Module != nil && pkg.Module.Main
 }
 
 func isInterface(t types.Type) bool {

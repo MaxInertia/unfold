@@ -95,6 +95,11 @@ export interface Binding {
   line: number;
   confidence?: BindingConfidence;
   visibility?: BindingVisibility;
+  // The workspace service implementing this outbound key, resolved from
+  // declarations alone — naming it costs no Go index. Opening it does, which
+  // is why that goes through /api/resolve.
+  servedBy?: string;
+  servedByRepo?: string;
   // Declared by the manifest but not implemented in code — a publicRoutes
   // entry nothing registers, or a proto method with no implementation.
   stale?: boolean;
@@ -112,9 +117,30 @@ export interface ServiceView {
   // Why part of the view may be missing (usually an unresolvable proto root).
   warning?: string;
   protoRoot?: string; // the shared proto repository currently configured
+  repos?: RepoInfo[]; // present when a workspace of several repos is open
   // The manifest declares protoPaths that can't be resolved yet — the cue to
   // offer the picker rather than just reporting the problem.
   needsProtoRoot?: boolean;
+}
+
+export interface RepoInfo {
+  alias: string;
+  name: string;
+  dir: string;
+  primary?: boolean;
+  indexed?: boolean; // its Go code is loaded; lazy repos start false
+  error?: string;
+}
+
+// The answer to "open the implementation of this key". target is empty when
+// the serving repo is known but its implementation couldn't be identified.
+export interface Resolution {
+  repo: string;
+  service: string;
+  target?: TargetID;
+  title?: string;
+  stale?: boolean;
+  note?: string;
 }
 
 export interface TypeInfo {

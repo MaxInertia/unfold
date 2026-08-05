@@ -1,5 +1,6 @@
 import type {
   CallID,
+  Resolution,
   Frame,
   Note,
   SearchResult,
@@ -60,6 +61,14 @@ export async function fetchUsages(targetId: TargetID): Promise<Usage[]> {
 export function fetchServiceView(anchor?: TargetID | null): Promise<ServiceView> {
   const qs = anchor ? `?anchor=${encodeURIComponent(anchor)}` : "";
   return getJSON<ServiceView>(`/api/service${qs}`);
+}
+
+// Open the implementation of an outbound edge in whichever workspace repo
+// serves it. Separate from the service view because this is where a lazily
+// indexed repo's Go code actually gets built — it can take seconds.
+export function resolveBinding(kind: string, key: string): Promise<Resolution> {
+  const qs = new URLSearchParams({ kind, key });
+  return getJSON<Resolution>(`/api/resolve?${qs.toString()}`);
 }
 
 // The subdirectories of a path, for the proto-root picker. A browser can't

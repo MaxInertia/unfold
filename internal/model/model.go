@@ -258,6 +258,13 @@ type Binding struct {
 
 	Confidence BindingConfidence `json:"confidence,omitempty"`
 
+	// ServedBy names the workspace service that implements this outbound
+	// key, and ServedByRepo its repo alias. Resolved from declarations
+	// alone, so it's answerable without indexing that repo's Go code — the
+	// implementation itself is fetched on demand via Resolve.
+	ServedBy     string `json:"servedBy,omitempty"`
+	ServedByRepo string `json:"servedByRepo,omitempty"`
+
 	Visibility BindingVisibility `json:"visibility,omitempty"`
 
 	// Stale marks a binding the manifest declares but the code doesn't
@@ -297,10 +304,42 @@ type ServiceView struct {
 	Inbound  []Binding `json:"inbound"`
 	Outbound []Binding `json:"outbound"`
 
+	// Repos lists the workspace's repositories when more than one is open,
+	// including which are indexed — a lazy workspace can only search and
+	// cross-link what it has loaded, and saying so beats looking broken.
+	Repos []RepoInfo `json:"repos,omitempty"`
+
 	// Warning explains why part of the view may be missing — most often a
 	// declared proto surface that couldn't be loaded. An empty surface and a
 	// misconfigured proto root look identical without it.
 	Warning string `json:"warning,omitempty"`
+}
+
+// RepoInfo describes one repository in a workspace.
+type RepoInfo struct {
+	Alias   string `json:"alias"` // stable key used to namespace ids
+	Name    string `json:"name"`  // display name (the manifest's, usually)
+	Dir     string `json:"dir"`
+	Primary bool   `json:"primary,omitempty"` // the repo unfold was pointed at
+	Indexed bool   `json:"indexed,omitempty"` // its Go code is loaded
+	Error   string `json:"error,omitempty"`
+}
+
+// Resolution is the answer to "open the implementation of this key". Target
+// is empty when the serving repo is known but its implementation couldn't be
+// identified, in which case Note says so.
+type Resolution struct {
+	Repo    string   `json:"repo"`
+	Service string   `json:"service"`
+	Target  TargetID `json:"target,omitempty"`
+	Title   string   `json:"title,omitempty"`
+	Stale   bool     `json:"stale,omitempty"`
+	Note    string   `json:"note,omitempty"`
+}
+
+// CrossRepoResolver is implemented by engines that federate repositories.
+type CrossRepoResolver interface {
+	Resolve(kind, key string) (*Resolution, error)
 }
 
 // PlatformEngine is the optional half of Engine: engines that can describe
@@ -319,6 +358,10 @@ type PlatformEngine interface {
 // PlatformEngine conditionally — the method set is static — so it satisfies
 // the interface and reports the gap at call time instead.
 var ErrNoPlatformView = errors.New("platform view is not available for this engine")
+
+// ErrNoWorkspace is returned when a cross-repo hop is requested but only one
+// repository is open.
+var ErrNoWorkspace = errors.New("no workspace is open (start unfold with --workspace)")
 
 // HasPlatformView reports whether e can currently serve a service-level view,
 // so the server can advertise the zoom-out affordance only when it works.

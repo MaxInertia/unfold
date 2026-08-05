@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MaxInertia/unfold/internal/model"
@@ -420,5 +421,51 @@ func TestGRPCEdgeIsNotRelayedToCallers(t *testing.T) {
 	}
 	if sites[0] != "Server.fetchConversation" {
 		t.Errorf("site: got %q, want the innermost caller Server.fetchConversation", sites[0])
+	}
+}
+
+// TestGRPCThroughAHandWrittenSDK is the shape that actually occurs: the RPC
+// name appears nowhere in the caller, and is several hops inside a dependency
+// SDK — reached partly by a plain function call rather than a method call.
+//
+// Both of those defeated the first implementation. It followed only selector
+// callees, so a `invokeGetMulti(...)` hop ended the search; and it shared one
+// depth counter across the whole recursion, so a function first reached near
+// the limit cached "no path" permanently and poisoned every later lookup.
+func TestGRPCThroughAHandWrittenSDK(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	b := findBinding(sv.Outbound, "grpc.method", "accountgroup.v1.AccountGroupService/GetMulti")
+	if b == nil {
+		var keys []string
+		for _, o := range sv.Outbound {
+			keys = append(keys, o.Kind+" "+o.Key)
+		}
+		t.Fatalf("the SDK call was not recognized; outbound edges were %v", keys)
+	}
+	if b.Confidence != model.ConfExact {
+		t.Errorf("confidence: got %q, want exact", b.Confidence)
+	}
+	// The SDK is a dependency, so its own internal call sites don't count as
+	// this service's surface — the edge belongs to the caller in this repo.
+	if b.SiteTitle != "Server.listAccounts" {
+		t.Errorf("site: got %q, want Server.listAccounts", b.SiteTitle)
+	}
+}
+
+// A dependency's own platform edges are not this service's. Without that
+// restriction, unbounded chain-following buries the real surface under
+// library plumbing.
+func TestDependencyCallSitesAreNotThisServicesSurface(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	for _, b := range sv.Outbound {
+		if strings.Contains(b.File, "testdata/agsdk") {
+			t.Errorf("binding attributed to a dependency's internals: %+v", b)
+		}
 	}
 }

@@ -145,6 +145,18 @@ func (r *Reloadable) SetProtoRoot(dir string) error {
 	return err
 }
 
+// Resolve forwards the cross-repo hop to the current engine when it
+// federates repositories.
+func (r *Reloadable) Resolve(kind, key string) (*model.Resolution, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cr, ok := r.cur.(model.CrossRepoResolver)
+	if !ok {
+		return nil, model.ErrNoWorkspace
+	}
+	return cr.Resolve(kind, key)
+}
+
 // PlatformAvailable reports whether the engine currently held can serve a
 // service view, so /api/health advertises the zoom-out affordance honestly
 // even though the wrapper's own method set can't.
