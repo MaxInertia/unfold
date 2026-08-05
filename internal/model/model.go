@@ -208,6 +208,22 @@ const (
 	ConfInferred BindingConfidence = "inferred"
 )
 
+// BindingVisibility says how far a piece of inbound surface reaches. It's a
+// more useful primary grouping than Kind: what you usually want to know about
+// an entrypoint is who can get to it, not which library registered it.
+type BindingVisibility string
+
+const (
+	// VisPublic is reachable from outside the platform — declared in the
+	// manifest's publicRoutes.
+	VisPublic BindingVisibility = "public"
+	// VisPlatform is reachable by other services: a proto-declared RPC that
+	// isn't excluded from SDK generation.
+	VisPlatform BindingVisibility = "platform"
+	// VisInternal is registered in code but named by neither list.
+	VisInternal BindingVisibility = "internal"
+)
+
 // Binding is one place the code touches something outside itself, keyed by a
 // string that the other side of the edge also names. Two bindings with the
 // same Kind and Key are the two ends of one platform edge, which is how a
@@ -242,6 +258,15 @@ type Binding struct {
 
 	Confidence BindingConfidence `json:"confidence,omitempty"`
 
+	Visibility BindingVisibility `json:"visibility,omitempty"`
+
+	// Stale marks a binding the manifest declares but the code doesn't
+	// implement — a publicRoutes entry nothing registers, or a proto method
+	// with no matching implementation. Declared facts are strong but they
+	// rot, so a declaration the index can't corroborate is shown as suspect
+	// rather than presented as real surface.
+	Stale bool `json:"stale,omitempty"`
+
 	// ReachesAnchor is set when a ServiceView was asked for an anchor and
 	// this binding's handler transitively calls it — i.e. this is one of the
 	// entrypoints through which the anchor actually runs.
@@ -264,6 +289,11 @@ type ServiceView struct {
 
 	Inbound  []Binding `json:"inbound"`
 	Outbound []Binding `json:"outbound"`
+
+	// Warning explains why part of the view may be missing — most often a
+	// declared proto surface that couldn't be loaded. An empty surface and a
+	// misconfigured proto root look identical without it.
+	Warning string `json:"warning,omitempty"`
 }
 
 // PlatformEngine is the optional half of Engine: engines that can describe

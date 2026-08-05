@@ -51,6 +51,13 @@ func Detect(dir, lang string) (Lang, error) {
 	return LangGo, nil
 }
 
+// ProtoRoot is the shared proto repository that a microservice.yaml's
+// protoPaths resolve against. Those paths are relative to that repo rather
+// than to the service, so unfold can't find it on its own — the user points
+// at it with --proto-root. Package-level because it's a process-wide setting
+// that must survive the engine rebuilds watch mode performs.
+var ProtoRoot string
+
 // Load constructs the engine for lang and loads the project rooted at dir.
 // target is the engine-specific scope (a Go package pattern like "./..."
 // for Go; ignored by the TS engine, which loads the whole tsconfig project).
@@ -58,6 +65,7 @@ func Load(lang Lang, dir, target string) (model.Engine, error) {
 	switch lang {
 	case LangGo:
 		idx := indexer.New()
+		idx.SetProtoRoot(ProtoRoot)
 		if err := idx.Load(dir, target); err != nil {
 			return nil, err
 		}

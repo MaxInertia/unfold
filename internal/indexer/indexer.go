@@ -9,6 +9,7 @@
 package indexer
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
 	"go/constant"
@@ -21,8 +22,10 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/MaxInertia/unfold/internal/manifest"
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/platform"
+	"github.com/MaxInertia/unfold/internal/protoapi"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/packages"
 )
@@ -135,12 +138,23 @@ type Indexer struct {
 	// the same body walk that resolves call sites.
 	bindings []model.Binding
 
-	// Identity of the indexed project, for the service-level view. Service
-	// naming is the repo directory today; a microservice.yaml declaration
-	// would take precedence once that's read.
+	// Identity of the indexed project, for the service-level view. The
+	// manifest's declared name wins; the repo directory is the fallback.
 	serviceName string
 	modulePath  string
 	rootDir     string
+
+	// mf is the parsed microservice.yaml, nil when the repo has none.
+	mf *manifest.Manifest
+
+	// protoRoot is the shared proto repository that a manifest's protoPaths
+	// resolve against. Empty disables proto loading — the paths are relative
+	// to a repo unfold has no way to locate on its own.
+	protoRoot string
+	// protoErr records why the declared gRPC surface is missing, so the UI
+	// can say "proto root is wrong" instead of showing an empty surface as
+	// though the service had none.
+	protoErr string
 
 	// fileBytes caches the raw source of files whose functions we've
 	// produced frames for, so we don't re-read on every /body request.
@@ -220,6 +234,8 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.interfaceImpls = buildInterfaceImpls(pkgs)
 	i.usagesByTarget = make(map[TargetID][]*usageInfo)
 	i.bindings = nil
+	i.mf = nil
+	i.protoErr = ""
 	i.identify(dir, pkgs)
 
 	// Pass 1: register every FuncDecl as a target.
@@ -351,6 +367,11 @@ func (i *Indexer) Load(dir, pattern string) error {
 			b.SiteTitle = goTitle(fi.obj)
 		}
 	}
+	// Declared surface is folded in after the code-derived bindings, so the
+	// publicRoutes cross-check can see what the code actually registered.
+	i.applyVisibility()
+	i.bindings = append(i.bindings, i.declaredBindings()...)
+
 	sort.SliceStable(i.bindings, func(a, b int) bool {
 		x, y := i.bindings[a], i.bindings[b]
 		if x.Kind != y.Kind {
@@ -362,10 +383,20 @@ func (i *Indexer) Load(dir, pattern string) error {
 	return nil
 }
 
+// SetProtoRoot points the indexer at the shared proto repository that a
+// manifest's protoPaths are relative to. It must be called before Load;
+// without it the declared gRPC surface is skipped, since those paths don't
+// resolve against the service's own directory.
+func (i *Indexer) SetProtoRoot(dir string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.protoRoot = dir
+}
+
 // identify records what to call this project at the service level. The repo
-// (module) directory name is the working answer; a microservice.yaml in the
-// project root would override it once that file's shape is known, and the
-// module path is kept alongside as the unambiguous identifier.
+// (module) directory name is the fallback; a microservice.yaml at the project
+// root overrides it, and the module path is kept alongside as the unambiguous
+// identifier.
 func (i *Indexer) identify(dir string, pkgs []*packages.Package) {
 	root := dir
 	for _, p := range pkgs {
@@ -386,6 +417,159 @@ func (i *Indexer) identify(dir string, pkgs []*packages.Package) {
 	if i.serviceName == "." || i.serviceName == string(filepath.Separator) {
 		i.serviceName = i.modulePath
 	}
+
+	// A manifest is optional; most repos unfold opens won't have one. A
+	// malformed one is worth reporting but not worth failing the index over
+	// — the code-derived view is still correct without it.
+	m, err := manifest.Read(i.rootDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unfold: %v\n", err)
+		return
+	}
+	i.mf = m
+	if m == nil {
+		return
+	}
+	if m.Name != "" {
+		i.serviceName = m.Name
+	}
+}
+
+// declaredBindings turns the manifest into bindings: the proto-declared gRPC
+// surface, plus any publicRoutes the code never registered.
+//
+// Declared facts are the strongest tier — a proto is the contract both the
+// server and its generated SDK are built from — but they're also the ones
+// that rot, so anything the index can't corroborate is marked stale rather
+// than presented as real surface.
+func (i *Indexer) declaredBindings() []model.Binding {
+	if i.mf == nil {
+		return nil
+	}
+	var out []model.Binding
+
+	paths, excluded := i.mf.IncludedProtos()
+	if len(paths) > 0 {
+		if i.protoRoot == "" {
+			i.protoErr = fmt.Sprintf("%d proto path(s) declared but no --proto-root was given", len(paths))
+		} else if methods, err := protoapi.Load(context.Background(), i.protoRoot, paths, excluded); err != nil {
+			// An empty surface and a misconfigured proto root look identical
+			// in the UI unless the error is carried through.
+			i.protoErr = err.Error()
+			fmt.Fprintf(os.Stderr, "unfold: %v\n", err)
+		} else {
+			for _, m := range methods {
+				b := model.Binding{
+					Role:       model.RoleInbound,
+					Kind:       "grpc.method",
+					Key:        m.FullName,
+					Detail:     m.File,
+					Confidence: model.ConfDeclared,
+					Visibility: model.VisPlatform,
+					File:       filepath.Join(i.protoRoot, m.File),
+				}
+				if m.ExcludedFromSDK {
+					// Implemented here, but no other service can call it.
+					b.Visibility = model.VisInternal
+					b.Detail = m.File + " (excluded from SDK)"
+				}
+				if m.ClientStreaming || m.ServerStreaming {
+					b.Detail += " · streaming"
+				}
+				// Link to the implementation when exactly one indexed
+				// function carries the RPC's name. Ambiguity means no link
+				// rather than a guess at which one serves it.
+				if target, ok := i.uniqueFuncNamed(m.Name); ok {
+					b.Target = target
+					b.TargetTitle = goTitle(i.funcs[target].obj)
+					b.Site = target
+					b.SiteTitle = b.TargetTitle
+				} else {
+					b.Stale = true
+				}
+				out = append(out, b)
+			}
+		}
+	}
+
+	// A declared public route nothing registers is the drift case worth
+	// surfacing; one that *is* registered gets marked public in place, below.
+	for _, route := range i.mf.PublicRoutes {
+		if i.routeRegistered(route) {
+			continue
+		}
+		out = append(out, model.Binding{
+			Role:       model.RoleInbound,
+			Kind:       "http.route",
+			Key:        route,
+			Detail:     "declared in " + manifest.Name,
+			Confidence: model.ConfDeclared,
+			Visibility: model.VisPublic,
+			Stale:      true,
+		})
+	}
+	return out
+}
+
+// applyVisibility classifies the code-derived inbound surface against the
+// manifest: a route the manifest calls public is public, everything else the
+// code registered is internal until something says otherwise.
+func (i *Indexer) applyVisibility() {
+	public := map[string]bool{}
+	if i.mf != nil {
+		for _, r := range i.mf.PublicRoutes {
+			public[r] = true
+		}
+	}
+	for n := range i.bindings {
+		b := &i.bindings[n]
+		if b.Role != model.RoleInbound || b.Visibility != "" {
+			continue
+		}
+		if public[routePath(b.Key)] {
+			b.Visibility = model.VisPublic
+		} else {
+			b.Visibility = model.VisInternal
+		}
+	}
+}
+
+// routeRegistered reports whether the code registers a route at this path.
+// publicRoutes are bare paths, so the method half of a "POST /x" key is
+// ignored on both sides of the comparison.
+func (i *Indexer) routeRegistered(route string) bool {
+	for _, b := range i.bindings {
+		if b.Kind == "http.route" && routePath(b.Key) == route {
+			return true
+		}
+	}
+	return false
+}
+
+// routePath drops the optional leading method from a route key.
+func routePath(key string) string {
+	if _, rest, ok := strings.Cut(key, " "); ok {
+		return rest
+	}
+	return key
+}
+
+// uniqueFuncNamed resolves a bare function name to a target, but only when
+// exactly one indexed function has it. Proto RPCs are matched to their Go
+// implementations by name — there's no declared link between them — so an
+// ambiguous name must not silently pick a winner.
+func (i *Indexer) uniqueFuncNamed(name string) (TargetID, bool) {
+	var found TargetID
+	for id, fi := range i.funcs {
+		if fi.obj.Name() != name {
+			continue
+		}
+		if found != "" {
+			return "", false
+		}
+		found = id
+	}
+	return found, found != ""
 }
 
 // callFacts reduces a call site to the neutral shape recognizers consume.
@@ -488,6 +672,7 @@ func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
 		Name:     i.serviceName,
 		Module:   i.modulePath,
 		Root:     i.rootDir,
+		Warning:  i.protoErr,
 		Inbound:  []model.Binding{},
 		Outbound: []model.Binding{},
 	}

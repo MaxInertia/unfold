@@ -90,6 +90,61 @@ Reachability is computed the same way the callers tree walks: backwards over
 call and interface edges. Value references aren't followed — a function passed
 as a value has no call site, so a chain through one isn't an execution path.
 
+### What the service declares about itself
+
+If the repo root has a `microservice.yaml`, unfold reads it. Declared facts are
+the *strongest* resolution tier — a proto is the contract both a server and its
+generated SDK are built from, so it needs no heuristics at all — but they're
+also the ones that rot, so anything the manifest declares and the index can't
+corroborate is shown and badged `stale` rather than presented as real surface.
+
+```yaml
+microservice:
+  name: conversation
+  protoPaths:
+    - path: conversation/v1/api.proto
+    - excludeFromSdk: conversation/v1/internal.proto
+  publicRoutes:
+    - /v1/conversations
+```
+
+- **`name`** replaces the repo directory as the service name.
+- **`protoPaths`** contributes the declared gRPC surface: every `rpc` in those
+  files becomes an inbound binding keyed
+  `<proto package>.<Service>/<Method>` — the same key the generated SDK names
+  on the calling side, which is what will join the two ends of a cross-service
+  edge once more than one repo is indexed. A method is linked to its Go
+  implementation when exactly one indexed function carries the RPC's name;
+  ambiguity leaves it unlinked rather than guessing.
+- **`excludeFromSdk`** marks surface implemented here but not callable from
+  other services. Those methods are shown as **internal** rather than omitted —
+  they exist, and later "nothing calls this" readings must not fire on them,
+  because nothing *can*.
+- **`publicRoutes`** classifies the inbound surface.
+
+Proto paths are relative to the **shared proto repository**, not to the
+service, so unfold can't find them on its own — point at it with
+`--proto-root`:
+
+```
+unfold --proto-root ~/src/platform-protos ./...
+```
+
+Without it, declared proto paths are skipped and the view says so, since an
+empty gRPC surface and a misconfigured proto root otherwise look identical.
+
+### Inbound is grouped by reach
+
+What you want to know about an entrypoint first is who can get to it, so the
+inbound column groups by visibility rather than by kind:
+
+- **public** — reachable from outside the platform (in `publicRoutes`).
+- **platform** — reachable by other services (proto-declared, in the SDK).
+- **internal** — registered in code, named by neither list.
+
+This also gives the first real drift check: a `publicRoutes` entry nothing
+registers is stale, and so is a proto method with no implementation.
+
 ### Bindings and confidence
 
 Inbound and outbound entries are **bindings**: a `kind` and a `key` extracted
@@ -106,7 +161,8 @@ resolved, and anything short of `exact` is badged:
 - **inferred** — the key is literal but something about it is a guess. A
   `client.Topic("orders-v1")` handle is marked this way: the topic name is
   certain, whether the code publishes to it is not.
-- **declared** — asserted by a manifest or infra-as-code. Not yet produced.
+- **declared** — asserted by `microservice.yaml`: a proto-declared RPC, or a
+  route in `publicRoutes`.
 
 Recognizers currently cover `net/http` route registration (including Go 1.22
 `"POST /path"` patterns, host-qualified patterns, and handlers wrapped in
@@ -118,9 +174,13 @@ function, constant-folded args), never an AST.
 
 ### Limitations
 
-- **Single repo.** The service is the module you indexed, named after its
-  directory. Joining outbound keys to the services that serve them needs a
-  multi-repo index, which doesn't exist yet.
+- **Single repo.** Joining outbound keys to the services that serve them needs
+  a multi-repo index, which doesn't exist yet — so an outbound key with nothing
+  serving it is the expected state, not a defect.
+- **Proto→Go linking is by name.** There's no declared link between an RPC and
+  the method implementing it, so unfold matches on the bare name and only when
+  it's unambiguous. A service whose methods collide with unrelated functions
+  elsewhere in the module will show those RPCs unlinked.
 - **Go only.** The TypeScript engine has no recognizers, so the zoom control
   is hidden when it's loaded.
 - **Only `net/http`.** Third-party routers (chi, gin, echo) aren't recognized

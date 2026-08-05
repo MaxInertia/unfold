@@ -74,6 +74,10 @@ export interface Usage {
 
 export type BindingRole = "inbound" | "outbound";
 export type BindingConfidence = "exact" | "declared" | "inferred";
+// How far a piece of inbound surface reaches — a more useful primary grouping
+// than kind, since what you want to know about an entrypoint is who can get
+// to it.
+export type BindingVisibility = "public" | "platform" | "internal";
 
 // One place the code touches something outside itself, keyed by a string the
 // other end of the edge also names. Within a single repo only one end is
@@ -90,6 +94,10 @@ export interface Binding {
   file: string;
   line: number;
   confidence?: BindingConfidence;
+  visibility?: BindingVisibility;
+  // Declared by the manifest but not implemented in code — a publicRoutes
+  // entry nothing registers, or a proto method with no implementation.
+  stale?: boolean;
   reachesAnchor?: boolean; // this entrypoint transitively reaches the anchor
 }
 
@@ -101,6 +109,8 @@ export interface ServiceView {
   anchorTitle?: string;
   inbound: Binding[];
   outbound: Binding[];
+  // Why part of the view may be missing (usually an unresolvable proto root).
+  warning?: string;
 }
 
 export interface TypeInfo {

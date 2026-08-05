@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchServiceView } from "./api";
-import type { Binding, ServiceView as ServiceViewT, TargetID } from "./types";
+import type { Binding, BindingVisibility, ServiceView as ServiceViewT, TargetID } from "./types";
 
 // The L1 (service) zoom level: what enters this service on the left, what it
 // reaches out to on the right.
@@ -53,6 +53,10 @@ export function ServiceView({
         )}
       </header>
 
+      {/* An empty gRPC surface and a misconfigured proto root look identical
+          without this, so a missing declared surface says why. */}
+      {view.warning && <div className="service-warning">{view.warning}</div>}
+
       <div className="service-columns">
         <Column
           title="inbound"
@@ -60,6 +64,7 @@ export function ServiceView({
           bindings={view.inbound}
           anchored={anchored}
           onOpen={onOpen}
+          groupBy={visibilityOf}
           empty="No inbound surface recognized. Routes are found via net/http registration; other routers need their own recognizer."
         />
         <Column
@@ -68,11 +73,27 @@ export function ServiceView({
           bindings={view.outbound}
           anchored={anchored}
           onOpen={onOpen}
+          groupBy={(b) => b.kind}
           empty="No outbound edges recognized. Calls whose URL is built at runtime are skipped rather than guessed."
         />
       </div>
     </div>
   );
+}
+
+// Inbound is grouped by reach rather than by kind: what you want to know
+// about an entrypoint first is who can get to it, not which library
+// registered it. Ordered outermost-in, so the public surface reads first.
+const VISIBILITY_ORDER: BindingVisibility[] = ["public", "platform", "internal"];
+
+const VISIBILITY_HINT: Record<BindingVisibility, string> = {
+  public: "reachable from outside the platform — declared in microservice.yaml",
+  platform: "reachable by other services — proto-declared, in the generated SDK",
+  internal: "registered here but named by neither publicRoutes nor an SDK proto",
+};
+
+function visibilityOf(b: Binding): string {
+  return b.visibility ?? b.kind;
 }
 
 function Column({
@@ -81,6 +102,7 @@ function Column({
   bindings,
   anchored,
   onOpen,
+  groupBy,
   empty,
 }: {
   title: string;
@@ -88,16 +110,24 @@ function Column({
   bindings: Binding[];
   anchored: boolean;
   onOpen: (id: TargetID) => void;
+  groupBy: (b: Binding) => string;
   empty: string;
 }) {
-  // Group by kind so routes, topics and subscriptions read as separate
-  // surfaces rather than one undifferentiated list.
   const groups = new Map<string, Binding[]>();
   for (const b of bindings) {
-    const list = groups.get(b.kind);
+    const key = groupBy(b);
+    const list = groups.get(key);
     if (list) list.push(b);
-    else groups.set(b.kind, [b]);
+    else groups.set(key, [b]);
   }
+  // Visibility groups get a fixed outermost-in order; anything else keeps
+  // insertion order (which the backend already sorts).
+  const ordered = [...groups].sort((a, b) => {
+    const ia = VISIBILITY_ORDER.indexOf(a[0] as BindingVisibility);
+    const ib = VISIBILITY_ORDER.indexOf(b[0] as BindingVisibility);
+    if (ia === -1 && ib === -1) return 0;
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
 
   return (
     <section className={`service-col service-col--${title}`}>
@@ -109,9 +139,14 @@ function Column({
       {bindings.length === 0 ? (
         <p className="service-empty">{empty}</p>
       ) : (
-        [...groups].map(([kind, list]) => (
-          <div key={kind} className="service-group">
-            <div className="service-group-kind">{kind}</div>
+        ordered.map(([group, list]) => (
+          <div key={group} className="service-group">
+            <div
+              className="service-group-kind"
+              title={VISIBILITY_HINT[group as BindingVisibility]}
+            >
+              {group}
+            </div>
             <ul className="service-list">
               {list.map((b, i) => (
                 <BindingRow
@@ -164,23 +199,48 @@ function BindingRow({
     .filter(Boolean)
     .join(" · ");
 
+  // A declared binding with no implementation has nothing to open — render
+  // it as text rather than a button that would go nowhere.
+  const body = (
+    <>
+      <span className="service-key" title={binding.key}>
+        {displayKey(binding)}
+      </span>
+      <span className="service-item-meta">
+        {binding.targetTitle ? (
+          <span className="service-handler">{binding.targetTitle}</span>
+        ) : binding.siteTitle ? (
+          <span className="service-handler service-handler--site">{binding.siteTitle}</span>
+        ) : null}
+        {binding.file && (
+          <span className="service-loc">
+            {shortFile(binding.file)}
+            {binding.line ? `:${binding.line}` : ""}
+          </span>
+        )}
+      </span>
+    </>
+  );
+
   return (
     <li className={cls}>
-      <button type="button" className="service-item-open" onClick={() => onOpen(open)} title={openTitle}>
-        <span className="service-key">{binding.key}</span>
-        <span className="service-item-meta">
-          {binding.targetTitle ? (
-            <span className="service-handler">{binding.targetTitle}</span>
-          ) : (
-            <span className="service-handler service-handler--site">
-              {binding.siteTitle ?? shortFile(binding.file)}
-            </span>
-          )}
-          <span className="service-loc">
-            {shortFile(binding.file)}:{binding.line}
-          </span>
+      {open ? (
+        <button type="button" className="service-item-open" onClick={() => onOpen(open)} title={openTitle}>
+          {body}
+        </button>
+      ) : (
+        <span className="service-item-open service-item-open--dead" title={binding.detail}>
+          {body}
         </span>
-      </button>
+      )}
+      {binding.stale && (
+        <span
+          className="service-badge service-badge--stale"
+          title="declared in microservice.yaml but not implemented in code — the declaration may be out of date"
+        >
+          stale
+        </span>
+      )}
       {binding.reachesAnchor && (
         <span className="service-badge service-badge--reaches" title="this entrypoint reaches the anchored frame">
           reaches anchor
@@ -202,6 +262,18 @@ function BindingRow({
       )}
     </li>
   );
+}
+
+// A gRPC key is "<proto package>.<Service>/<Method>". The package is the
+// least interesting part and the longest, and truncation would eat the method
+// name — which is exactly what you scan the column for. Drop the package for
+// display; the full key stays in the row's tooltip.
+function displayKey(b: Binding): string {
+  if (b.kind !== "grpc.method") return b.key;
+  const [service, method] = b.key.split("/", 2);
+  if (!method) return b.key;
+  const bare = service.slice(service.lastIndexOf(".") + 1);
+  return `${bare}/${method}`;
 }
 
 function shortFile(p: string): string {

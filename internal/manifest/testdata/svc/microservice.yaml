@@ -1,0 +1,10 @@
+microservice:
+  name: conversation
+  protoPaths:
+    - path: conversation/v1/api.proto
+    - path: conversation/v1/admin.proto
+      excludeFromSdk: conversation/v1/internal.proto
+  publicRoutes:
+    - /v1/conversations
+    - /v1/health
+  someOtherKey: ignored

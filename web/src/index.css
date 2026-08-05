@@ -2061,6 +2061,18 @@ body.resizing {
   text-overflow: ellipsis;
 }
 
+/* The key is what the column is scanned by, so the metadata beside it gives
+   way first when the row runs out of room. */
+.service-key {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.service-item-meta {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
 .service-item-meta {
   min-width: 0;
 }
@@ -2176,4 +2188,29 @@ body.resizing {
 
 .settings-key-desc {
   color: var(--muted);
+}
+
+.service-warning {
+  margin: 0;
+  padding: 0.45rem 0.8rem;
+  border-bottom: 1px solid var(--card-border);
+  background: var(--goroutine-bg);
+  color: var(--goroutine-fg);
+  font-size: 0.75rem;
+}
+
+/* A declared binding with no implementation has nothing to open. */
+.service-item-open--dead {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.service-item-open--dead:hover {
+  background: none;
+}
+
+.service-badge--stale {
+  color: var(--error);
+  border-color: var(--error);
+  background: transparent;
 }

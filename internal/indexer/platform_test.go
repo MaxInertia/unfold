@@ -176,3 +176,142 @@ func TestServiceViewSelf(t *testing.T) {
 		t.Errorf("expected unfold to register at least 8 routes, got %d", len(sv.Inbound))
 	}
 }
+
+// loadDeclared indexes testdata/declared, a service that declares itself in
+// microservice.yaml, with protos resolved against testdata/protoroot.
+func loadDeclared(t *testing.T, protoRoot string) *Indexer {
+	t.Helper()
+	dir, err := filepath.Abs("testdata/declared")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	idx := New()
+	if protoRoot != "" {
+		abs, err := filepath.Abs(protoRoot)
+		if err != nil {
+			t.Fatalf("abs: %v", err)
+		}
+		idx.SetProtoRoot(abs)
+	}
+	if err := idx.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return idx
+}
+
+// The manifest's declared name beats the repo directory (which is
+// "declared", not "conversation").
+func TestManifestNameWins(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	if sv.Name != "conversation" {
+		t.Errorf("service name: got %q, want conversation (from microservice.yaml)", sv.Name)
+	}
+}
+
+// publicRoutes classifies the code-derived surface: a declared route is
+// public, anything else the code registers is internal.
+func TestPublicRoutesVisibility(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	pub := findBinding(sv.Inbound, "http.route", "GET /v1/conversations")
+	if pub == nil {
+		t.Fatalf("missing the declared public route; got %+v", sv.Inbound)
+	}
+	if pub.Visibility != model.VisPublic {
+		t.Errorf("visibility: got %q, want public", pub.Visibility)
+	}
+	if pub.Stale {
+		t.Error("a declared route the code registers is not stale")
+	}
+
+	internal := findBinding(sv.Inbound, "http.route", "/internal/debug")
+	if internal == nil || internal.Visibility != model.VisInternal {
+		t.Errorf("code-registered route in neither list should be internal: %+v", internal)
+	}
+}
+
+// A publicRoutes entry nothing registers is the drift case: shown, but marked
+// stale rather than presented as real surface.
+func TestDeclaredButUnregisteredRouteIsStale(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	retired := findBinding(sv.Inbound, "http.route", "/v1/retired")
+	if retired == nil {
+		t.Fatalf("a declared route with no implementation should still appear; got %+v", sv.Inbound)
+	}
+	if !retired.Stale {
+		t.Error("declared-but-unregistered route should be marked stale")
+	}
+	if retired.Confidence != model.ConfDeclared {
+		t.Errorf("confidence: got %q, want declared", retired.Confidence)
+	}
+}
+
+// Proto-declared RPCs join the inbound surface, linked to their Go
+// implementation when the name resolves unambiguously.
+func TestProtoSurface(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	if sv.Warning != "" {
+		t.Fatalf("unexpected warning: %s", sv.Warning)
+	}
+
+	get := findBinding(sv.Inbound, "grpc.method", "conversation.v1.ConversationService/GetConversation")
+	if get == nil {
+		t.Fatalf("missing the proto-declared RPC; got %+v", sv.Inbound)
+	}
+	if get.Confidence != model.ConfDeclared {
+		t.Errorf("confidence: got %q, want declared", get.Confidence)
+	}
+	if get.Visibility != model.VisPlatform {
+		t.Errorf("visibility: got %q, want platform", get.Visibility)
+	}
+	if get.TargetTitle != "Server.GetConversation" {
+		t.Errorf("implementation link: got %q, want Server.GetConversation", get.TargetTitle)
+	}
+	if get.Stale {
+		t.Error("an implemented RPC is not stale")
+	}
+
+	// Excluded from SDK generation: implemented here, but no other service
+	// can call it — internal, not platform.
+	purge := findBinding(sv.Inbound, "grpc.method", "conversation.v1.MaintenanceService/Purge")
+	if purge == nil {
+		t.Fatalf("excluded protos still contribute surface; got %+v", sv.Inbound)
+	}
+	if purge.Visibility != model.VisInternal {
+		t.Errorf("excluded-from-SDK visibility: got %q, want internal", purge.Visibility)
+	}
+	// Nothing implements Purge in this fixture.
+	if !purge.Stale {
+		t.Error("a declared RPC with no implementation should be marked stale")
+	}
+}
+
+// Without --proto-root the declared paths can't resolve, and the view must
+// say so rather than showing an empty gRPC surface as though none existed.
+func TestProtoRootMissingWarns(t *testing.T) {
+	sv, err := loadDeclared(t, "").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	if sv.Warning == "" {
+		t.Fatal("expected a warning when protoPaths are declared but no proto root is set")
+	}
+	if findBinding(sv.Inbound, "grpc.method", "conversation.v1.ConversationService/GetConversation") != nil {
+		t.Error("no gRPC surface should be produced without a proto root")
+	}
+	// The code-derived surface is unaffected.
+	if findBinding(sv.Inbound, "http.route", "GET /v1/conversations") == nil {
+		t.Error("HTTP routes should still be found without a proto root")
+	}
+}

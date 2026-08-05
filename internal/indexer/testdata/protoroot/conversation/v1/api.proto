@@ -1,0 +1,10 @@
+syntax = "proto3";
+package conversation.v1;
+
+message GetRequest { string id = 1; }
+message GetResponse { string body = 1; }
+
+service ConversationService {
+  rpc GetConversation(GetRequest) returns (GetResponse);
+  rpc StreamConversation(GetRequest) returns (stream GetResponse);
+}
