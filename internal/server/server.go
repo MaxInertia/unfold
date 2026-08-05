@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +21,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/diff"
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/notes"
+	"github.com/MaxInertia/unfold/internal/prefs"
 )
 
 //go:embed all:static/dist
@@ -30,6 +33,9 @@ type Server struct {
 	target string
 	differ *diff.Differ // nil = diff mode off
 	notes  *notes.Store // nil = notes disabled
+	// projectDir is where per-project prefs are persisted (the proto root a
+	// user picks in the UI). Empty disables persistence.
+	projectDir string
 
 	// Connected /api/events subscribers, notified when the engine reindexes.
 	mu      sync.Mutex
@@ -55,6 +61,10 @@ func (s *Server) SetDiffer(d *diff.Differ) { s.differ = d }
 // SetNotes enables the notes API backed by the given store.
 func (s *Server) SetNotes(n *notes.Store) { s.notes = n }
 
+// SetProjectDir records where to persist choices made in the UI, so a proto
+// root picked once survives a restart.
+func (s *Server) SetProjectDir(dir string) { s.projectDir = dir }
+
 // writeFrame attaches diff info (when diff mode is on) and writes the frame.
 func (s *Server) writeFrame(w http.ResponseWriter, frame *model.Frame) {
 	if s.differ != nil {
@@ -73,6 +83,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/typeinfo", s.handleTypeInfo)
 	mux.HandleFunc("/api/usages", s.handleUsages)
 	mux.HandleFunc("/api/service", s.handleService)
+	mux.HandleFunc("/api/proto-root", s.handleProtoRoot)
+	mux.HandleFunc("/api/dirs", s.handleDirs)
 	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
@@ -203,6 +215,125 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// POST /api/proto-root {"path": "<abs dir>"} — point the declared gRPC
+// surface at the shared proto repository.
+//
+// The paths in a microservice.yaml are relative to that repo, so unfold can't
+// find it on its own, and a browser can't hand back a real filesystem path
+// from a native directory picker. So the UI browses via /api/dirs and posts
+// the chosen path here.
+//
+// Mutating and filesystem-touching, so it's guarded like /api/open: POST only
+// and same-origin only.
+func (s *Server) handleProtoRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	setter, ok := s.engine.(interface{ SetProtoRoot(string) error })
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "this engine has no declared proto surface")
+		return
+	}
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	dir := strings.TrimSpace(body.Path)
+	if dir != "" {
+		abs, err := filepath.Abs(expandHome(dir))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
+			writeError(w, http.StatusBadRequest, "not a directory: "+abs)
+			return
+		}
+		dir = abs
+	}
+
+	// A root that doesn't resolve the declared protos is a user-visible
+	// failure, not a server error: report it and let them pick again. The
+	// engine has already applied it either way, so the view that comes back
+	// reflects what's actually configured.
+	setErr := setter.SetProtoRoot(dir)
+	if dir != "" && s.projectDir != "" {
+		p := prefs.Load(s.projectDir)
+		p.ProtoRoot = dir
+		if err := prefs.Save(s.projectDir, p); err != nil {
+			log.Printf("unfold: could not persist proto root: %v", err)
+		}
+	}
+	if setErr != nil {
+		writeError(w, http.StatusUnprocessableEntity, setErr.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"protoRoot": dir})
+}
+
+// GET /api/dirs?path=<dir> — the subdirectories of path, so the UI can offer
+// a directory picker. With no path, it starts at the user's home directory.
+//
+// This lists directories outside the indexed project by design: the proto
+// repository is a *different* repo, so the containment check that guards
+// /api/open can't apply here. The same-origin guard is what keeps another
+// page in the browser from walking the filesystem, and unfold binds to
+// localhost. Only directory names are returned — never file contents.
+func (s *Server) handleDirs(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	dir := strings.TrimSpace(r.URL.Query().Get("path"))
+	if dir == "" {
+		dir, _ = os.UserHomeDir()
+	}
+	abs, err := filepath.Abs(expandHome(dir))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	dirs := []string{}
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		dirs = append(dirs, e.Name())
+	}
+	sort.Strings(dirs)
+	resp := map[string]any{"path": abs, "dirs": dirs}
+	if parent := filepath.Dir(abs); parent != abs {
+		resp["parent"] = parent
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// expandHome resolves a leading ~ so a typed path behaves like it would in a
+// shell.
+func expandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, strings.TrimPrefix(p, "~"))
 }
 
 // /api/notes — list (GET), upsert (POST a Note; empty id creates), delete

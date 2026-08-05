@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchServiceView } from "./api";
+import { ProtoRootPicker } from "./ProtoRootPicker";
 import type { Binding, BindingVisibility, ServiceView as ServiceViewT, TargetID } from "./types";
 
 // The L1 (service) zoom level: what enters this service on the left, what it
@@ -19,6 +20,8 @@ export function ServiceView({
 }) {
   const [view, setView] = useState<ServiceViewT | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumped after the proto root changes, to refetch the declared surface.
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -29,7 +32,7 @@ export function ServiceView({
     return () => {
       alive = false;
     };
-  }, [anchor]);
+  }, [anchor, revision]);
 
   if (error) return <div className="app-error">{error}</div>;
   if (!view) return <div className="app-loading">loading service…</div>;
@@ -54,8 +57,19 @@ export function ServiceView({
       </header>
 
       {/* An empty gRPC surface and a misconfigured proto root look identical
-          without this, so a missing declared surface says why. */}
-      {view.warning && <div className="service-warning">{view.warning}</div>}
+          without this, so a missing declared surface says why — and offers
+          the fix inline rather than sending you back to the command line. */}
+      {(view.warning || view.needsProtoRoot) && (
+        <div className="service-warning">
+          {view.warning && <div>{view.warning}</div>}
+          {view.needsProtoRoot && (
+            <ProtoRootPicker
+              current={view.protoRoot}
+              onChanged={() => setRevision((n) => n + 1)}
+            />
+          )}
+        </div>
+      )}
 
       <div className="service-columns">
         <Column

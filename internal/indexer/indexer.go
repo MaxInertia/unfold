@@ -9,7 +9,7 @@
 package indexer
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/constant"
@@ -371,7 +371,56 @@ func (i *Indexer) Load(dir, pattern string) error {
 	// publicRoutes cross-check can see what the code actually registered.
 	i.applyVisibility()
 	i.bindings = append(i.bindings, i.declaredBindings()...)
+	i.sortBindings()
 
+	return nil
+}
+
+// SetProtoRoot points the indexer at the shared proto repository that a
+// manifest's protoPaths are relative to. Without it the declared gRPC surface
+// is skipped, since those paths don't resolve against the service's own
+// directory.
+//
+// It works before Load (the flag path) and after (the user picking a
+// directory in the UI). Changing it doesn't need a re-index: the declared
+// surface is derived from the manifest and the protos, and depends on the Go
+// index only to link an RPC to its implementation — so only the declared
+// bindings are recomputed. The returned error reports an unusable root; the
+// previous declared surface is dropped either way, since keeping a surface
+// built from a directory the user just replaced would be a lie.
+func (i *Indexer) SetProtoRoot(dir string) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.protoRoot = dir
+	i.protoErr = ""
+	if i.mf == nil {
+		return nil // nothing loaded yet, or no manifest — Load will apply it
+	}
+	kept := make([]model.Binding, 0, len(i.bindings))
+	for _, b := range i.bindings {
+		if b.Confidence != model.ConfDeclared {
+			kept = append(kept, b)
+		}
+	}
+	i.bindings = append(kept, i.declaredBindings()...)
+	i.sortBindings()
+	// Only a root that yielded nothing is worth rejecting: a partial failure
+	// still produced a usable surface, and the warning on the view says which
+	// files were skipped.
+	if i.protoErr != "" && !i.hasDeclaredGRPC() {
+		return errors.New(i.protoErr)
+	}
+	return nil
+}
+
+// ProtoRoot reports the configured shared proto repository, if any.
+func (i *Indexer) ProtoRoot() string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.protoRoot
+}
+
+func (i *Indexer) sortBindings() {
 	sort.SliceStable(i.bindings, func(a, b int) bool {
 		x, y := i.bindings[a], i.bindings[b]
 		if x.Kind != y.Kind {
@@ -379,18 +428,6 @@ func (i *Indexer) Load(dir, pattern string) error {
 		}
 		return x.Key < y.Key
 	})
-
-	return nil
-}
-
-// SetProtoRoot points the indexer at the shared proto repository that a
-// manifest's protoPaths are relative to. It must be called before Load;
-// without it the declared gRPC surface is skipped, since those paths don't
-// resolve against the service's own directory.
-func (i *Indexer) SetProtoRoot(dir string) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	i.protoRoot = dir
 }
 
 // identify records what to call this project at the service level. The repo
@@ -452,12 +489,15 @@ func (i *Indexer) declaredBindings() []model.Binding {
 	if len(paths) > 0 {
 		if i.protoRoot == "" {
 			i.protoErr = fmt.Sprintf("%d proto path(s) declared but no --proto-root was given", len(paths))
-		} else if methods, err := protoapi.Load(context.Background(), i.protoRoot, paths, excluded); err != nil {
-			// An empty surface and a misconfigured proto root look identical
-			// in the UI unless the error is carried through.
-			i.protoErr = err.Error()
-			fmt.Fprintf(os.Stderr, "unfold: %v\n", err)
 		} else {
+			// Partial results are normal: one unreadable proto shouldn't hide
+			// the surface the others declare, so methods and the error are
+			// both used.
+			methods, err := protoapi.Load(i.protoRoot, paths, excluded)
+			if err != nil {
+				i.protoErr = err.Error()
+				fmt.Fprintf(os.Stderr, "unfold: %v\n", err)
+			}
 			for _, m := range methods {
 				b := model.Binding{
 					Role:       model.RoleInbound,
@@ -669,12 +709,16 @@ func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
 	defer i.mu.RUnlock()
 
 	sv := &model.ServiceView{
-		Name:     i.serviceName,
-		Module:   i.modulePath,
-		Root:     i.rootDir,
-		Warning:  i.protoErr,
-		Inbound:  []model.Binding{},
-		Outbound: []model.Binding{},
+		Name:      i.serviceName,
+		Module:    i.modulePath,
+		Root:      i.rootDir,
+		ProtoRoot: i.protoRoot,
+		Warning:   i.protoErr,
+		// The cue for the UI to offer a picker: protos are declared but the
+		// surface didn't come out, so a root is missing or wrong.
+		NeedsProtoRoot: i.needsProtoRoot(),
+		Inbound:        []model.Binding{},
+		Outbound:       []model.Binding{},
 	}
 	// An anchor that isn't an indexed function (a stale URL, a file frame)
 	// degrades to the plain service view rather than erroring — the view is
@@ -697,6 +741,31 @@ func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
 		}
 	}
 	return sv, nil
+}
+
+// needsProtoRoot reports whether the manifest declares protos that the
+// current root can't resolve at all — no root set, or one that yielded
+// nothing. A root that resolved most files and tripped on one is *not* the
+// wrong root, so it warns without prompting for a replacement.
+func (i *Indexer) needsProtoRoot() bool {
+	if i.mf == nil {
+		return false
+	}
+	paths, _ := i.mf.IncludedProtos()
+	if len(paths) == 0 {
+		return false
+	}
+	return i.protoRoot == "" || !i.hasDeclaredGRPC()
+}
+
+// hasDeclaredGRPC reports whether any RPC came out of the declared protos.
+func (i *Indexer) hasDeclaredGRPC() bool {
+	for _, b := range i.bindings {
+		if b.Kind == "grpc.method" {
+			return true
+		}
+	}
+	return false
 }
 
 // callersClosure returns every function that transitively reaches target,

@@ -129,6 +129,22 @@ func (r *Reloadable) ServiceView(anchor model.TargetID) (*model.ServiceView, err
 	return pe.ServiceView(anchor)
 }
 
+// SetProtoRoot forwards to the current engine and updates the package-level
+// default, so the choice survives the engine rebuilds watch mode performs.
+func (r *Reloadable) SetProtoRoot(dir string) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	pr, ok := r.cur.(interface{ SetProtoRoot(string) error })
+	if !ok {
+		return model.ErrNoPlatformView
+	}
+	err := pr.SetProtoRoot(dir)
+	// Record it even on failure: the user picked it, and a reload shouldn't
+	// silently revert to a different directory than the one on screen.
+	ProtoRoot = dir
+	return err
+}
+
 // PlatformAvailable reports whether the engine currently held can serve a
 // service view, so /api/health advertises the zoom-out affordance honestly
 // even though the wrapper's own method set can't.

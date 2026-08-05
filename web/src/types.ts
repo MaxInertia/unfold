@@ -111,6 +111,10 @@ export interface ServiceView {
   outbound: Binding[];
   // Why part of the view may be missing (usually an unresolvable proto root).
   warning?: string;
+  protoRoot?: string; // the shared proto repository currently configured
+  // The manifest declares protoPaths that can't be resolved yet — the cue to
+  // offer the picker rather than just reporting the problem.
+  needsProtoRoot?: boolean;
 }
 
 export interface TypeInfo {

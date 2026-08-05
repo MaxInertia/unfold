@@ -62,6 +62,33 @@ export function fetchServiceView(anchor?: TargetID | null): Promise<ServiceView>
   return getJSON<ServiceView>(`/api/service${qs}`);
 }
 
+// The subdirectories of a path, for the proto-root picker. A browser can't
+// give the server a real filesystem path from a native picker, so browsing
+// happens server-side.
+export function browseDirs(path: string): Promise<{ path: string; parent?: string; dirs: string[] }> {
+  return getJSON(`/api/dirs?path=${encodeURIComponent(path)}`);
+}
+
+// Point the declared gRPC surface at the shared proto repository. POST and
+// same-origin-guarded server-side, like the other filesystem-touching calls.
+export async function setProtoRoot(path: string): Promise<void> {
+  const res = await fetch("/api/proto-root", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.error) msg = body.error;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(msg);
+  }
+}
+
 export async function fetchTypeInfo(targetId: TargetID, offset: number): Promise<TypeInfo | null> {
   const url = `/api/typeinfo?targetId=${encodeURIComponent(targetId)}&offset=${offset}`;
   const res = await getJSON<{ typeInfo: TypeInfo | null }>(url);

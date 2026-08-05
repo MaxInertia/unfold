@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -325,4 +327,105 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// TestProtoRootEndpoints covers the browse-and-set flow the UI uses when
+// microservice.yaml declares protos but no --proto-root was given: a browser
+// can't hand the server a real filesystem path, so the server lists
+// directories and the client posts back a choice.
+func TestProtoRootEndpoints(t *testing.T) {
+	idx := indexer.New()
+	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
+		t.Fatalf("indexer.Load: %v", err)
+	}
+	srv := New(idx)
+	srv.SetProjectDir(t.TempDir())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	t.Run("dirs-lists-subdirectories", func(t *testing.T) {
+		var resp struct {
+			Path   string   `json:"path"`
+			Parent string   `json:"parent"`
+			Dirs   []string `json:"dirs"`
+		}
+		root, err := filepath.Abs("../..")
+		if err != nil {
+			t.Fatalf("abs: %v", err)
+		}
+		getJSON(t, ts.URL+"/api/dirs?path="+url.QueryEscape(root), http.StatusOK, &resp)
+		if resp.Path != root {
+			t.Errorf("path: got %q, want %q", resp.Path, root)
+		}
+		if resp.Parent == "" {
+			t.Error("expected a parent so the picker can walk up")
+		}
+		var foundInternal bool
+		for _, d := range resp.Dirs {
+			if d == "internal" {
+				foundInternal = true
+			}
+			// Dotfiles are noise in a picker and are filtered out.
+			if strings.HasPrefix(d, ".") {
+				t.Errorf("hidden directory %q should not be listed", d)
+			}
+		}
+		if !foundInternal {
+			t.Errorf("expected unfold's own internal/ among %v", resp.Dirs)
+		}
+	})
+
+	t.Run("dirs-rejects-cross-origin", func(t *testing.T) {
+		// Listing directories outside the project can't use the containment
+		// check that guards /api/open, so the origin guard is what stops
+		// another page in the browser from walking the filesystem.
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/dirs", nil)
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil || res.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-site GET: status=%v err=%v", res, err)
+		}
+	})
+
+	t.Run("proto-root-rejects-a-non-directory", func(t *testing.T) {
+		res, err := http.Post(ts.URL+"/api/proto-root", "application/json",
+			strings.NewReader(`{"path":"/definitely/not/a/directory"}`))
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("status: got %d, want 400", res.StatusCode)
+		}
+	})
+
+	t.Run("proto-root-requires-post", func(t *testing.T) {
+		getStatus(t, ts.URL+"/api/proto-root", http.StatusMethodNotAllowed)
+	})
+
+	t.Run("proto-root-rejects-cross-origin", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/proto-root",
+			strings.NewReader(`{"path":"/tmp"}`))
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil || res.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-site POST: status=%v err=%v", res, err)
+		}
+	})
+
+	t.Run("proto-root-accepts-a-directory", func(t *testing.T) {
+		// unfold's own repo has no microservice.yaml, so there's nothing to
+		// resolve — setting a valid directory still succeeds.
+		dir := t.TempDir()
+		res, err := http.Post(ts.URL+"/api/proto-root", "application/json",
+			strings.NewReader(`{"path":`+strconv.Quote(dir)+`}`))
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status: got %d, want 200", res.StatusCode)
+		}
+		if got := idx.ProtoRoot(); got != dir {
+			t.Errorf("engine proto root: got %q, want %q", got, dir)
+		}
+	})
 }

@@ -18,8 +18,22 @@ import (
 	"github.com/MaxInertia/unfold/internal/engine"
 	"github.com/MaxInertia/unfold/internal/gitbase"
 	"github.com/MaxInertia/unfold/internal/notes"
+	"github.com/MaxInertia/unfold/internal/prefs"
 	"github.com/MaxInertia/unfold/internal/server"
 )
+
+// projectDir resolves the --dir flag to the directory per-project state is
+// stored under; empty means the working directory.
+func projectDir(dir string) string {
+	if dir != "" {
+		return dir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
+}
 
 func main() {
 	var (
@@ -34,7 +48,11 @@ func main() {
 	flag.Parse()
 
 	// Set before the first Load, and read again on every watch-mode rebuild.
+	// Without the flag, fall back to whatever was picked in the UI last time.
 	engine.ProtoRoot = *protoRoot
+	if engine.ProtoRoot == "" {
+		engine.ProtoRoot = prefs.Load(projectDir(*dir)).ProtoRoot
+	}
 
 	target := flag.Arg(0)
 	if target == "" {
@@ -81,6 +99,7 @@ func main() {
 	srv := server.New(eng)
 	srv.SetTarget(target)
 	srv.SetDiffer(differ)
+	srv.SetProjectDir(projectDir(*dir))
 	// Notes persist to <dir>/.unfold/notes.json (created on first save).
 	srv.SetNotes(notes.NewStore(*dir))
 	httpServer := &http.Server{Handler: srv.Handler()}

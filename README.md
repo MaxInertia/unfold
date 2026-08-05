@@ -109,8 +109,14 @@ microservice:
 ```
 
 - **`name`** replaces the repo directory as the service name.
-- **`protoPaths`** contributes the declared gRPC surface: every `rpc` in those
-  files becomes an inbound binding keyed
+- **`protoPaths`** contributes the declared gRPC surface. Those files are
+  *parsed*, not compiled: only names are wanted, and a proto's fully-qualified
+  names come from its own `package` and `service` declarations, so imports are
+  never resolved. That matters in practice — proto import closures routinely
+  reach outside the repository (`google/rpc/code.proto`, `google/api/*`), and
+  linking would make a service's surface depend on vendoring decisions that
+  have nothing to do with what it exposes. Every `rpc` becomes an inbound
+  binding keyed
   `<proto package>.<Service>/<Method>` — the same key the generated SDK names
   on the calling side, which is what will join the two ends of a cross-service
   edge once more than one repo is indexed. A method is linked to its Go
@@ -130,8 +136,19 @@ service, so unfold can't find them on its own — point at it with
 unfold --proto-root ~/src/platform-protos ./...
 ```
 
-Without it, declared proto paths are skipped and the view says so, since an
-empty gRPC surface and a misconfigured proto root otherwise look identical.
+Without it, declared proto paths are skipped and the view says so — and offers
+a **directory picker** rather than sending you back to the command line. It's
+server-backed browsing (the server lists directories; you can also just paste a
+path) because a browser deliberately won't hand a page a real filesystem path
+from a native picker. The choice is remembered in `.unfold/config.json`, so
+`--proto-root` is only needed the first time — or never, if you pick it in the
+UI. Changing it doesn't re-index: only the declared surface is recomputed.
+
+A root where none of the declared protos are readable reports the error and
+lets you pick again, dropping the surface built from the previous directory
+rather than leaving a stale one on screen. Failures are per-file, though: one
+unreadable proto doesn't hide the surface the others declare — it warns and
+keeps going.
 
 ### Inbound is grouped by reach
 

@@ -281,6 +281,13 @@ type ServiceView struct {
 	Name   string `json:"name"`             // repo/module directory name
 	Module string `json:"module,omitempty"` // Go module path, informational
 	Root   string `json:"root,omitempty"`   // project directory
+	// ProtoRoot is the shared proto repository currently configured, so the
+	// UI can show what's set and offer to change it.
+	ProtoRoot string `json:"protoRoot,omitempty"`
+	// NeedsProtoRoot is true when the manifest declares protoPaths that
+	// can't be resolved yet — the cue for the UI to offer a picker rather
+	// than just reporting a warning.
+	NeedsProtoRoot bool `json:"needsProtoRoot,omitempty"`
 
 	// Anchor is the frame the user zoomed out from, carried up so every
 	// level can mark what reaches it. Empty when zooming out from nothing.

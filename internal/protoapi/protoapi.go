@@ -5,19 +5,31 @@
 // are built from, so `<package>.<Service>/<Method>` is a key both ends of the
 // edge name. That's a declared join, not an inferred one.
 //
+// Each file is *parsed*, not compiled. All that's wanted here are names, and
+// a fully linked descriptor would require resolving the entire import
+// closure — which in practice reaches outside the proto repository
+// altogether (googleapis' google/rpc/*.proto, google/api/*.proto, and so on).
+// Linking would make the surface depend on vendoring decisions that have
+// nothing to do with what a service exposes. A proto's fully-qualified names
+// are already determined by its own `package` and `service` declarations, so
+// parsing loses nothing that matters.
+//
 // Proto paths in a microservice.yaml are relative to a shared proto
 // repository rather than to the service, so every call here takes the root
 // that they resolve against.
 package protoapi
 
 import (
-	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
-	"github.com/bufbuild/protocompile"
-	"github.com/bufbuild/protocompile/linker"
+	"github.com/bufbuild/protocompile/ast"
+	"github.com/bufbuild/protocompile/parser"
+	"github.com/bufbuild/protocompile/reporter"
 )
 
 // Method is one RPC in the declared surface.
@@ -38,15 +50,14 @@ type Method struct {
 	ServerStreaming bool
 }
 
-// Load compiles the given proto paths (relative to root) and returns every
-// RPC they declare, sorted by full name.
+// Load parses the given proto paths (relative to root) and returns every RPC
+// they declare, sorted by full name.
 //
-// Compilation resolves imports through root, so a proto importing another
-// proto in the same repository works without listing the import explicitly.
-// Errors from individual files are returned rather than swallowed: a proto
-// root pointed at the wrong directory should say so, not silently yield an
-// empty surface.
-func Load(ctx context.Context, root string, paths []string, excluded map[string]bool) ([]Method, error) {
+// Failures are per-file and partial: a proto that can't be read or parsed
+// doesn't hide the surface declared by the others. The returned error names
+// what failed, and is non-nil even when some methods came back — the caller
+// is expected to show both. It's only fatal when nothing parsed at all.
+func Load(root string, paths []string, excluded map[string]bool) ([]Method, error) {
 	if root == "" || len(paths) == 0 {
 		return nil, nil
 	}
@@ -54,46 +65,90 @@ func Load(ctx context.Context, root string, paths []string, excluded map[string]
 	if err != nil {
 		return nil, fmt.Errorf("proto root %q: %w", root, err)
 	}
-	compiler := protocompile.Compiler{
-		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
-			ImportPaths: []string{abs},
-		}),
-		// Only the descriptors are needed; skipping source info keeps the
-		// compile cheap for a surface listing.
-		SourceInfoMode: protocompile.SourceInfoNone,
-	}
-	files, err := compiler.Compile(ctx, paths...)
-	if err != nil {
-		return nil, fmt.Errorf("compile protos under %s: %w", abs, err)
-	}
 
-	var out []Method
-	for i, f := range files {
-		path := paths[i]
-		out = append(out, methodsOf(f, path, excluded[path])...)
+	var (
+		out      []Method
+		problems []string
+	)
+	for _, p := range paths {
+		methods, err := parseFile(abs, p, excluded[p])
+		if err != nil {
+			problems = append(problems, err.Error())
+			continue
+		}
+		out = append(out, methods...)
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].FullName < out[b].FullName })
-	return out, nil
+
+	if len(problems) == 0 {
+		return out, nil
+	}
+	err = fmt.Errorf("%d of %d proto file(s) under %s could not be read: %s",
+		len(problems), len(paths), abs, strings.Join(problems, "; "))
+	if len(out) == 0 {
+		return nil, err
+	}
+	return out, err
 }
 
-func methodsOf(f linker.File, path string, excludedFile bool) []Method {
+func parseFile(root, path string, excludedFile bool) ([]Method, error) {
+	full := filepath.Join(root, filepath.FromSlash(path))
+	f, err := os.Open(full)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+	defer f.Close()
+
+	// A reporter that collects errors rather than aborting on the first,
+	// so a file with one bad declaration still yields the services around it.
+	var errs []error
+	handler := reporter.NewHandler(reporter.NewReporter(
+		func(e reporter.ErrorWithPos) error { errs = append(errs, e); return nil },
+		nil, // warnings are not interesting for a surface listing
+	))
+	file, err := parser.Parse(path, f, handler)
+	if file == nil {
+		if err == nil {
+			err = errors.Join(errs...)
+		}
+		return nil, fmt.Errorf("%s: %v", path, err)
+	}
+
+	pkg := packageOf(file)
 	var out []Method
-	services := f.Services()
-	for i := 0; i < services.Len(); i++ {
-		svc := services.Get(i)
-		methods := svc.Methods()
-		for j := 0; j < methods.Len(); j++ {
-			m := methods.Get(j)
+	for _, decl := range file.Decls {
+		svc, ok := decl.(*ast.ServiceNode)
+		if !ok {
+			continue
+		}
+		svcName := svc.Name.Val
+		if pkg != "" {
+			svcName = pkg + "." + svcName
+		}
+		for _, sd := range svc.Decls {
+			rpc, ok := sd.(*ast.RPCNode)
+			if !ok {
+				continue
+			}
 			out = append(out, Method{
-				FullName:        fmt.Sprintf("%s/%s", svc.FullName(), m.Name()),
-				Service:         string(svc.FullName()),
-				Name:            string(m.Name()),
+				FullName:        svcName + "/" + rpc.Name.Val,
+				Service:         svcName,
+				Name:            rpc.Name.Val,
 				File:            path,
 				ExcludedFromSDK: excludedFile,
-				ClientStreaming: m.IsStreamingClient(),
-				ServerStreaming: m.IsStreamingServer(),
+				ClientStreaming: rpc.Input != nil && rpc.Input.Stream != nil,
+				ServerStreaming: rpc.Output != nil && rpc.Output.Stream != nil,
 			})
 		}
 	}
-	return out
+	return out, nil
+}
+
+func packageOf(file *ast.FileNode) string {
+	for _, decl := range file.Decls {
+		if p, ok := decl.(*ast.PackageNode); ok {
+			return string(p.Name.AsIdentifier())
+		}
+	}
+	return ""
 }

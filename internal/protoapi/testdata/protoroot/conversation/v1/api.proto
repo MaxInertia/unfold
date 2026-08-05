@@ -1,6 +1,10 @@
 syntax = "proto3";
 package conversation.v1;
 
+// Imported but not vendored into this repo — the surface listing must not
+// depend on resolving it (googleapis protos routinely live elsewhere).
+import "google/rpc/code.proto";
+
 message GetRequest { string id = 1; }
 message GetResponse { string body = 1; }
 

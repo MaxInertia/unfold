@@ -315,3 +315,48 @@ func TestProtoRootMissingWarns(t *testing.T) {
 		t.Error("HTTP routes should still be found without a proto root")
 	}
 }
+
+// TestSetProtoRootLive covers picking the proto root in the UI: it applies
+// without a re-index, and a bad root replaces the surface with an error
+// rather than leaving a stale one from the previous directory.
+func TestSetProtoRootLive(t *testing.T) {
+	idx := loadDeclared(t, "") // started with no root, as if --proto-root were omitted
+	sv, err := idx.ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	if !sv.NeedsProtoRoot {
+		t.Error("a manifest declaring protos with no root should ask for one")
+	}
+
+	good, err := filepath.Abs("testdata/protoroot")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	if err := idx.SetProtoRoot(good); err != nil {
+		t.Fatalf("SetProtoRoot(%q): %v", good, err)
+	}
+	sv, _ = idx.ServiceView("")
+	if sv.NeedsProtoRoot || sv.Warning != "" {
+		t.Errorf("a working root should clear the prompt: needs=%v warning=%q", sv.NeedsProtoRoot, sv.Warning)
+	}
+	if findBinding(sv.Inbound, "grpc.method", "conversation.v1.ConversationService/GetConversation") == nil {
+		t.Fatalf("declared surface should appear without a re-index; got %+v", sv.Inbound)
+	}
+	// The code-derived surface is untouched by the swap.
+	if findBinding(sv.Inbound, "http.route", "GET /v1/conversations") == nil {
+		t.Error("HTTP routes should survive a proto-root change")
+	}
+
+	// A wrong root must not leave the previous surface standing.
+	if err := idx.SetProtoRoot(t.TempDir()); err == nil {
+		t.Error("expected an error for a root that doesn't resolve the declared protos")
+	}
+	sv, _ = idx.ServiceView("")
+	if findBinding(sv.Inbound, "grpc.method", "conversation.v1.ConversationService/GetConversation") != nil {
+		t.Error("a failed root should drop the surface built from the previous one")
+	}
+	if sv.Warning == "" {
+		t.Error("a failed root should be reported")
+	}
+}

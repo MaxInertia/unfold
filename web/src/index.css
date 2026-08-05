@@ -2214,3 +2214,116 @@ body.resizing {
   border-color: var(--error);
   background: transparent;
 }
+
+/* ----- proto root picker ----- */
+
+.proto-open,
+.proto-use,
+.proto-cancel {
+  font: inherit;
+  font-size: 0.72rem;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--fg);
+  padding: 0.1rem 0.5rem;
+  cursor: pointer;
+}
+
+.proto-open:hover,
+.proto-use:hover,
+.proto-cancel:hover {
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.proto-open {
+  margin-top: 0.35rem;
+}
+
+.proto-picker {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-width: 34rem;
+}
+
+.proto-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.proto-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.proto-field input {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.proto-cwd {
+  font-size: 0.68rem;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Scrolls inside itself: a home directory can hold a lot of folders, and the
+   picker must not push the service card off screen. */
+.proto-dirs {
+  list-style: none;
+  margin: 0;
+  padding: 0.2rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.proto-dirs li button {
+  font: inherit;
+  font-size: 0.75rem;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.proto-dirs li button:hover {
+  background: var(--call-bg);
+}
+
+.proto-empty {
+  font-size: 0.72rem;
+  opacity: 0.7;
+  padding: 0.1rem 0.3rem;
+}
+
+.proto-error {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--error);
+}
+
+.proto-actions {
+  display: flex;
+  gap: 0.4rem;
+}
