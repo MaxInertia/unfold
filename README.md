@@ -93,11 +93,18 @@ The service view is a two-sided card, not a graph:
   calling, not the stub.
 
   Hand-written SDKs wrap that client, so the search also follows calls out of a
-  callee's body — through plain functions as well as methods, to any depth.
-  Two rules keep that from turning into noise: only *this module's* call sites
-  produce bindings (a dependency's internal calls aren't your service's
-  surface), and an edge found down a chain is attributed to the innermost
-  qualifying call site rather than to every caller above it.
+  callee's body, through plain functions as well as methods. Three rules keep
+  that from turning into noise:
+
+  - **Distance.** A generated client invokes in its own body (0 hops away), a
+    wrapper around it is 1, a second wrapper 2. Past a small bound the chain
+    stops being an SDK and starts being the program — wiring code and request
+    handlers all reach *some* client eventually, and tagging them yields
+    outbound edges for RPCs the service never calls.
+  - **Ownership.** Only this module's own call sites produce bindings; a
+    dependency's internal calls aren't your service's surface.
+  - **Attribution.** An edge found down a chain belongs to the innermost
+    qualifying call site, not to every caller above it.
 
 ### The anchor
 

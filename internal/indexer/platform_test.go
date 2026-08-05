@@ -505,3 +505,30 @@ func TestOwnershipIsByPathNotModuleMetadata(t *testing.T) {
 	}
 	t.Skip("no dependency function found to check the negative case")
 }
+
+// Chain-following has to be bounded by distance, not just deduplicated.
+// Wiring code, request handlers and DI constructors all transitively reach
+// some client, and without a bound every one of them acquired an outbound
+// edge — producing RPCs the service never calls.
+func TestDistantCallersAreNotOutboundEdges(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	sites := map[string]bool{}
+	for _, b := range sv.Outbound {
+		if b.Kind == "grpc.method" {
+			sites[b.SiteTitle] = true
+		}
+	}
+	// The call that actually goes through the SDK is an edge.
+	if !sites["Server.listAccounts"] {
+		t.Errorf("the real SDK call should be an outbound edge; got sites %v", sites)
+	}
+	// Its distant callers are not.
+	for _, far := range []string{"Server.startup", "Server.wireUp", "main"} {
+		if sites[far] {
+			t.Errorf("%s only reaches the RPC transitively and must not own an edge", far)
+		}
+	}
+}

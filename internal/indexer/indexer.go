@@ -133,9 +133,9 @@ type Indexer struct {
 	// dispatch to it, and value references). Built once during Load.
 	usagesByTarget map[TargetID][]*usageInfo
 
-	// invokeCache memoizes invokePath per target; a client method's body is
+	// invokeCache memoizes invokeInfo per target; a client method's body is
 	// scanned once however many call sites reach it.
-	invokeCache map[TargetID]string
+	invokeCache map[TargetID]invokeResult
 
 	// bindingStub[n] marks a binding whose call site is the gRPC stub itself
 	// rather than a caller of one.
@@ -173,6 +173,12 @@ type Indexer struct {
 	// produced frames for, so we don't re-read on every /body request.
 	fileBytesMu sync.Mutex
 	fileBytes   map[string][]byte
+}
+
+// invokeResult is a memoized (method path, hops-away) pair.
+type invokeResult struct {
+	path string
+	dist int
 }
 
 type funcInfo struct {
@@ -249,7 +255,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.bindings = nil
 	i.bindingCallee = nil
 	i.bindingStub = nil
-	i.invokeCache = make(map[TargetID]string)
+	i.invokeCache = make(map[TargetID]invokeResult)
 	i.mf = nil
 	i.protoErr = ""
 	i.identify(dir, pkgs)
@@ -828,7 +834,7 @@ func (i *Indexer) implementationByName(name string) (TargetID, []TargetID) {
 		if strings.HasPrefix(recv, "Unimplemented") || isDouble(recv) {
 			continue
 		}
-		if i.invokePath(id) != "" {
+		if i.invokesDirectly(id) {
 			continue // a generated client method, not a server implementation
 		}
 		if pos := i.fset.Position(fi.decl.Pos()); strings.HasSuffix(pos.Filename, "_test.go") {
@@ -906,41 +912,38 @@ func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool
 	return c, true
 }
 
-// invokePath returns the gRPC method path a function ultimately invokes, or
-// "".
+// grpcMaxHops bounds how far a call site may be from the Invoke that names
+// the RPC.
 //
-// A generated gRPC client carries the full method name as a *literal in its
-// own body* — `cc.Invoke(ctx, "/pkg.Service/Method", ...)`, or the
-// `..._FullMethodName` constant newer codegen emits, which the type checker
-// folds to the same string. Since a service's SDK is in the module graph of
-// anything that calls it, that literal is already indexed here. So an
-// outbound call resolves to an exact key by reading the callee, with no
-// dataflow analysis and no guessing at which client type means what.
+// A generated client invokes in its own body, so the callee is 0 hops away.
+// A hand-written SDK wrapping that client is 1, and a second wrapper 2. Past
+// that the "chain" stops being an SDK and starts being the program: wiring
+// code, request handlers and DI constructors all eventually reach some client
+// transitively, and tagging them produced outbound edges for RPCs the service
+// never calls.
+const grpcMaxHops = 3
+
+// invokeInfo returns the gRPC method path a function reaches and how many
+// calls away it is, or ("", -1).
 //
-// Hand-written SDKs wrap the generated client, sometimes several layers deep,
-// so the search follows calls out of the body. Two properties keep that from
-// exploding:
-//
-//   - Each target is computed by its own traversal and memoized, so a result
-//     never depends on the path that reached it. Sharing one depth counter
-//     across the recursion silently poisoned the memo instead: a function
-//     first reached near the limit cached "" and kept it forever, which is
-//     why most real SDK calls went unrecognized.
-//   - Chain length is unbounded, but dropRelayedBindings attributes the edge
-//     to the innermost call site and extraction only runs on main-module
-//     sites, so a long chain can't fill the view with a dependency's guts.
-func (i *Indexer) invokePath(target TargetID) string {
+// The distance is what makes this both correct and bounded. Memoizing a
+// distance measured *from each target* keeps the answer independent of the
+// path that reached it — sharing one depth counter across the recursion is
+// what silently poisoned the memo before, caching "no path" for functions
+// first seen near the limit. And having a real distance lets callers reject
+// matches that are too far to mean anything.
+func (i *Indexer) invokeInfo(target TargetID) (string, int) {
 	if v, ok := i.invokeCache[target]; ok {
-		return v
+		return v.path, v.dist
 	}
 	fi := i.funcs[target]
 	if fi == nil || fi.decl == nil || fi.decl.Body == nil {
-		i.invokeCache[target] = ""
-		return ""
+		i.invokeCache[target] = invokeResult{"", -1}
+		return "", -1
 	}
-	// Cycle guard: a recursive chain resolves to "" while in progress, then
-	// gets its real answer written below.
-	i.invokeCache[target] = ""
+	// Cycle guard: a recursive chain resolves to "not found" while it's in
+	// progress, then gets its real answer written below.
+	i.invokeCache[target] = invokeResult{"", -1}
 
 	var (
 		found  string
@@ -959,7 +962,6 @@ func (i *Indexer) invokePath(target TargetID) string {
 			switch name.Name {
 			case "Invoke", "NewStream":
 				for _, a := range ce.Args {
-					// A gRPC method path is exactly "/pkg.Service/Method".
 					if v := argFacts(info, a); v.Known && platform.IsMethodPath(v.Value) {
 						found = v.Value
 						return false
@@ -977,16 +979,44 @@ func (i *Indexer) invokePath(target TargetID) string {
 		return true
 	})
 
-	if found == "" {
+	res := invokeResult{"", -1}
+	if found != "" {
+		res = invokeResult{found, 0}
+	} else {
+		// Nearest wins, so the distance is a genuine minimum rather than an
+		// artefact of declaration order.
 		for _, n := range nested {
-			if v := i.invokePath(n); v != "" {
-				found = v
-				break
+			p, d := i.invokeInfo(n)
+			if d < 0 {
+				continue
+			}
+			if res.dist < 0 || d+1 < res.dist {
+				res = invokeResult{p, d + 1}
 			}
 		}
 	}
-	i.invokeCache[target] = found
-	return found
+	i.invokeCache[target] = res
+	return res.path, res.dist
+}
+
+// invokePath returns the method path only when it is close enough to this
+// call site to be the RPC it means.
+func (i *Indexer) invokePath(target TargetID) string {
+	p, d := i.invokeInfo(target)
+	if d < 0 || d > grpcMaxHops {
+		return ""
+	}
+	return p
+}
+
+// invokesDirectly reports whether a function's own body issues the gRPC call
+// — the test for "this is a generated client stub". Transitive reach is the
+// wrong question here: a server method that happens to call another service
+// would otherwise be mistaken for a client and excluded from implementing
+// anything.
+func (i *Indexer) invokesDirectly(target TargetID) bool {
+	_, d := i.invokeInfo(target)
+	return d == 0
 }
 
 // calleeOf resolves a call's function expression to the target it names.

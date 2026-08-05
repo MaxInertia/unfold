@@ -38,8 +38,17 @@ func (s *Server) listAccounts(ctx context.Context) error {
 	return agsdk.New().GetMulti(ctx)
 }
 
+// Wiring several calls deep from the SDK. Everything here transitively
+// reaches the same Invoke, which is exactly why unbounded chain-following
+// reported RPCs a service never calls: startup() no more calls
+// AccountGroupService than main() does.
+func (s *Server) bootstrap() { _ = s.listAccounts(context.Background()) }
+func (s *Server) startup()   { s.bootstrap() }
+func (s *Server) wireUp()    { s.startup() }
+
 func main() {
 	_ = (&Server{}).Handler()
 	(&Server{}).fetchConversation()
 	_ = (&Server{}).listAccounts(context.Background())
+	(&Server{}).wireUp()
 }
