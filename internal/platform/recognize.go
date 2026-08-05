@@ -41,15 +41,6 @@ type Call struct {
 	Func string
 	Args []Arg
 
-	// Callee is the resolved target of the call, when there is one. Used to
-	// attribute a transitively-discovered edge to the right call site.
-	Callee model.TargetID
-
-	// CalleeInvoke is the gRPC method path the callee ultimately invokes
-	// ("/pkg.Service/Method"), when it does. Filled by the engine from the
-	// callee's own body, which is where generated clients state it.
-	CalleeInvoke string
-
 	// Site is the enclosing function, and File/Line locate the call.
 	Site model.TargetID
 	File string
@@ -68,7 +59,6 @@ var Recognizers = []Recognizer{
 	HTTPRoutes,
 	PubSub,
 	HTTPClientCalls,
-	GRPCClientCalls,
 }
 
 // Extract runs every recognizer over one call site.
@@ -205,58 +195,6 @@ func HTTPClientCalls(c Call) []model.Binding {
 		Line:       c.Line,
 		Confidence: model.ConfExact,
 	}}
-}
-
-// GRPCClientCalls recognizes an outbound call through a generated gRPC
-// client. The key comes from the callee's own body rather than from the call
-// site, so it's exact: the same string the serving repo's proto declares.
-// That's what lets an outbound edge join to an implementation in another repo
-// without inferring anything about client types or hostnames.
-func GRPCClientCalls(c Call) []model.Binding {
-	// Two ways the method path shows up, and both are needed.
-	//
-	// Usually it's inside the callee — a generated client states it in its
-	// own body — which is what CalleeInvoke carries. But code that calls
-	// grpc's Invoke or NewStream *directly* passes the path as an argument
-	// right here, and looking only at callee bodies misses every one of
-	// those: grpc.ClientConn.Invoke contains no literal of its own, so
-	// there's nothing downstream to find.
-	path := c.CalleeInvoke
-	if path == "" {
-		path = methodPathArg(c)
-	}
-	if path == "" {
-		return nil
-	}
-	key := strings.TrimPrefix(path, "/")
-	svc, method, ok := strings.Cut(key, "/")
-	if !ok || svc == "" || method == "" {
-		return nil
-	}
-	return []model.Binding{{
-		Role:       model.RoleOutbound,
-		Kind:       "grpc.method",
-		Key:        svc + "/" + method,
-		Detail:     callLabel(c),
-		Site:       c.Site,
-		File:       c.File,
-		Line:       c.Line,
-		Confidence: model.ConfExact,
-	}}
-}
-
-// methodPathArg returns a gRPC method path passed as an argument to this
-// call, if one is. The shape "/pkg.Service/Method" is distinctive enough to
-// key on directly, which keeps this working for hand-rolled clients and
-// generic helpers that take the method as a parameter — neither of which
-// state the path anywhere a callee-body search would reach.
-func methodPathArg(c Call) string {
-	for _, a := range c.Args {
-		if a.Known && IsMethodPath(a.Value) {
-			return a.Value
-		}
-	}
-	return ""
 }
 
 // IsMethodPath matches "/package.Service/Method" (and "/Service/Method" for

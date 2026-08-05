@@ -137,15 +137,6 @@ type Indexer struct {
 	// scanned once however many call sites reach it.
 	invokeCache map[TargetID]invokeResult
 
-	// bindingStub[n] marks a binding whose call site is the gRPC stub itself
-	// rather than a caller of one.
-	bindingStub []bool
-
-	// bindingCallee[n] is the target that bindings[n]'s call site invoked,
-	// for the pass that de-duplicates chain-discovered edges. Only valid for
-	// the code-derived prefix of bindings, before declared ones are appended.
-	bindingCallee []TargetID
-
 	// bindings are the platform edges recognized in this project — routes it
 	// serves, topics it names, calls it makes out. Collected during Load in
 	// the same body walk that resolves call sites.
@@ -175,18 +166,11 @@ type Indexer struct {
 	fileBytes   map[string][]byte
 }
 
-// invokeResult memoizes what RPCs a function reaches: the nearest method
-// path, how many calls away it is, and whether more than one is reachable.
-//
-// `multi` is the load-bearing field. A generated client method reaches
-// exactly one RPC — that's what makes it a client. A function reaching
-// several isn't an SDK wrapper at all, it's program logic, and summarizing it
-// by whichever RPC happened to be found first is how outbound filled up with
-// calls the service never makes.
+// invokeResult memoizes the method path a function issues in its own body,
+// empty when it issues none, or several (a generic transport standing for no
+// particular RPC).
 type invokeResult struct {
-	path  string
-	dist  int
-	multi bool
+	path string
 }
 
 type funcInfo struct {
@@ -261,8 +245,6 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.interfaceImpls = buildInterfaceImpls(pkgs)
 	i.usagesByTarget = make(map[TargetID][]*usageInfo)
 	i.bindings = nil
-	i.bindingCallee = nil
-	i.bindingStub = nil
 	i.invokeCache = make(map[TargetID]invokeResult)
 	i.mf = nil
 	i.protoErr = ""
@@ -331,21 +313,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 				// plumbing.
 				if i.ownsCode(fi) {
 					if facts, ok := i.callFacts(fi, node); ok {
-						found := platform.Extract(facts)
-						i.bindings = append(i.bindings, found...)
-						// Remember what each binding's call site called, so
-						// an edge found by following a chain is attributed to
-						// the innermost site, not every caller above it.
-						for _, b := range found {
-							i.bindingCallee = append(i.bindingCallee, facts.Callee)
-							// A gRPC binding recognized from a literal at
-							// *this* call site means the enclosing function
-							// is the client stub itself. Generated stubs are
-							// often in-repo, and the edge belongs to the code
-							// that calls them, not to the stub.
-							i.bindingStub = append(i.bindingStub,
-								b.Kind == "grpc.method" && facts.CalleeInvoke == "")
-						}
+						i.bindings = append(i.bindings, platform.Extract(facts)...)
 					}
 				}
 				ci := i.resolveCall(fi, node)
@@ -406,7 +374,9 @@ func (i *Indexer) Load(dir, pattern string) error {
 		}
 	}
 
-	i.dropRelayedBindings()
+	// Outbound gRPC is a call-graph question rather than a per-call-site one,
+	// so it runs as its own pass now the usage index exists.
+	i.bindings = append(i.bindings, i.grpcOutbound()...)
 
 	// Titles for binding endpoints, resolved once the whole function set is
 	// known (a route registered in one package can hand off to a handler
@@ -502,79 +472,6 @@ func (i *Indexer) sortBindings() {
 
 // dropRelayedBindings removes edges that were discovered by following a call
 // chain but belong to a call site further in.
-//
-// invokePath deliberately looks through wrappers, so a hand-written SDK still
-// yields its gRPC key. The cost is that every transitive caller of that
-// wrapper looks like it makes the call too: main calling fetchConversation
-// calling the generated client would report three outbound edges for one RPC.
-//
-// A binding is a relay when the function it called is itself the site of a
-// binding with the same key — the inner site is the honest attribution.
-func (i *Indexer) dropRelayedBindings() {
-	type siteKey struct {
-		site TargetID
-		key  string
-	}
-	at := func(s []TargetID, n int) TargetID {
-		if n < len(s) {
-			return s[n]
-		}
-		return ""
-	}
-	isStub := func(n int) bool { return n < len(i.bindingStub) && i.bindingStub[n] }
-
-	// Which functions are called by some binding's call site, per key. A stub
-	// that somebody calls should not own the edge — the caller should — so
-	// this pass runs first, before the innermost-wins rule below.
-	calledBy := make(map[siteKey]bool, len(i.bindings))
-	for n, b := range i.bindings {
-		if callee := at(i.bindingCallee, n); callee != "" {
-			calledBy[siteKey{callee, b.Key}] = true
-		}
-	}
-	type entry struct {
-		b      model.Binding
-		callee TargetID
-	}
-	var stage []entry
-	for n, b := range i.bindings {
-		if isStub(n) {
-			// A generated client method is the *ability* to call an RPC, not
-			// a call. Repos that generate their clients in-tree have one such
-			// method per RPC on the platform, and counting them made the
-			// outbound surface a catalogue of everything callable rather than
-			// what this service calls. The edge belongs to whoever calls the
-			// stub; if nobody does, there is no edge.
-			if i.isGeneratedClient(b.Site) {
-				continue
-			}
-			// A hand-written direct Invoke that something else calls is a
-			// relay for the same reason.
-			if calledBy[siteKey{b.Site, b.Key}] {
-				continue
-			}
-		}
-		stage = append(stage, entry{b, at(i.bindingCallee, n)})
-	}
-
-	// Innermost wins among what's left: a binding whose callee is itself the
-	// site of a binding for the same key is a relay from further out.
-	sites := make(map[siteKey]bool, len(stage))
-	for _, e := range stage {
-		sites[siteKey{e.b.Site, e.b.Key}] = true
-	}
-	i.bindings = i.bindings[:0]
-	i.bindingCallee = i.bindingCallee[:0]
-	i.bindingStub = i.bindingStub[:0]
-	for _, e := range stage {
-		if e.callee != "" && sites[siteKey{e.callee, e.b.Key}] {
-			continue
-		}
-		i.bindings = append(i.bindings, e.b)
-		i.bindingCallee = append(i.bindingCallee, e.callee)
-		i.bindingStub = append(i.bindingStub, false)
-	}
-}
 
 // identify records what to call this project at the service level. The repo
 // (module) directory name is the fallback; a microservice.yaml at the project
@@ -870,7 +767,7 @@ func (i *Indexer) implementationByName(name string) (TargetID, []TargetID) {
 		if strings.HasPrefix(recv, "Unimplemented") || isDouble(recv) {
 			continue
 		}
-		if i.invokesDirectly(id) {
+		if _, isClient := i.directInvokeKey(id); isClient {
 			continue // a generated client method, not a server implementation
 		}
 		if pos := i.fset.Position(fi.decl.Pos()); strings.HasSuffix(pos.Filename, "_test.go") {
@@ -889,37 +786,6 @@ func (i *Indexer) implementationByName(name string) (TargetID, []TargetID) {
 		return any[0], any
 	}
 	return "", any
-}
-
-// isGeneratedClient reports whether a function is a method on a generated
-// gRPC client.
-//
-// protoc-gen-go-grpc emits, per service, a `<Service>Client` interface and an
-// unexported struct implementing it with one method per RPC. Testing the
-// implements relation makes this structural rather than a guess about naming,
-// and it is what separates "this repo can call that RPC" from "this repo does".
-func (i *Indexer) isGeneratedClient(target TargetID) bool {
-	fi := i.funcs[target]
-	if fi == nil {
-		return false
-	}
-	recv, recvPkg := receiverParts(fi)
-	if recv == "" {
-		return false
-	}
-	for key, impls := range i.interfaceImpls {
-		if !strings.HasSuffix(key, "Client") {
-			continue
-		}
-		for _, t := range impls {
-			if n, p := namedTypeParts(t); n == recv && p == recvPkg {
-				return true
-			}
-		}
-	}
-	// No such interface indexed (hand-rolled client, or generated code whose
-	// interface didn't load) — fall back to the naming codegen guarantees.
-	return strings.HasSuffix(recv, "Client")
 }
 
 // isDouble reports whether a receiver type name looks like a test double
@@ -974,179 +840,7 @@ func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool
 	for _, a := range ce.Args {
 		c.Args = append(c.Args, argFacts(info, a))
 	}
-	c.Callee = TargetID(obj.FullName())
-	c.CalleeInvoke = i.invokePath(c.Callee)
 	return c, true
-}
-
-// grpcMaxHops bounds how far a call site may be from the Invoke that names
-// the RPC.
-//
-// Uniqueness does most of the work — a function reaching several RPCs is
-// rejected outright — so this is a backstop rather than the main rule. It
-// still earns its place: a deep chain that happens to funnel into exactly one
-// RPC (a handler calling one repository calling one client) would otherwise
-// let every frame above it claim the call. A generated client invokes in its
-// own body at 0 hops, a wrapper is 1, a second wrapper 2.
-const grpcMaxHops = 3
-
-// invokeInfo returns the gRPC method path a function reaches and how many
-// calls away it is, or ("", -1).
-//
-// The distance is what makes this both correct and bounded. Memoizing a
-// distance measured *from each target* keeps the answer independent of the
-// path that reached it — sharing one depth counter across the recursion is
-// what silently poisoned the memo before, caching "no path" for functions
-// first seen near the limit. And having a real distance lets callers reject
-// matches that are too far to mean anything.
-func (i *Indexer) invokeInfo(target TargetID) (string, int) {
-	if v, ok := i.invokeCache[target]; ok {
-		return v.path, v.dist
-	}
-	fi := i.funcs[target]
-	if fi == nil || fi.decl == nil || fi.decl.Body == nil {
-		i.invokeCache[target] = invokeResult{path: "", dist: -1}
-		return "", -1
-	}
-	// Cycle guard: a recursive chain resolves to "not found" while it's in
-	// progress, then gets its real answer written below.
-	i.invokeCache[target] = invokeResult{path: "", dist: -1}
-
-	var (
-		direct []string // method paths this body invokes itself
-		nested []TargetID
-	)
-	info := fi.pkg.TypesInfo
-	ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
-		ce, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if name := nameIdent(ce.Fun); name != nil {
-			switch name.Name {
-			case "Invoke", "NewStream":
-				for _, a := range ce.Args {
-					if v := argFacts(info, a); v.Known && platform.IsMethodPath(v.Value) {
-						direct = appendUnique(direct, v.Value)
-					}
-				}
-				return true
-			}
-		}
-		// Otherwise remember the callee — plain function or method alike. An
-		// SDK wrapper is as often `invokeGet(...)` as `c.client.Get(...)`,
-		// and following only selectors missed the first kind entirely.
-		if callee := calleeOf(info, ce.Fun); callee != "" {
-			nested = append(nested, callee)
-		}
-		return true
-	})
-
-	res := invokeResult{path: "", dist: -1}
-	switch {
-	case len(direct) == 1:
-		res = invokeResult{path: direct[0], dist: 0}
-	case len(direct) > 1:
-		// Dispatches several RPCs itself — a generic transport, not a client
-		// for any one of them.
-		res = invokeResult{dist: 0, multi: true}
-	default:
-		var reached []string
-		for _, n := range nested {
-			sub, ok := i.invokeCache[n]
-			if !ok {
-				i.invokeInfo(n)
-				sub = i.invokeCache[n]
-			}
-			if sub.multi {
-				res.multi = true
-				continue
-			}
-			if sub.dist < 0 {
-				continue
-			}
-			reached = appendUnique(reached, sub.path)
-			// Nearest wins, so distance is a genuine minimum rather than an
-			// artefact of declaration order.
-			if res.dist < 0 || sub.dist+1 < res.dist {
-				res.path, res.dist = sub.path, sub.dist+1
-			}
-		}
-		if len(reached) > 1 {
-			res.multi = true
-		}
-		if res.multi {
-			res.path = ""
-		}
-	}
-	i.invokeCache[target] = res
-	return res.path, res.dist
-}
-
-func appendUnique(xs []string, x string) []string {
-	for _, e := range xs {
-		if e == x {
-			return xs
-		}
-	}
-	return append(xs, x)
-}
-
-// invokePath returns the method path only when the callee unambiguously
-// stands for one RPC. A function reaching several is program logic, not a
-// client, and naming it after one of them is what produced outbound edges for
-// calls the service never makes.
-func (i *Indexer) invokePath(target TargetID) string {
-	p, d := i.invokeInfo(target)
-	if d < 0 || d > grpcMaxHops || p == "" {
-		return ""
-	}
-	return p
-}
-
-// invokesDirectly reports whether a function's own body issues the gRPC call
-// — the test for "this is a generated client stub". Transitive reach is the
-// wrong question here: a server method that happens to call another service
-// would otherwise be mistaken for a client and excluded from implementing
-// anything.
-func (i *Indexer) invokesDirectly(target TargetID) bool {
-	_, d := i.invokeInfo(target)
-	return d == 0
-}
-
-// reachesSeveralRPCs reports whether a function fans out to more than one
-// RPC, which makes it transport or program logic rather than a client.
-func (i *Indexer) reachesSeveralRPCs(target TargetID) bool {
-	i.invokeInfo(target)
-	return i.invokeCache[target].multi
-}
-
-// calleeOf resolves a call's function expression to the target it names.
-func calleeOf(info *types.Info, fun ast.Expr) TargetID {
-	if info == nil {
-		return ""
-	}
-	switch f := fun.(type) {
-	case *ast.Ident:
-		if obj, ok := info.Uses[f].(*types.Func); ok {
-			return TargetID(obj.FullName())
-		}
-	case *ast.SelectorExpr:
-		if sel, ok := info.Selections[f]; ok {
-			if obj, ok := sel.Obj().(*types.Func); ok {
-				return TargetID(obj.FullName())
-			}
-		} else if obj, ok := info.Uses[f.Sel].(*types.Func); ok {
-			return TargetID(obj.FullName())
-		}
-	case *ast.IndexExpr:
-		return calleeOf(info, f.X)
-	case *ast.IndexListExpr:
-		return calleeOf(info, f.X)
-	case *ast.ParenExpr:
-		return calleeOf(info, f.X)
-	}
-	return ""
 }
 
 // namedTypeParts unwraps a receiver type to its bare name and package, so a
@@ -1345,7 +1039,12 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 	if !ok {
 		return nil
 	}
-	pos := i.fset.Position(ce.Pos())
+	// Key the call by its *name* token, not by the expression start. In a
+	// chained call like `sdk.New().Get(ctx)` the outer CallExpr and the inner
+	// `sdk.New()` begin at the same token, so keying on ce.Pos() gave them
+	// the same id and one silently replaced the other in the index — losing a
+	// usage, and with it the caller edge for whichever lost.
+	pos := i.fset.Position(spanPos)
 	id := CallID(fmt.Sprintf("%s:%d", pos.Filename, pos.Offset))
 
 	ci := &callInfo{

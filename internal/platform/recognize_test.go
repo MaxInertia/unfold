@@ -313,25 +313,3 @@ func TestIsMethodPath(t *testing.T) {
 		}
 	}
 }
-
-// A call that passes the method path itself — grpc's Invoke called directly,
-// or a generic helper taking the method as a parameter — must be recognized.
-// Only reading callee bodies missed every one of those, because
-// grpc.ClientConn.Invoke states no literal of its own.
-func TestGRPCClientCallsFromCallSiteLiteral(t *testing.T) {
-	got := GRPCClientCalls(Call{
-		PkgPath: "google.golang.org/grpc", Recv: "ClientConn", RecvPkg: "google.golang.org/grpc",
-		Func: "Invoke",
-		Args: []Arg{{}, lit("/accountgroup.v1.AccountGroupService/GetMulti"), {}, {}},
-		Site: "pkg.fetch",
-	})
-	if len(got) != 1 {
-		t.Fatalf("expected one binding, got %+v", got)
-	}
-	if got[0].Key != "accountgroup.v1.AccountGroupService/GetMulti" {
-		t.Errorf("key: got %q", got[0].Key)
-	}
-	if got[0].Confidence != model.ConfExact {
-		t.Errorf("a literal method path is exact, got %q", got[0].Confidence)
-	}
-}

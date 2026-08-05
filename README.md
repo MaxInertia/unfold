@@ -77,46 +77,25 @@ The service view is a two-sided card, not a graph:
   names. These have no in-repo target (the far end lives in another service) so
   they open their call site.
 
-  A gRPC call resolves **exactly**, without inferring anything about client
-  types or hostnames: a generated client states the full method name as a
-  literal in its own body (`cc.Invoke(ctx, "/pkg.Service/Method", …)`, or the
-  `..._FullMethodName` constant newer codegen emits, which the type checker
-  folds to the same string). Since a service's SDK is in the module graph of
-  anything that calls it, that literal is already indexed.
+  A gRPC call resolves **exactly**, and it's answered from the call graph
+  rather than by scanning for literals. A generated client method corresponds
+  one-to-one with an RPC — it states the full method name as a literal in its
+  own body, or as the `..._FullMethodName` constant newer codegen emits — so
+  the service calls that RPC exactly when the service's own code calls that
+  method. Finding those callers is a walk over the same index the callers tree
+  uses, stopping at the first frame that belongs to this project.
 
-  Code that calls grpc's `Invoke`/`NewStream` **directly** passes the path as
-  an argument rather than hiding it in a callee, so a literal of that shape at
-  a call site is recognized too. The shape has to be tight — `/api/health` also
-  has two slashes — so the service half must be qualified or type-cased and the
-  method half UpperCamelCase. A generated stub that something else calls yields
-  the edge to its caller, since the useful attribution is the code doing the
-  calling, not the stub.
+  Two things fall out of that rather than being enforced. A generated stub
+  nothing calls yields nothing: it has no callers, so it produces no edges —
+  which matters because a repo generating its clients in-tree has one stub per
+  RPC on the whole platform, and those are the *ability* to call, not calls.
+  And the edge lands on the caller at the boundary where your code meets the
+  client, so a caller-of-a-caller can't inherit it — the walk stops before
+  reaching them.
 
-  Hand-written SDKs wrap that client, so the search also follows calls out of a
-  callee's body, through plain functions as well as methods. Three rules keep
-  that from turning into noise:
-
-  - **Uniqueness.** What makes a function a client for an RPC is that it
-    stands for exactly one. A function reaching several is transport or
-    program logic, and naming it after whichever RPC was found first is how
-    outbound fills with calls the service never makes — so a fan-out callee
-    produces nothing. This does most of the work; ownership can't, because
-    `main` is in your module too, and deduplication can't, because frames
-    summarized by *different* arbitrary RPCs never collapse together.
-  - **Distance.** A backstop for the case uniqueness allows: a deep chain that
-    happens to funnel into exactly one RPC would otherwise let every frame
-    above it claim the call. A generated client invokes in its own body at 0
-    hops, a wrapper is 1, a second wrapper 2.
-  - **Ownership.** Only this module's own call sites produce bindings; a
-    dependency's internal calls aren't your service's surface.
-  - **Capability isn't usage.** A generated client method *is* an `Invoke`
-    with a literal, so a repo that generates its clients in-tree has one per
-    RPC on the whole platform. Those are the ability to call, not calls —
-    recognized structurally (the receiver implements a generated
-    `<Service>Client` interface) and excluded. The edge belongs to whoever
-    calls the stub; if nobody does, there is no edge.
-  - **Attribution.** An edge found down a chain belongs to the innermost
-    qualifying call site, not to every caller above it.
+  A hand-written function that issues the call itself is the call site, since
+  it's business logic talking to grpc rather than a client standing in for an
+  RPC.
 
 ### The anchor
 
