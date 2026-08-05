@@ -532,3 +532,28 @@ func TestDistantCallersAreNotOutboundEdges(t *testing.T) {
 		}
 	}
 }
+
+// Distance alone can't tell an SDK wrapper from program logic: a helper one
+// hop away that calls two different RPCs is well inside any sane bound. What
+// makes a function a client is that it stands for exactly *one* RPC, so a
+// caller of a fan-out helper must not be credited with either.
+func TestFanOutHelperIsNotAClient(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	for _, b := range sv.Outbound {
+		if b.Kind != "grpc.method" {
+			continue
+		}
+		// refresh() calls syncAll(), which reaches both GetMulti and Create.
+		// Neither is refresh's call.
+		if b.SiteTitle == "Server.refresh" {
+			t.Errorf("a caller of a fan-out helper was credited with %q", b.Key)
+		}
+	}
+	// The direct SDK call is still recognized.
+	if findBinding(sv.Outbound, "grpc.method", "accountgroup.v1.AccountGroupService/GetMulti") == nil {
+		t.Error("the unambiguous SDK call should still be an outbound edge")
+	}
+}

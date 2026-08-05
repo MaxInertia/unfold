@@ -96,11 +96,17 @@ The service view is a two-sided card, not a graph:
   callee's body, through plain functions as well as methods. Three rules keep
   that from turning into noise:
 
-  - **Distance.** A generated client invokes in its own body (0 hops away), a
-    wrapper around it is 1, a second wrapper 2. Past a small bound the chain
-    stops being an SDK and starts being the program — wiring code and request
-    handlers all reach *some* client eventually, and tagging them yields
-    outbound edges for RPCs the service never calls.
+  - **Uniqueness.** What makes a function a client for an RPC is that it
+    stands for exactly one. A function reaching several is transport or
+    program logic, and naming it after whichever RPC was found first is how
+    outbound fills with calls the service never makes — so a fan-out callee
+    produces nothing. This does most of the work; ownership can't, because
+    `main` is in your module too, and deduplication can't, because frames
+    summarized by *different* arbitrary RPCs never collapse together.
+  - **Distance.** A backstop for the case uniqueness allows: a deep chain that
+    happens to funnel into exactly one RPC would otherwise let every frame
+    above it claim the call. A generated client invokes in its own body at 0
+    hops, a wrapper is 1, a second wrapper 2.
   - **Ownership.** Only this module's own call sites produce bindings; a
     dependency's internal calls aren't your service's surface.
   - **Attribution.** An edge found down a chain belongs to the innermost

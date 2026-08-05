@@ -38,6 +38,19 @@ func (s *Server) listAccounts(ctx context.Context) error {
 	return agsdk.New().GetMulti(ctx)
 }
 
+// syncAll fans out to two different RPCs. It is not a client for either one,
+// and naming it after whichever was found first is exactly how outbound
+// filled with calls the service never makes.
+func (s *Server) syncAll(ctx context.Context) error {
+	c := agsdk.New()
+	if err := c.GetMulti(ctx); err != nil {
+		return err
+	}
+	return c.Create(ctx)
+}
+
+func (s *Server) refresh(ctx context.Context) error { return s.syncAll(ctx) }
+
 // Wiring several calls deep from the SDK. Everything here transitively
 // reaches the same Invoke, which is exactly why unbounded chain-following
 // reported RPCs a service never calls: startup() no more calls
@@ -51,4 +64,5 @@ func main() {
 	(&Server{}).fetchConversation()
 	_ = (&Server{}).listAccounts(context.Background())
 	(&Server{}).wireUp()
+	_ = (&Server{}).refresh(context.Background())
 }

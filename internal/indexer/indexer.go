@@ -175,10 +175,18 @@ type Indexer struct {
 	fileBytes   map[string][]byte
 }
 
-// invokeResult is a memoized (method path, hops-away) pair.
+// invokeResult memoizes what RPCs a function reaches: the nearest method
+// path, how many calls away it is, and whether more than one is reachable.
+//
+// `multi` is the load-bearing field. A generated client method reaches
+// exactly one RPC — that's what makes it a client. A function reaching
+// several isn't an SDK wrapper at all, it's program logic, and summarizing it
+// by whichever RPC happened to be found first is how outbound filled up with
+// calls the service never makes.
 type invokeResult struct {
-	path string
-	dist int
+	path  string
+	dist  int
+	multi bool
 }
 
 type funcInfo struct {
@@ -915,12 +923,12 @@ func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool
 // grpcMaxHops bounds how far a call site may be from the Invoke that names
 // the RPC.
 //
-// A generated client invokes in its own body, so the callee is 0 hops away.
-// A hand-written SDK wrapping that client is 1, and a second wrapper 2. Past
-// that the "chain" stops being an SDK and starts being the program: wiring
-// code, request handlers and DI constructors all eventually reach some client
-// transitively, and tagging them produced outbound edges for RPCs the service
-// never calls.
+// Uniqueness does most of the work — a function reaching several RPCs is
+// rejected outright — so this is a backstop rather than the main rule. It
+// still earns its place: a deep chain that happens to funnel into exactly one
+// RPC (a handler calling one repository calling one client) would otherwise
+// let every frame above it claim the call. A generated client invokes in its
+// own body at 0 hops, a wrapper is 1, a second wrapper 2.
 const grpcMaxHops = 3
 
 // invokeInfo returns the gRPC method path a function reaches and how many
@@ -938,22 +946,19 @@ func (i *Indexer) invokeInfo(target TargetID) (string, int) {
 	}
 	fi := i.funcs[target]
 	if fi == nil || fi.decl == nil || fi.decl.Body == nil {
-		i.invokeCache[target] = invokeResult{"", -1}
+		i.invokeCache[target] = invokeResult{path: "", dist: -1}
 		return "", -1
 	}
 	// Cycle guard: a recursive chain resolves to "not found" while it's in
 	// progress, then gets its real answer written below.
-	i.invokeCache[target] = invokeResult{"", -1}
+	i.invokeCache[target] = invokeResult{path: "", dist: -1}
 
 	var (
-		found  string
+		direct []string // method paths this body invokes itself
 		nested []TargetID
 	)
 	info := fi.pkg.TypesInfo
 	ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
-		if found != "" {
-			return false
-		}
 		ce, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -963,8 +968,7 @@ func (i *Indexer) invokeInfo(target TargetID) (string, int) {
 			case "Invoke", "NewStream":
 				for _, a := range ce.Args {
 					if v := argFacts(info, a); v.Known && platform.IsMethodPath(v.Value) {
-						found = v.Value
-						return false
+						direct = appendUnique(direct, v.Value)
 					}
 				}
 				return true
@@ -979,31 +983,63 @@ func (i *Indexer) invokeInfo(target TargetID) (string, int) {
 		return true
 	})
 
-	res := invokeResult{"", -1}
-	if found != "" {
-		res = invokeResult{found, 0}
-	} else {
-		// Nearest wins, so the distance is a genuine minimum rather than an
-		// artefact of declaration order.
+	res := invokeResult{path: "", dist: -1}
+	switch {
+	case len(direct) == 1:
+		res = invokeResult{path: direct[0], dist: 0}
+	case len(direct) > 1:
+		// Dispatches several RPCs itself — a generic transport, not a client
+		// for any one of them.
+		res = invokeResult{dist: 0, multi: true}
+	default:
+		var reached []string
 		for _, n := range nested {
-			p, d := i.invokeInfo(n)
-			if d < 0 {
+			sub, ok := i.invokeCache[n]
+			if !ok {
+				i.invokeInfo(n)
+				sub = i.invokeCache[n]
+			}
+			if sub.multi {
+				res.multi = true
 				continue
 			}
-			if res.dist < 0 || d+1 < res.dist {
-				res = invokeResult{p, d + 1}
+			if sub.dist < 0 {
+				continue
 			}
+			reached = appendUnique(reached, sub.path)
+			// Nearest wins, so distance is a genuine minimum rather than an
+			// artefact of declaration order.
+			if res.dist < 0 || sub.dist+1 < res.dist {
+				res.path, res.dist = sub.path, sub.dist+1
+			}
+		}
+		if len(reached) > 1 {
+			res.multi = true
+		}
+		if res.multi {
+			res.path = ""
 		}
 	}
 	i.invokeCache[target] = res
 	return res.path, res.dist
 }
 
-// invokePath returns the method path only when it is close enough to this
-// call site to be the RPC it means.
+func appendUnique(xs []string, x string) []string {
+	for _, e := range xs {
+		if e == x {
+			return xs
+		}
+	}
+	return append(xs, x)
+}
+
+// invokePath returns the method path only when the callee unambiguously
+// stands for one RPC. A function reaching several is program logic, not a
+// client, and naming it after one of them is what produced outbound edges for
+// calls the service never makes.
 func (i *Indexer) invokePath(target TargetID) string {
 	p, d := i.invokeInfo(target)
-	if d < 0 || d > grpcMaxHops {
+	if d < 0 || d > grpcMaxHops || p == "" {
 		return ""
 	}
 	return p
@@ -1017,6 +1053,13 @@ func (i *Indexer) invokePath(target TargetID) string {
 func (i *Indexer) invokesDirectly(target TargetID) bool {
 	_, d := i.invokeInfo(target)
 	return d == 0
+}
+
+// reachesSeveralRPCs reports whether a function fans out to more than one
+// RPC, which makes it transport or program logic rather than a client.
+func (i *Indexer) reachesSeveralRPCs(target TargetID) bool {
+	i.invokeInfo(target)
+	return i.invokeCache[target].multi
 }
 
 // calleeOf resolves a call's function expression to the target it names.
