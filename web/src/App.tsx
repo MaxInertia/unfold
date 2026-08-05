@@ -11,6 +11,7 @@ import { loadNotes } from "./notes";
 import { ServiceView } from "./ServiceView";
 import { ZoomTrail } from "./ZoomTrail";
 import { zoomIn, zoomOut, type ZoomLevel } from "./zoom";
+import { matches } from "./keybindings";
 import { fetchServiceView, fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
@@ -145,16 +146,16 @@ function AppShell() {
     };
   }, [platform, rootFrame?.id, revision]);
 
-  // Keyboard zoom. Alt+↑/↓ works at any level and doesn't collide with the
-  // editor-style bindings the frame view already uses.
+  // Keyboard zoom. The chords live in the keybinding registry, which is also
+  // what the settings panel lists — so the documented shortcut and the wired
+  // one can't disagree.
   useEffect(() => {
     if (!platform) return;
     function onKey(e: KeyboardEvent) {
-      if (!e.altKey || e.ctrlKey || e.metaKey) return;
-      if (e.key === "ArrowUp") {
+      if (matches("zoom.out", e)) {
         e.preventDefault();
         setZoom(zoomOut);
-      } else if (e.key === "ArrowDown") {
+      } else if (matches("zoom.in", e)) {
         e.preventDefault();
         setZoom(zoomIn);
       }
@@ -459,7 +460,7 @@ function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && results[0]) onPick(results[0].targetId);
+          if (matches("search.openFirst", e) && results[0]) onPick(results[0].targetId);
         }}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}

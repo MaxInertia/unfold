@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { matches } from "./keybindings";
 import { createPortal } from "react-dom";
 import { fetchFiles, fetchTypeInfo, search } from "./api";
 import { removeNote, upsertNote, useNotes } from "./notes";
@@ -273,8 +274,8 @@ export function NoteComposer({
         rows={3}
         autoFocus
         onKeyDown={(e) => {
-          if (e.key === "Escape") onDone();
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save();
+          if (matches("ui.dismiss", e)) onDone();
+          if (matches("notes.save", e)) save();
         }}
       />
       {error && <div className="note-error">save failed: {error}</div>}

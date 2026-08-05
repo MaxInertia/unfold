@@ -16,6 +16,7 @@ import { useBookmarks } from "./bookmarks";
 import { CallersPanel } from "./Callers";
 import { depthColor } from "./StickyHeaders";
 import { useSettings } from "./settings";
+import { matches } from "./keybindings";
 import { useNotes } from "./notes";
 import { NoteCard, NoteComposer } from "./NotesUI";
 
@@ -356,7 +357,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   useEffect(() => {
     if (!selection) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setSelection(null);
+      if (matches("ui.dismiss", e)) setSelection(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

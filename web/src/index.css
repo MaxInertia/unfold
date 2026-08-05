@@ -2120,3 +2120,60 @@ body.resizing {
   border-color: var(--goroutine-border);
   background: var(--goroutine-bg);
 }
+
+/* ----- settings: keyboard reference ----- */
+
+.settings-keys-group + .settings-keys-group {
+  margin-top: 0.7rem;
+}
+
+.settings-keys-scope {
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.settings-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.settings-key {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+  font-size: 0.78rem;
+}
+
+.settings-key-chord {
+  display: flex;
+  align-items: baseline;
+  gap: 0.15rem;
+  flex: none;
+  /* Fixed column so the descriptions line up down the list. */
+  min-width: 4.75rem;
+}
+
+.settings-key kbd {
+  font: inherit;
+  font-size: 0.72rem;
+  border: 1px solid var(--card-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  background: var(--card-bg);
+  color: var(--fg);
+}
+
+.settings-key-plus {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.settings-key-desc {
+  color: var(--muted);
+}
