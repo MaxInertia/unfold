@@ -72,9 +72,19 @@ The service view is a two-sided card, not a graph:
 
 - **inbound** — where work enters: HTTP routes registered with `net/http`,
   Pub/Sub subscriptions. Click one to open its handler as a new root frame.
-- **outbound** — where the service reaches out: `http.Get`/`Post` calls with a
-  statically known URL, Pub/Sub topics it names. These have no in-repo target
-  (the far end lives in another service) so they open their call site.
+- **outbound** — where the service reaches out: gRPC calls through a generated
+  client, `http.Get`/`Post` calls with a statically known URL, Pub/Sub topics it
+  names. These have no in-repo target (the far end lives in another service) so
+  they open their call site.
+
+  A gRPC call resolves **exactly**, without inferring anything about client
+  types or hostnames: a generated client states the full method name as a
+  literal in its own body (`cc.Invoke(ctx, "/pkg.Service/Method", …)`, or the
+  `..._FullMethodName` constant newer codegen emits, which the type checker
+  folds to the same string). Since a service's SDK is in the module graph of
+  anything that calls it, that literal is already indexed. Hand-written
+  wrappers are followed a few levels, and the edge is attributed to the
+  innermost call site rather than to every caller above it.
 
 ### The anchor
 
@@ -119,9 +129,15 @@ microservice:
   binding keyed
   `<proto package>.<Service>/<Method>` — the same key the generated SDK names
   on the calling side, which is what will join the two ends of a cross-service
-  edge once more than one repo is indexed. A method is linked to its Go
-  implementation when exactly one indexed function carries the RPC's name;
-  ambiguity leaves it unlinked rather than guessing.
+  edge once more than one repo is indexed.
+
+  Linking an RPC to its Go implementation uses the name (gRPC forces them to
+  match), narrowed to methods that aren't generated clients — identified by
+  the same `Invoke` literal the outbound recognizer reads — aren't
+  `Unimplemented*` stubs, and are in the main module when any candidate is.
+  **Zero** candidates means nothing implements the RPC, which is stale;
+  **several** means unfold couldn't tell which, which is not the same thing
+  and isn't badged as staleness.
 - **`excludeFromSdk`** marks surface implemented here but not callable from
   other services. Those methods are shown as **internal** rather than omitted —
   they exist, and later "nothing calls this" readings must not fire on them,

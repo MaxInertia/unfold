@@ -250,7 +250,7 @@ function BindingRow({
       {binding.stale && (
         <span
           className="service-badge service-badge--stale"
-          title="declared in microservice.yaml but not implemented in code — the declaration may be out of date"
+          title="declared in microservice.yaml but nothing in this repo implements it — the declaration may be out of date"
         >
           stale
         </span>

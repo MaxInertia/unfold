@@ -133,6 +133,15 @@ type Indexer struct {
 	// dispatch to it, and value references). Built once during Load.
 	usagesByTarget map[TargetID][]*usageInfo
 
+	// invokeCache memoizes invokePath per target; a client method's body is
+	// scanned once however many call sites reach it.
+	invokeCache map[TargetID]string
+
+	// bindingCallee[n] is the target that bindings[n]'s call site invoked,
+	// for the pass that de-duplicates chain-discovered edges. Only valid for
+	// the code-derived prefix of bindings, before declared ones are appended.
+	bindingCallee []TargetID
+
 	// bindings are the platform edges recognized in this project — routes it
 	// serves, topics it names, calls it makes out. Collected during Load in
 	// the same body walk that resolves call sites.
@@ -234,6 +243,8 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.interfaceImpls = buildInterfaceImpls(pkgs)
 	i.usagesByTarget = make(map[TargetID][]*usageInfo)
 	i.bindings = nil
+	i.bindingCallee = nil
+	i.invokeCache = make(map[TargetID]string)
 	i.mf = nil
 	i.protoErr = ""
 	i.identify(dir, pkgs)
@@ -293,7 +304,14 @@ func (i *Indexer) Load(dir, pattern string) error {
 				// resolvable call *and* a platform edge, and a call whose
 				// target we can't resolve can still carry a usable key.
 				if facts, ok := i.callFacts(fi, node); ok {
-					i.bindings = append(i.bindings, platform.Extract(facts)...)
+					found := platform.Extract(facts)
+					i.bindings = append(i.bindings, found...)
+					// Remember what each binding's call site called, so an
+					// edge discovered by following a chain can be attributed
+					// to the innermost site rather than every caller above it.
+					for range found {
+						i.bindingCallee = append(i.bindingCallee, facts.Callee)
+					}
 				}
 				ci := i.resolveCall(fi, node)
 				if ci == nil {
@@ -352,6 +370,8 @@ func (i *Indexer) Load(dir, pattern string) error {
 			}
 		}
 	}
+
+	i.dropRelayedBindings()
 
 	// Titles for binding endpoints, resolved once the whole function set is
 	// known (a route registered in one package can hand off to a handler
@@ -428,6 +448,42 @@ func (i *Indexer) sortBindings() {
 		}
 		return x.Key < y.Key
 	})
+}
+
+// dropRelayedBindings removes edges that were discovered by following a call
+// chain but belong to a call site further in.
+//
+// invokePath deliberately looks through wrappers, so a hand-written SDK still
+// yields its gRPC key. The cost is that every transitive caller of that
+// wrapper looks like it makes the call too: main calling fetchConversation
+// calling the generated client would report three outbound edges for one RPC.
+//
+// A binding is a relay when the function it called is itself the site of a
+// binding with the same key — the inner site is the honest attribution.
+func (i *Indexer) dropRelayedBindings() {
+	type siteKey struct {
+		site TargetID
+		key  string
+	}
+	sites := make(map[siteKey]bool, len(i.bindings))
+	for _, b := range i.bindings {
+		sites[siteKey{b.Site, b.Key}] = true
+	}
+	kept := i.bindings[:0]
+	keptCallee := i.bindingCallee[:0]
+	for n, b := range i.bindings {
+		callee := TargetID("")
+		if n < len(i.bindingCallee) {
+			callee = i.bindingCallee[n]
+		}
+		if callee != "" && sites[siteKey{callee, b.Key}] {
+			continue
+		}
+		kept = append(kept, b)
+		keptCallee = append(keptCallee, callee)
+	}
+	i.bindings = kept
+	i.bindingCallee = keptCallee
 }
 
 // identify records what to call this project at the service level. The repo
@@ -516,16 +572,22 @@ func (i *Indexer) declaredBindings() []model.Binding {
 				if m.ClientStreaming || m.ServerStreaming {
 					b.Detail += " · streaming"
 				}
-				// Link to the implementation when exactly one indexed
-				// function carries the RPC's name. Ambiguity means no link
-				// rather than a guess at which one serves it.
-				if target, ok := i.uniqueFuncNamed(m.Name); ok {
+				// Link to the implementation, and distinguish "nothing
+				// implements this" (stale — the declaration is out of date)
+				// from "several candidates, couldn't tell which" (not stale;
+				// the RPC is fine, the *link* is what's missing). Conflating
+				// them would report a healthy service as rotten.
+				target, candidates := i.implementationOf(m.Name)
+				switch {
+				case target != "":
 					b.Target = target
 					b.TargetTitle = goTitle(i.funcs[target].obj)
 					b.Site = target
 					b.SiteTitle = b.TargetTitle
-				} else {
+				case candidates == 0:
 					b.Stale = true
+				default:
+					b.Detail += fmt.Sprintf(" · %d candidate implementations, none unambiguous", candidates)
 				}
 				out = append(out, b)
 			}
@@ -594,22 +656,53 @@ func routePath(key string) string {
 	return key
 }
 
-// uniqueFuncNamed resolves a bare function name to a target, but only when
-// exactly one indexed function has it. Proto RPCs are matched to their Go
-// implementations by name — there's no declared link between them — so an
-// ambiguous name must not silently pick a winner.
-func (i *Indexer) uniqueFuncNamed(name string) (TargetID, bool) {
-	var found TargetID
+// implementationOf finds the Go method implementing an RPC, and reports how
+// many plausible candidates there were.
+//
+// gRPC forces the implementation's method name to equal the RPC's, so the
+// name is a reliable starting point — but a loaded package set contains that
+// name several times over: the generated client, the Unimplemented embed,
+// mocks, and the real server. Filtering those out is what makes the match
+// usable rather than perpetually ambiguous:
+//
+//   - must be a method (a bare function of that name is something else),
+//   - must not itself invoke gRPC — that's the *client* for this very RPC,
+//     identified by the same Invoke literal the outbound recognizer reads,
+//   - must not be a generated Unimplemented stub,
+//   - and main-module methods win outright, since a match inside a
+//     dependency is someone else's implementation, not this service's.
+//
+// The count matters as much as the target: zero candidates means nothing
+// implements the RPC (a real staleness signal), while several means unfold
+// couldn't tell which — a different thing, and not the manifest's fault.
+func (i *Indexer) implementationOf(name string) (TargetID, int) {
+	var local, any []TargetID
 	for id, fi := range i.funcs {
 		if fi.obj.Name() != name {
 			continue
 		}
-		if found != "" {
-			return "", false
+		sig, _ := fi.obj.Type().(*types.Signature)
+		if sig == nil || sig.Recv() == nil {
+			continue
 		}
-		found = id
+		if recv, _ := namedTypeParts(sig.Recv().Type()); strings.HasPrefix(recv, "Unimplemented") {
+			continue
+		}
+		if i.invokePath(id, 0) != "" {
+			continue // a generated client method, not a server implementation
+		}
+		any = append(any, id)
+		if fi.pkg != nil && fi.pkg.Module != nil && fi.pkg.Module.Main {
+			local = append(local, id)
+		}
 	}
-	return found, found != ""
+	if len(local) > 0 {
+		any = local
+	}
+	if len(any) == 1 {
+		return any[0], 1
+	}
+	return "", len(any)
 }
 
 // callFacts reduces a call site to the neutral shape recognizers consume.
@@ -650,7 +743,87 @@ func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool
 	for _, a := range ce.Args {
 		c.Args = append(c.Args, argFacts(info, a))
 	}
+	c.Callee = TargetID(obj.FullName())
+	c.CalleeInvoke = i.invokePath(c.Callee, 0)
 	return c, true
+}
+
+// grpcInvokeDepth bounds how far invokePath follows a call chain. A generated
+// client calls Invoke directly (depth 0); a hand-written SDK usually wraps it
+// once or twice. Beyond that a "match" would be coincidence.
+const grpcInvokeDepth = 3
+
+// invokePath returns the gRPC method path a function ultimately invokes, or
+// "".
+//
+// A generated gRPC client carries the full method name as a *literal in its
+// own body* — `cc.Invoke(ctx, "/pkg.Service/Method", ...)`, or the
+// `..._FullMethodName` constant newer codegen emits, which the type checker
+// folds to the same string. Since a service's SDK is in the module graph of
+// anything that calls it, that literal is already indexed here. So an
+// outbound call resolves to an exact key by reading the callee, with no
+// dataflow analysis and no guessing at which client type means what.
+func (i *Indexer) invokePath(target TargetID, depth int) string {
+	if depth > grpcInvokeDepth {
+		return ""
+	}
+	if v, ok := i.invokeCache[target]; ok {
+		return v
+	}
+	fi := i.funcs[target]
+	if fi == nil || fi.decl.Body == nil {
+		return ""
+	}
+	// Guard against recursion while this target is in progress.
+	i.invokeCache[target] = ""
+
+	var found string
+	var nested []TargetID
+	info := fi.pkg.TypesInfo
+	ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
+		if found != "" {
+			return false
+		}
+		ce, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := ce.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch sel.Sel.Name {
+		case "Invoke", "NewStream":
+			for _, a := range ce.Args {
+				if v := argFacts(info, a); v.Known && strings.HasPrefix(v.Value, "/") &&
+					strings.Count(v.Value, "/") == 2 {
+					found = v.Value
+					return false
+				}
+			}
+		default:
+			// Remember calls worth following if this body isn't the one.
+			if fnObj, ok := info.Uses[sel.Sel].(*types.Func); ok {
+				nested = append(nested, TargetID(fnObj.FullName()))
+			} else if s, ok := info.Selections[sel]; ok {
+				if fnObj, ok := s.Obj().(*types.Func); ok {
+					nested = append(nested, TargetID(fnObj.FullName()))
+				}
+			}
+		}
+		return true
+	})
+
+	if found == "" {
+		for _, n := range nested {
+			if v := i.invokePath(n, depth+1); v != "" {
+				found = v
+				break
+			}
+		}
+	}
+	i.invokeCache[target] = found
+	return found
 }
 
 // namedTypeParts unwraps a receiver type to its bare name and package, so a
@@ -759,9 +932,12 @@ func (i *Indexer) needsProtoRoot() bool {
 }
 
 // hasDeclaredGRPC reports whether any RPC came out of the declared protos.
+// Only the declared inbound surface counts: an outbound grpc.method binding
+// is recognized from code and says nothing about whether the proto root
+// resolved.
 func (i *Indexer) hasDeclaredGRPC() bool {
 	for _, b := range i.bindings {
-		if b.Kind == "grpc.method" {
+		if b.Kind == "grpc.method" && b.Role == model.RoleInbound && b.Confidence == model.ConfDeclared {
 			return true
 		}
 	}

@@ -2,8 +2,11 @@ microservice:
   name: conversation
   protoPaths:
     - path: conversation/v1/api.proto
+      excludeFromSdk: false
     - path: conversation/v1/admin.proto
       excludeFromSdk: conversation/v1/internal.proto
+    - path: conversation/v1/private.proto
+      excludeFromSdk: true
   publicRoutes:
     - /v1/conversations
     - /v1/health

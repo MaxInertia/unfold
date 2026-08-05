@@ -360,3 +360,65 @@ func TestSetProtoRootLive(t *testing.T) {
 		t.Error("a failed root should be reported")
 	}
 }
+
+// TestGRPCOutboundAndImplementationMatch covers both ends of a gRPC edge in
+// one fixture, because they share a mechanism.
+//
+// Outbound: the call site says nothing useful, but the generated client's own
+// body states the full method name, so the key comes out exact.
+//
+// Inbound: the same fixture declares a *second* method called GetConversation
+// (the client) plus a generated Unimplemented stub. That's what a real
+// package set looks like, and naive name matching would find several
+// candidates and give up — reporting an implemented RPC as unimplemented.
+func TestGRPCOutboundAndImplementationMatch(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+
+	out := findBinding(sv.Outbound, "grpc.method", "conversation.v1.ConversationService/GetConversation")
+	if out == nil {
+		t.Fatalf("expected an outbound gRPC binding from the client call; got %+v", sv.Outbound)
+	}
+	if out.Confidence != model.ConfExact {
+		t.Errorf("the key is a literal in the client's body, so it's exact; got %q", out.Confidence)
+	}
+	if out.SiteTitle != "Server.fetchConversation" {
+		t.Errorf("outbound site: got %q, want Server.fetchConversation", out.SiteTitle)
+	}
+
+	in := findBinding(sv.Inbound, "grpc.method", "conversation.v1.ConversationService/GetConversation")
+	if in == nil {
+		t.Fatal("missing the declared inbound RPC")
+	}
+	if in.Stale {
+		t.Error("the RPC has an implementation, so it must not be reported stale")
+	}
+	if in.TargetTitle != "Server.GetConversation" {
+		t.Errorf("implementation: got %q, want Server.GetConversation "+
+			"(the client method and Unimplemented stub must be filtered out)", in.TargetTitle)
+	}
+}
+
+// A gRPC edge must be attributed to the call site that makes it, not to every
+// caller above it: invokePath looks through wrappers, so without this main()
+// would appear to call the RPC too.
+func TestGRPCEdgeIsNotRelayedToCallers(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	var sites []string
+	for _, b := range sv.Outbound {
+		if b.Kind == "grpc.method" && b.Key == "conversation.v1.ConversationService/GetConversation" {
+			sites = append(sites, b.SiteTitle)
+		}
+	}
+	if len(sites) != 1 {
+		t.Fatalf("expected exactly one outbound site for the RPC, got %v", sites)
+	}
+	if sites[0] != "Server.fetchConversation" {
+		t.Errorf("site: got %q, want the innermost caller Server.fetchConversation", sites[0])
+	}
+}

@@ -3,7 +3,10 @@
 // the shared proto repository.
 package main
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+)
 
 type Server struct{}
 
@@ -20,4 +23,14 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-func main() { _ = (&Server{}).Handler() }
+// fetchConversation calls another service through its generated client. The
+// key is stated inside the client, not here.
+func (s *Server) fetchConversation() {
+	c := &conversationServiceClient{cc: &clientConn{}}
+	_ = c.GetConversation(context.Background())
+}
+
+func main() {
+	_ = (&Server{}).Handler()
+	(&Server{}).fetchConversation()
+}

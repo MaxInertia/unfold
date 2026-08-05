@@ -20,17 +20,59 @@ import (
 // Name is the file every service declares itself in, at its repo root.
 const Name = "microservice.yaml"
 
-// ProtoPath is one entry of the protoPaths list. Both fields are proto file
-// paths relative to the shared proto repository (not to this service), which
-// is why resolving them needs a separately configured proto root.
+// ProtoPath is one entry of the protoPaths list. Paths are relative to the
+// shared proto repository (not to this service), which is why resolving them
+// needs a separately configured proto root.
 type ProtoPath struct {
 	// Path is a proto file whose services this repo implements.
 	Path string `yaml:"path"`
-	// ExcludeFromSdk names a proto file left out of SDK generation. Its
-	// methods exist but no other service can call them, which is a fact
-	// worth showing rather than a gap — and it stops a later "nothing calls
-	// this" reading, since nothing *can*.
-	ExcludeFromSdk string `yaml:"excludeFromSdk"`
+	// ExcludeFromSdk marks surface left out of SDK generation: its methods
+	// exist but no other service can call them. That's a fact worth showing
+	// rather than a gap — and it stops a later "nothing calls this" reading,
+	// since nothing *can*.
+	ExcludeFromSdk ExcludeFlag `yaml:"excludeFromSdk"`
+}
+
+// ExcludeFlag is `excludeFromSdk`, which appears in the wild both as a
+// boolean flag on the entry ("this entry's path is excluded") and as a proto
+// path naming a different file. Decoding it strictly as either would reject
+// real manifests, so it accepts both and records which it got.
+type ExcludeFlag struct {
+	// Flag is true for `excludeFromSdk: true` — the entry's own Path is the
+	// excluded file.
+	Flag bool
+	// Path is set when the value is a proto path rather than a boolean.
+	Path string
+}
+
+// UnmarshalYAML accepts a boolean or a string. Anything else is ignored
+// rather than failing the manifest: a key unfold doesn't understand
+// shouldn't cost the caller its whole service view.
+func (e *ExcludeFlag) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return nil
+	}
+	switch node.Tag {
+	case "!!bool":
+		var b bool
+		if err := node.Decode(&b); err == nil {
+			e.Flag = b
+		}
+	case "!!str":
+		var s string
+		if err := node.Decode(&s); err == nil {
+			// A quoted "true"/"false" is still the flag, not a filename.
+			switch s {
+			case "true":
+				e.Flag = true
+			case "false":
+			default:
+				e.Path = s
+			}
+		}
+	case "!!null":
+	}
+	return nil
 }
 
 // Manifest is the subset of microservice.yaml unfold uses. Unknown keys are
@@ -83,19 +125,25 @@ func (m *Manifest) IncludedProtos() (paths []string, excluded map[string]bool) {
 		return nil, excluded
 	}
 	seen := map[string]bool{}
-	for _, p := range m.ProtoPaths {
-		if p.Path != "" && !seen[p.Path] {
-			seen[p.Path] = true
-			paths = append(paths, p.Path)
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
 		}
-		if p.ExcludeFromSdk != "" {
-			excluded[p.ExcludeFromSdk] = true
-			// An excluded proto is still implemented here — it just isn't
-			// callable from other services — so it belongs in the surface.
-			if !seen[p.ExcludeFromSdk] {
-				seen[p.ExcludeFromSdk] = true
-				paths = append(paths, p.ExcludeFromSdk)
-			}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	for _, p := range m.ProtoPaths {
+		add(p.Path)
+		// `excludeFromSdk: true` excludes this entry's own path.
+		if p.ExcludeFromSdk.Flag && p.Path != "" {
+			excluded[p.Path] = true
+		}
+		// `excludeFromSdk: <path>` names a different file. An excluded proto
+		// is still implemented here — it just isn't callable from other
+		// services — so it belongs in the surface either way.
+		if q := p.ExcludeFromSdk.Path; q != "" {
+			excluded[q] = true
+			add(q)
 		}
 	}
 	return paths, excluded
