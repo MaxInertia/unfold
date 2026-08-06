@@ -284,6 +284,13 @@ type Binding struct {
 	// this binding's handler transitively calls it — i.e. this is one of the
 	// entrypoints through which the anchor actually runs.
 	ReachesAnchor bool `json:"reachesAnchor,omitempty"`
+
+	// ReachedByAnchor is the mirror image, for outbound: the anchored frame
+	// transitively reaches this call site, so this is a call the anchor's
+	// code path actually makes. "What runs me" and "what I run" are different
+	// questions and want different walks — backwards for one, forwards for
+	// the other.
+	ReachedByAnchor bool `json:"reachedByAnchor,omitempty"`
 }
 
 // ServiceView is the zoomed-out picture of one service: what enters it and

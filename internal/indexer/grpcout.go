@@ -296,6 +296,16 @@ func (i *Indexer) entrypointReachable() map[TargetID]bool {
 		return nil
 	}
 
+	return i.forwardClosure(seeds)
+}
+
+// forwardClosure walks calls outward from a set of functions and returns
+// everything reachable inside this project's own code.
+//
+// Traversal stays owned: a chain that leaves for a dependency and comes back
+// isn't how a service reaches its own helpers, and following dependency graphs
+// would cost far more than it finds.
+func (i *Indexer) forwardClosure(seeds map[TargetID]bool) map[TargetID]bool {
 	reached := map[TargetID]bool{}
 	var queue []TargetID
 	for id := range seeds {

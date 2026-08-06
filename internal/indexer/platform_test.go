@@ -789,3 +789,40 @@ func TestCommandPackagesAreEntrypoints(t *testing.T) {
 		t.Errorf("the edge should name its call site: %+v", b)
 	}
 }
+
+// The anchor asks two questions, and they need opposite walks. Backwards
+// answers "what runs this code" and marks entrypoints; forwards answers "what
+// does this code run" and marks the calls it makes. Marking outbound rows
+// from the backwards closure would state something true — this call is made
+// by code that reaches the anchor — but not what the label claims.
+func TestAnchorMarksTheCallsItMakes(t *testing.T) {
+	idx := loadDeclared(t, "testdata/protoroot")
+	anchor, err := idx.LookupSymbol("(*example.com/conversation.Server).chargeCustomer")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	sv, err := idx.ServiceView(anchor)
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	if sv.Anchor == "" {
+		t.Fatal("anchor was not accepted")
+	}
+
+	charge := findBinding(sv.Outbound, "grpc.method", "billing.v1.BillingService/Charge")
+	if charge == nil || !charge.ReachedByAnchor {
+		t.Errorf("the call the anchor makes should be marked: %+v", charge)
+	}
+	// A call made elsewhere in the service is not one this anchor makes.
+	other := findBinding(sv.Outbound, "grpc.method", "search.v1.SearchService/Query")
+	if other != nil && other.ReachedByAnchor {
+		t.Errorf("a call on an unrelated path should not be marked: %+v", other)
+	}
+	// The two directions stay distinct: an outbound row never claims to be an
+	// entrypoint reaching the anchor.
+	for _, b := range sv.Outbound {
+		if b.ReachesAnchor {
+			t.Errorf("outbound rows answer the forward question only: %+v", b)
+		}
+	}
+}

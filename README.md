@@ -121,9 +121,18 @@ rest as context. The trail names the count (`unfold › 3 entrypoints ›
 validateCoupon`) because until you pick one, the entrypoint slot genuinely has
 three answers.
 
-Reachability is computed the same way the callers tree walks: backwards over
-call and interface edges. Value references aren't followed — a function passed
-as a value has no call site, so a chain through one isn't an execution path.
+The anchor answers two questions, and they need opposite walks:
+
+- **`reaches anchor`** on an inbound row — this entrypoint runs the anchored
+  code. Computed backwards, the same way the callers tree walks.
+- **`anchor reaches`** on an outbound row — the anchored code makes this call.
+  Computed forwards.
+
+Marking outbound rows from the backwards walk would state something true (this
+call is made by code that reaches the anchor) but not what the label claims,
+so the two stay separate. Value references aren't followed in either
+direction — a function passed as a value has no call site, so a chain through
+one isn't an execution path.
 
 ### What the service declares about itself
 

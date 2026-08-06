@@ -56,6 +56,7 @@ export function ServiceView({
 
   const anchored = !!view.anchorTitle;
   const reaching = view.inbound.filter((b) => b.reachesAnchor).length;
+  const reached = view.outbound.filter((b) => b.reachedByAnchor).length;
   const inbound = view.inbound.filter((b) => bindingMatches(b, filters));
   const outbound = view.outbound.filter((b) => bindingMatches(b, filters));
   const hidden = view.inbound.length + view.outbound.length - inbound.length - outbound.length;
@@ -72,6 +73,7 @@ export function ServiceView({
             {reaching === 0
               ? "no entrypoint reaches it"
               : `${reaching} entrypoint${reaching === 1 ? "" : "s"} reach it`}
+            {reached > 0 && ` · it makes ${reached} call${reached === 1 ? "" : "s"}`}
           </span>
         )}
       </header>
@@ -300,10 +302,14 @@ function BindingRow({
   // With an anchor loaded, the entrypoints that reach it are lit and the rest
   // dim. That's what makes a large inbound surface readable: you aren't
   // reading eighty routes, you're seeing the two that concern you in context.
+  // Inbound lights what runs the anchor; outbound lights what the anchor
+  // runs. Same treatment, opposite direction — dimming only applies to the
+  // side that has an answer, so an unanchored column isn't greyed out.
+  const lit = binding.role === "inbound" ? binding.reachesAnchor : binding.reachedByAnchor;
   const cls = [
     "service-item",
-    anchored && binding.reachesAnchor ? "service-item--reaches" : "",
-    anchored && !binding.reachesAnchor ? "service-item--dim" : "",
+    anchored && lit ? "service-item--reaches" : "",
+    anchored && !lit ? "service-item--dim" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -375,6 +381,14 @@ function BindingRow({
       {binding.reachesAnchor && (
         <span className="service-badge service-badge--reaches" title="this entrypoint reaches the anchored frame">
           reaches anchor
+        </span>
+      )}
+      {binding.reachedByAnchor && (
+        <span
+          className="service-badge service-badge--reaches"
+          title="the anchored frame reaches this call — it's one the anchor's code path makes"
+        >
+          anchor reaches
         </span>
       )}
       {/* Only non-exact resolution is labelled — an exact literal↔literal

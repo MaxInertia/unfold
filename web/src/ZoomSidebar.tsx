@@ -33,7 +33,11 @@ export function bindingMatches(b: Binding, f: ServiceFilters): boolean {
   }
   const vis = Object.keys(f.visibility).filter((k) => f.visibility[k]);
   if (vis.length > 0 && (!b.visibility || !f.visibility[b.visibility])) return false;
-  if (f.reachingOnly && b.role === "inbound" && !b.reachesAnchor) return false;
+  // The anchor filter applies to whichever direction the row answers for.
+  if (f.reachingOnly) {
+    const lit = b.role === "inbound" ? b.reachesAnchor : b.reachedByAnchor;
+    if (!lit) return false;
+  }
   return true;
 }
 
@@ -52,6 +56,7 @@ export function ServiceFilterPanel({
     if (b.visibility) counts.set(b.visibility, (counts.get(b.visibility) ?? 0) + 1);
   }
   const reaching = view?.inbound.filter((b) => b.reachesAnchor).length ?? 0;
+  const reachedCount = view?.outbound.filter((b) => b.reachedByAnchor).length ?? 0;
   const set = (patch: Partial<ServiceFilters>) => onChange({ ...filters, ...patch });
 
   return (
@@ -95,8 +100,8 @@ export function ServiceFilterPanel({
               checked={filters.reachingOnly}
               onChange={(e) => set({ reachingOnly: e.target.checked })}
             />
-            <span>only entrypoints reaching {view.anchorTitle}</span>
-            <span className="filters-count">{reaching}</span>
+            <span>only what connects to {view.anchorTitle}</span>
+            <span className="filters-count">{reaching + reachedCount}</span>
           </label>
         </fieldset>
       )}

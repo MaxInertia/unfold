@@ -108,6 +108,9 @@ export interface Binding {
   // entry nothing registers, or a proto method with no implementation.
   stale?: boolean;
   reachesAnchor?: boolean; // this entrypoint transitively reaches the anchor
+  // The mirror, for outbound: the anchored frame reaches this call site, so
+  // it's a call the anchor's code path actually makes.
+  reachedByAnchor?: boolean;
 }
 
 export interface ServiceView {

@@ -925,11 +925,15 @@ func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
 	// An anchor that isn't an indexed function (a stale URL, a file frame)
 	// degrades to the plain service view rather than erroring — the view is
 	// still correct, it just can't mark anything.
-	var reaching map[TargetID]bool
+	// Two walks, because the anchor asks two different questions. Backwards
+	// answers "what runs this code" and marks the entrypoints; forwards
+	// answers "what does this code run" and marks the calls it makes.
+	var reaching, reached map[TargetID]bool
 	if fi := i.funcs[anchor]; fi != nil {
 		sv.Anchor = anchor
 		sv.AnchorTitle = goTitle(fi.obj)
 		reaching = i.callersClosure(anchor)
+		reached = i.forwardClosure(map[TargetID]bool{anchor: true})
 	}
 
 	for _, b := range i.bindings {
@@ -945,6 +949,9 @@ func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
 			}
 			sv.Inbound = append(sv.Inbound, b)
 		} else {
+			if reached != nil && reached[b.Site] {
+				b.ReachedByAnchor = true
+			}
 			sv.Outbound = append(sv.Outbound, b)
 		}
 	}
