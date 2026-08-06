@@ -159,6 +159,13 @@ crossing relation per repo. It tracks *which inbound keys* lead onward
 separately from *whether the service reaches*, so a call made from a service's
 own `init` marks that service without lighting its callers.
 
+**Repos can be linked after launch.** `+ link repo…` opens another repository
+without restarting — from a plain single-repo session too, which promotes it
+to a workspace. Persisted per project, so the link sticks. Implemented as an
+engine rebuild rather than live workspace mutation: the repo set and the
+cross-repo join are read lock-free everywhere on the assumption they're fixed
+after startup.
+
 Next up, in rough order of value: HTTP edges joining across repos; third-party
 router recognizers; multiple anchors at once (the UI list is already an array
 — it needs the backend walks to take a set and union the results).

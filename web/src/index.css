@@ -3117,3 +3117,9 @@ body.resizing {
   font-size: 0.72rem;
   color: var(--goroutine-fg);
 }
+
+/* Linking a repository sits with the workspace strip it extends, so it reads
+   as "and one more" rather than as a separate piece of chrome. */
+.link-repo-open {
+  margin-left: 0.25rem;
+}

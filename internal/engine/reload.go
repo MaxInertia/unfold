@@ -190,6 +190,20 @@ func (r *Reloadable) IndexRepo(alias string) error {
 	return ir.IndexRepo(alias)
 }
 
+// Repos forwards the workspace's repository list. Empty for a single-repo
+// engine, which is the honest answer rather than an error: nothing is wrong,
+// there is simply no workspace yet — and linking a repo is exactly how one
+// comes to exist mid-session.
+func (r *Reloadable) Repos() []model.RepoInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	lister, ok := r.cur.(interface{ Repos() []model.RepoInfo })
+	if !ok {
+		return nil
+	}
+	return lister.Repos()
+}
+
 // PlatformAvailable reports whether the engine currently held can serve a
 // service view, so /api/health advertises the zoom-out affordance honestly
 // even though the wrapper's own method set can't.

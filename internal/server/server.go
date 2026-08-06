@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/MaxInertia/unfold/internal/diff"
+	"github.com/MaxInertia/unfold/internal/engine"
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/notes"
 	"github.com/MaxInertia/unfold/internal/prefs"
@@ -36,6 +37,9 @@ type Server struct {
 	// projectDir is where per-project prefs are persisted (the proto root a
 	// user picks in the UI). Empty disables persistence.
 	projectDir string
+	// reload rebuilds the engine in place. Nil disables the endpoints that
+	// need one, rather than letting them half-apply a change.
+	reload func() error
 
 	// Connected /api/events subscribers, notified when the engine reindexes.
 	mu      sync.Mutex
@@ -57,6 +61,10 @@ func (s *Server) SetTarget(target string) { s.target = target }
 // SetDiffer enables diff annotations on returned frames, comparing against the
 // base engine d wraps. Nil leaves diff mode off.
 func (s *Server) SetDiffer(d *diff.Differ) { s.differ = d }
+
+// SetReloader supplies the function that rebuilds the engine, enabling the
+// endpoints that change what the engine is built from.
+func (s *Server) SetReloader(fn func() error) { s.reload = fn }
 
 // SetNotes enables the notes API backed by the given store.
 func (s *Server) SetNotes(n *notes.Store) { s.notes = n }
@@ -84,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/usages", s.handleUsages)
 	mux.HandleFunc("/api/service", s.handleService)
 	mux.HandleFunc("/api/proto-root", s.handleProtoRoot)
+	mux.HandleFunc("/api/repos", s.handleRepos)
 	mux.HandleFunc("/api/dirs", s.handleDirs)
 	mux.HandleFunc("/api/resolve", s.handleResolve)
 	mux.HandleFunc("/api/platform", s.handlePlatform)
@@ -234,6 +243,109 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// POST /api/repos {"path": "<abs dir>"[, "unlink": true]} — open another
+// repository, or stop opening one, without restarting.
+//
+// You find out mid-session that the call you're following lands in a repo you
+// didn't open, and until now the only answer was to quit and relaunch with
+// --workspace pointed somewhere that happened to contain both. A linked repo
+// need not be a sibling of anything.
+//
+// Linking rebuilds the engine rather than mutating the open workspace. The
+// workspace's repo set, alias table and cross-repo declaration join are read
+// without locks by every request path, on the assumption that they're fixed
+// after Open — mutating them live would mean auditing all of it for races,
+// where a rebuild is the mechanism watch mode already uses: it swaps
+// atomically and keeps the previous engine if the new one fails to build. The
+// cost is re-indexing what was eagerly loaded, which is why a large workspace
+// defers to --index lazy anyway.
+//
+// Mutating and filesystem-touching, so it's guarded like /api/open: POST only
+// and same-origin only.
+func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if s.reload == nil {
+		writeError(w, http.StatusNotImplemented, "this session can't rebuild its index")
+		return
+	}
+	var body struct {
+		Path   string `json:"path"`
+		Unlink bool   `json:"unlink"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	abs, err := filepath.Abs(expandHome(strings.TrimSpace(body.Path)))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if body.Unlink {
+		if !engine.UnlinkRepo(abs) {
+			writeError(w, http.StatusBadRequest, abs+" is not a linked repository")
+			return
+		}
+	} else {
+		// Reject a non-module up front. Discovering it after the rebuild would
+		// mean reporting the failure against an engine that had already been
+		// replaced, and the user would have paid the reindex for nothing.
+		if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
+			writeError(w, http.StatusBadRequest, "not a directory: "+abs)
+			return
+		}
+		if fi, err := os.Stat(filepath.Join(abs, "go.mod")); err != nil || fi.IsDir() {
+			writeError(w, http.StatusBadRequest, "not a Go module (no go.mod): "+abs)
+			return
+		}
+		if !engine.LinkRepo(abs) {
+			writeError(w, http.StatusConflict, abs+" is already open")
+			return
+		}
+	}
+
+	if err := s.reload(); err != nil {
+		// The engine is unchanged — Reload keeps the previous one on failure —
+		// so the link has to be rolled back too, or the next rebuild for any
+		// reason would silently apply a repo the user was told had failed.
+		if body.Unlink {
+			engine.LinkRepo(abs)
+		} else {
+			engine.UnlinkRepo(abs)
+		}
+		writeError(w, http.StatusUnprocessableEntity, "could not open "+abs+": "+err.Error())
+		return
+	}
+
+	if s.projectDir != "" {
+		p := prefs.Load(s.projectDir)
+		p.LinkedRepos = append([]string(nil), engine.LinkedRepos...)
+		if err := prefs.Save(s.projectDir, p); err != nil {
+			log.Printf("unfold: could not persist linked repositories: %v", err)
+		}
+	}
+	s.NotifyReload()
+
+	// Unlinking the last repo leaves a plain single-repo engine, whose Repos
+	// is nil — which would marshal to null where the client expects a list.
+	repos := []model.RepoInfo{}
+	if lister, ok := s.engine.(interface{ Repos() []model.RepoInfo }); ok {
+		if got := lister.Repos(); got != nil {
+			repos = got
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repos": repos, "linked": engine.LinkedRepos})
 }
 
 // POST /api/proto-root {"path": "<abs dir>"} — point the declared gRPC

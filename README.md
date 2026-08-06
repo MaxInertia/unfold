@@ -337,6 +337,35 @@ implements it:
 unfold --workspace ~/src --proto-root ~/src/platform-protos ./...
 ```
 
+### Linking a repo after launch
+
+You usually find out mid-session — the call you're following lands somewhere
+you didn't open. **+ link repo…** in the workspace strip (and in the platform
+header) opens another repository without restarting, and it need not be a
+sibling of anything: a linked repo is an arbitrary path.
+
+This also works from a plain single-repo session, which is the common case:
+link one repo and the session *becomes* a workspace, with the repo you
+launched in as the primary. The link persists to `.unfold/config.json`, so it
+survives a restart rather than being something you redo each morning.
+Unlinking the last one drops back to a single-repo index.
+
+Linking rebuilds the engine rather than mutating the open workspace. The repo
+set, alias table and cross-repo declaration join are read without locks by
+every request path on the assumption that they're fixed after startup;
+mutating them live would mean auditing all of that for races, where a rebuild
+is the mechanism watch mode already uses — it swaps atomically and keeps the
+previous engine if the new one fails to build. The cost is re-indexing what
+was eagerly loaded, which is the same reason a large workspace defers with
+`--index lazy`.
+
+A directory with no `go.mod`, one that doesn't exist, or one already open is
+rejected *before* the rebuild — discovering it afterwards would mean reporting
+a failure against an engine that had already been replaced, having paid the
+reindex for nothing. And a rebuild that fails rolls the link back, so the next
+rebuild for any other reason can't silently apply a repo you were told had
+failed.
+
 The repo you're standing in is the **primary**: the service view is about it,
 and its ids stay unprefixed so existing URLs and bookmarks keep working. Other
 repos are namespaced `<repo>::<id>`. Running from a subdirectory of a repo

@@ -59,10 +59,15 @@ func main() {
 
 	// Set before the first Load, and read again on every watch-mode rebuild.
 	// Without the flag, fall back to whatever was picked in the UI last time.
+	saved := prefs.Load(projectDir(*dir))
 	engine.ProtoRoot = *protoRoot
 	if engine.ProtoRoot == "" {
-		engine.ProtoRoot = prefs.Load(projectDir(*dir)).ProtoRoot
+		engine.ProtoRoot = saved.ProtoRoot
 	}
+	// Repos linked from the UI in a previous session. Restoring them here is
+	// what makes the link stick: without it, opening a workspace would be
+	// something you had to redo on every start.
+	engine.LinkedRepos = append([]string(nil), saved.LinkedRepos...)
 
 	target := flag.Arg(0)
 	if target == "" {
@@ -112,6 +117,10 @@ func main() {
 	srv.SetProjectDir(projectDir(*dir))
 	// Notes persist to <dir>/.unfold/notes.json (created on first save).
 	srv.SetNotes(notes.NewStore(*dir))
+	// Linking a repo changes which repositories the engine opens, and that
+	// only takes effect on a rebuild. Reload is the same path watch mode
+	// uses — it swaps atomically and keeps the previous engine on failure.
+	srv.SetReloader(eng.Reload)
 	httpServer := &http.Server{Handler: srv.Handler()}
 
 	serverErr := make(chan error, 1)

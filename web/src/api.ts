@@ -4,6 +4,7 @@ import type {
   Resolution,
   Frame,
   Note,
+  RepoInfo,
   SearchResult,
   ServiceView,
   TargetID,
@@ -185,4 +186,20 @@ export async function openInEditor(file: string, line: number): Promise<void> {
     }
     throw new Error(msg);
   }
+}
+
+// Open another repository, or stop opening one, without restarting. The
+// server rebuilds the engine and pushes a reload over /api/events, so the
+// views refresh themselves — there's nothing to return but the new repo list.
+export async function linkRepo(path: string, unlink = false): Promise<{ repos: RepoInfo[] }> {
+  const res = await fetch("/api/repos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, unlink }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `link failed: ${res.status}`);
+  }
+  return res.json();
 }

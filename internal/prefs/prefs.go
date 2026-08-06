@@ -25,6 +25,12 @@ type Prefs struct {
 	// paths are relative to a different repo — so it's either a flag or a
 	// choice the user makes in the UI.
 	ProtoRoot string `json:"protoRoot,omitempty"`
+
+	// LinkedRepos are repositories added from the UI after launch. They're
+	// absolute paths on this machine, which is precisely why they live here
+	// rather than in microservice.yaml: where someone keeps their checkouts
+	// is a fact about their laptop, not about the service.
+	LinkedRepos []string `json:"linkedRepos,omitempty"`
 }
 
 func path(projectDir string) string {

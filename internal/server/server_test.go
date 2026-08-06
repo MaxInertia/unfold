@@ -2,14 +2,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/MaxInertia/unfold/internal/engine"
 	"github.com/MaxInertia/unfold/internal/indexer"
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/notes"
@@ -428,4 +431,127 @@ func TestProtoRootEndpoints(t *testing.T) {
 			t.Errorf("engine proto root: got %q, want %q", got, dir)
 		}
 	})
+}
+
+// Linking a repository mid-session is guarded the same way the other mutating
+// endpoints are, and validates before it commits — discovering a bad path
+// after the rebuild would mean reporting a failure against an engine that had
+// already been replaced, and the user would have paid the reindex for nothing.
+func TestLinkRepoValidatesBeforeRebuilding(t *testing.T) {
+	idx := indexer.New()
+	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
+		t.Fatalf("indexer.Load: %v", err)
+	}
+	srv := New(idx)
+	// The linked set is package-level state on the engine, so a test that
+	// leaves entries behind changes what the next one loads.
+	t.Cleanup(func() { engine.LinkedRepos = nil })
+	reloads := 0
+	srv.SetReloader(func() error { reloads++; return nil })
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	post := func(t *testing.T, body string, want int) map[string]any {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/repos", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", ts.URL)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != want {
+			t.Errorf("status: got %d want %d", res.StatusCode, want)
+		}
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return out
+	}
+
+	t.Run("rejects a non-module", func(t *testing.T) {
+		before := reloads
+		post(t, `{"path":"`+t.TempDir()+`"}`, http.StatusBadRequest)
+		if reloads != before {
+			t.Error("a directory with no go.mod must be rejected before any rebuild")
+		}
+	})
+
+	t.Run("rejects a missing directory", func(t *testing.T) {
+		before := reloads
+		post(t, `{"path":"`+filepath.Join(t.TempDir(), "nope")+`"}`, http.StatusBadRequest)
+		if reloads != before {
+			t.Error("a path that doesn't exist must not trigger a rebuild")
+		}
+	})
+
+	t.Run("links a real module, once", func(t *testing.T) {
+		dir := repoFixture(t)
+		before := reloads
+		post(t, `{"path":"`+dir+`"}`, http.StatusOK)
+		if reloads != before+1 {
+			t.Errorf("linking should rebuild exactly once, got %d", reloads-before)
+		}
+		// The same repo twice is a no-op, not a second copy in the workspace.
+		post(t, `{"path":"`+dir+`"}`, http.StatusConflict)
+		if reloads != before+1 {
+			t.Error("re-linking an open repo must not rebuild")
+		}
+		post(t, `{"path":"`+dir+`","unlink":true}`, http.StatusOK)
+	})
+
+	t.Run("unlinking something not linked is refused", func(t *testing.T) {
+		before := reloads
+		post(t, `{"path":"`+repoFixture(t)+`","unlink":true}`, http.StatusBadRequest)
+		if reloads != before {
+			t.Error("no rebuild for a repo that was never linked")
+		}
+	})
+
+	t.Run("a failed rebuild rolls the link back", func(t *testing.T) {
+		dir := repoFixture(t)
+		srv.SetReloader(func() error { return errFake })
+		post(t, `{"path":"`+dir+`"}`, http.StatusUnprocessableEntity)
+		// The engine kept the previous index, so the link must not survive —
+		// otherwise the next rebuild for any other reason would silently
+		// apply a repo the user was told had failed.
+		srv.SetReloader(func() error { reloads++; return nil })
+		post(t, `{"path":"`+dir+`","unlink":true}`, http.StatusBadRequest)
+	})
+
+	t.Run("guards", func(t *testing.T) {
+		res, err := http.Get(ts.URL + "/api/repos")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("GET should be refused, got %d", res.StatusCode)
+		}
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/repos", strings.NewReader(`{"path":"/tmp"}`))
+		req.Header.Set("Origin", "http://evil.example")
+		res2, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		res2.Body.Close()
+		if res2.StatusCode != http.StatusForbidden {
+			t.Errorf("cross-origin should be refused, got %d", res2.StatusCode)
+		}
+	})
+}
+
+var errFake = errors.New("index failed")
+
+// repoFixture makes a throwaway directory that looks like a Go module.
+func repoFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/x\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	return dir
 }
