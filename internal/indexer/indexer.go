@@ -178,12 +178,29 @@ type invokeResult struct {
 	path string
 }
 
+// funcInfo is one indexed body of code. Usually that's a function, but not
+// always: a package-level variable's initializer holds calls too, and they
+// execute — so it is indexed the same way and everything downstream (frames,
+// usages, callers, reachability) works on it without knowing the difference.
+//
+// obj and decl are therefore nil for an initializer. The fields below them
+// are the ones every entry has, and are what the rest of the indexer reads:
+// asking a variable for its *ast.FuncDecl is a question with no answer.
 type funcInfo struct {
 	id    TargetID
-	obj   *types.Func
-	decl  *ast.FuncDecl
+	obj   *types.Func    // nil for a package-level initializer
+	decl  *ast.FuncDecl  // nil ditto
 	pkg   *packages.Package
 	calls []*callInfo
+
+	node  ast.Node // the whole declaration — its range is the frame
+	body  ast.Node // what to walk for calls; nil when there's nothing to walk
+	title string   // display name
+	name  string   // bare identifier, for main/init checks
+	doc   string
+	// initializer marks a package-level variable rather than a function. It
+	// runs at program start, which is why it seeds reachability.
+	initializer bool
 }
 
 type callInfo struct {
@@ -278,9 +295,91 @@ func (i *Indexer) Load(dir, pattern string) error {
 					// build constraints), keep the first.
 					return true
 				}
-				i.funcs[tid] = &funcInfo{id: tid, obj: obj, decl: fd, pkg: pkg}
+				fi := &funcInfo{id: tid, obj: obj, decl: fd, pkg: pkg, node: fd, title: goTitle(obj), name: obj.Name()}
+				if fd.Body != nil {
+					fi.body = fd.Body
+				}
+				if fd.Doc != nil {
+					fi.doc = strings.TrimSpace(fd.Doc.Text())
+				}
+				i.funcs[tid] = fi
 				return true
 			})
+		}
+	})
+
+	// Pass 1b: package-level variables whose initializer contains a call.
+	//
+	// `var cmd = &cobra.Command{RunE: func(...) { client.Do() }}` holds a call
+	// that no FuncDecl contains, so pass 2 never reached it: no call site, no
+	// usage, no outbound surface, and nothing for the callers tree to walk
+	// through. It was the largest remaining blind spot, and it hides exactly
+	// the code that wires a program together.
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		if pkg.TypesInfo == nil {
+			return
+		}
+		for _, file := range pkg.Syntax {
+			for _, d := range file.Decls {
+				gd, ok := d.(*ast.GenDecl)
+				// Only var: a const initializer can't call anything, and a
+				// type or import has nothing to run.
+				if !ok || gd.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok || len(vs.Values) == 0 || len(vs.Names) == 0 {
+						continue
+					}
+					// Registering every variable would fill the index with
+					// frames for `var timeout = 5s`. Only those that actually
+					// hold calls are code worth reading as code.
+					if !containsCall(vs.Values) {
+						continue
+					}
+					obj, _ := pkg.TypesInfo.Defs[vs.Names[0]].(*types.Var)
+					if obj == nil || obj.Pkg() == nil {
+						continue
+					}
+					// A package can't declare a func and a var with the same
+					// name, so this shares one namespace with FullName safely.
+					tid := TargetID(obj.Pkg().Path() + "." + obj.Name())
+					if _, dup := i.funcs[tid]; dup {
+						continue
+					}
+					names := make([]string, 0, len(vs.Names))
+					for _, n := range vs.Names {
+						names = append(names, n.Name)
+					}
+					// A lone `var x = …` reads as Go only if the frame starts
+					// at the keyword, so the declaration is the range. Inside
+					// a `var ( … )` block it can't be — the block holds other
+					// variables — so the spec is, and the frame opens on the
+					// line itself. The body walked is the spec either way.
+					var node ast.Node = vs
+					doc := vs.Doc
+					if len(gd.Specs) == 1 {
+						node = gd
+						if gd.Doc != nil {
+							doc = gd.Doc
+						}
+					}
+					fi := &funcInfo{
+						id:          tid,
+						pkg:         pkg,
+						node:        node,
+						body:        vs,
+						title:       strings.Join(names, ", "),
+						name:        obj.Name(),
+						initializer: true,
+					}
+					if doc != nil {
+						fi.doc = strings.TrimSpace(doc.Text())
+					}
+					i.funcs[tid] = fi
+				}
+			}
 		}
 	})
 
@@ -288,7 +387,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	// an indexed function but are not a call's name token are recorded as
 	// value references (the function passed around as a value).
 	for _, fi := range i.funcs {
-		if fi.decl.Body == nil {
+		if fi.body == nil {
 			continue
 		}
 		// goLaunched collects the CallExpr that are the operand of a `go`
@@ -298,7 +397,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 		// same way: a CallExpr is visited before the Ident that names it.
 		goLaunched := make(map[*ast.CallExpr]bool)
 		callNames := make(map[*ast.Ident]bool)
-		ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
+		ast.Inspect(fi.body, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.GoStmt:
 				goLaunched[node.Call] = true
@@ -386,12 +485,12 @@ func (i *Indexer) Load(dir, pattern string) error {
 	for n := range i.bindings {
 		b := &i.bindings[n]
 		if fi := i.funcs[b.Target]; fi != nil {
-			b.TargetTitle = goTitle(fi.obj)
+			b.TargetTitle = fi.title
 		} else {
 			b.Target = "" // handler isn't an indexed function; don't offer a dead link
 		}
 		if fi := i.funcs[b.Site]; fi != nil {
-			b.SiteTitle = goTitle(fi.obj)
+			b.SiteTitle = fi.title
 		}
 	}
 	// Declared surface is folded in after the code-derived bindings, so the
@@ -585,7 +684,7 @@ func (i *Indexer) declaredBindings() []model.Binding {
 				switch {
 				case target != "":
 					b.Target = target
-					b.TargetTitle = goTitle(i.funcs[target].obj)
+					b.TargetTitle = i.funcs[target].title
 					b.Site = target
 					b.SiteTitle = b.TargetTitle
 				case len(candidates) == 0:
@@ -600,7 +699,7 @@ func (i *Indexer) declaredBindings() []model.Binding {
 					for _, c := range candidates {
 						b.Candidates = append(b.Candidates, model.Candidate{
 							TargetID: c,
-							Label:    goTitle(i.funcs[c].obj),
+							Label:    i.funcs[c].title,
 						})
 					}
 					b.Detail += fmt.Sprintf(" · %d implementations", len(candidates))
@@ -763,6 +862,9 @@ func (i *Indexer) serverImplementors(service string) map[string]bool {
 
 // receiverParts returns a method's receiver type name and package.
 func receiverParts(fi *funcInfo) (name, pkgPath string) {
+	if fi.obj == nil {
+		return "", "" // an initializer has no receiver
+	}
 	sig, _ := fi.obj.Type().(*types.Signature)
 	if sig == nil || sig.Recv() == nil {
 		return "", ""
@@ -773,7 +875,7 @@ func receiverParts(fi *funcInfo) (name, pkgPath string) {
 func (i *Indexer) implementationByName(name string) (TargetID, []TargetID) {
 	var local, any []TargetID
 	for id, fi := range i.funcs {
-		if fi.obj.Name() != name {
+		if fi.obj == nil || fi.obj.Name() != name {
 			continue
 		}
 		sig, _ := fi.obj.Type().(*types.Signature)
@@ -937,7 +1039,7 @@ func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
 	var reaching, reached map[TargetID]bool
 	if fi := i.funcs[anchor]; fi != nil {
 		sv.Anchor = anchor
-		sv.AnchorTitle = goTitle(fi.obj)
+		sv.AnchorTitle = fi.title
 		reaching = i.callersClosure(anchor)
 		reached = i.forwardClosure(map[TargetID]bool{anchor: true})
 	}
@@ -1107,6 +1209,29 @@ func (i *Indexer) computeCrossings() {
 	}
 }
 
+// containsCall reports whether any of these expressions contains a call,
+// anywhere — including inside a function literal, which is the shape that
+// matters most here (a handler or RunE closure held in a package-level var).
+func containsCall(exprs []ast.Expr) bool {
+	found := false
+	for _, e := range exprs {
+		ast.Inspect(e, func(n ast.Node) bool {
+			if found {
+				return false
+			}
+			if _, ok := n.(*ast.CallExpr); ok {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
 // nameIdent returns the identifier that names a call's function — the same
 // token nameSpan spans — or nil when there is none (IIFE, conversions).
 func nameIdent(fun ast.Expr) *ast.Ident {
@@ -1220,10 +1345,10 @@ func (i *Indexer) ownsCode(fi *funcInfo) bool {
 		// Nothing to compare against; fall back to module metadata.
 		return fi.pkg != nil && fi.pkg.Module != nil && fi.pkg.Module.Main
 	}
-	if fi.decl == nil {
+	if fi.node == nil {
 		return false
 	}
-	return underDir(i.fset.Position(fi.decl.Pos()).Filename, i.rootDir)
+	return underDir(i.fset.Position(fi.node.Pos()).Filename, i.rootDir)
 }
 
 // underDir reports whether path lies inside dir, comparing whole path
@@ -1408,12 +1533,12 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown target %q", id)
 	}
-	if fi.decl.Body == nil {
+	if fi.body == nil {
 		return nil, fmt.Errorf("target %q has no body", id)
 	}
 
-	startPos := i.fset.Position(fi.decl.Pos())
-	endPos := i.fset.Position(fi.decl.End())
+	startPos := i.fset.Position(fi.node.Pos())
+	endPos := i.fset.Position(fi.node.End())
 	src, err := i.readRange(startPos.Filename, startPos.Offset, endPos.Offset)
 	if err != nil {
 		return nil, err
@@ -1444,7 +1569,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 
 	return &Frame{
 		ID:        id,
-		Title:     goTitle(fi.obj),
+		Title:     fi.title,
 		File:      startPos.Filename,
 		Language:  "go",
 		StartLine: startPos.Line,
@@ -1485,7 +1610,7 @@ func (i *Indexer) Files() []string {
 		if fi.pkg == nil || fi.pkg.Module == nil || !fi.pkg.Module.Main {
 			continue
 		}
-		set[i.fset.Position(fi.decl.Pos()).Filename] = struct{}{}
+		set[i.fset.Position(fi.node.Pos()).Filename] = struct{}{}
 	}
 	out := make([]string, 0, len(set))
 	for f := range set {
@@ -1526,7 +1651,7 @@ func (i *Indexer) fileFrame(path string) (*Frame, error) {
 	i.mu.RLock()
 	var infos []*callInfo
 	for _, fi := range i.funcs {
-		if i.fset.Position(fi.decl.Pos()).Filename != path {
+		if i.fset.Position(fi.node.Pos()).Filename != path {
 			continue
 		}
 		infos = append(infos, fi.calls...)
@@ -1601,9 +1726,9 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 		if !ok {
 			return nil, fmt.Errorf("unknown target %q", id)
 		}
-		start := i.fset.Position(fi.decl.Pos())
+		start := i.fset.Position(fi.node.Pos())
 		srcBase, fileName, pkg = start.Offset, start.Filename, fi.pkg
-		astFile = fileContaining(fi.decl, fi.pkg)
+		astFile = fileContaining(fi.node, fi.pkg)
 	}
 	if astFile == nil || pkg == nil || pkg.TypesInfo == nil {
 		return nil, nil
@@ -1659,8 +1784,8 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 		i.mu.RLock()
 		if dfi, ok := i.funcs[fullName]; ok {
 			ti.TargetID = fullName
-			if dfi.decl.Doc != nil {
-				ti.Doc = strings.TrimSpace(dfi.decl.Doc.Text())
+			if dfi.doc != "" {
+				ti.Doc = dfi.doc
 			}
 		}
 		i.mu.RUnlock()
@@ -1732,6 +1857,24 @@ func typeDefinition(t types.Type, qual types.Qualifier) string {
 	}
 }
 
+// declType renders a target's type: a signature for a function, the declared
+// variable's type for an initializer. Both answer "what is this", which is
+// what the card asks — they just live in different halves of go/types.
+func (i *Indexer) declType(fi *funcInfo) string {
+	if fi.obj != nil {
+		return types.TypeString(fi.obj.Type(), types.RelativeTo(fi.pkg.Types))
+	}
+	vs, ok := fi.node.(*ast.ValueSpec)
+	if !ok || fi.pkg == nil || fi.pkg.TypesInfo == nil || len(vs.Names) == 0 {
+		return ""
+	}
+	obj, _ := fi.pkg.TypesInfo.Defs[vs.Names[0]].(*types.Var)
+	if obj == nil {
+		return ""
+	}
+	return types.TypeString(obj.Type(), types.RelativeTo(fi.pkg.Types))
+}
+
 // describeTarget builds the TypeInfo of a target's own declaration.
 func (i *Indexer) describeTarget(id TargetID) (*TypeInfo, error) {
 	i.mu.RLock()
@@ -1740,16 +1883,20 @@ func (i *Indexer) describeTarget(id TargetID) (*TypeInfo, error) {
 	if !ok {
 		return nil, nil
 	}
+	kind := "func"
+	if fi.initializer {
+		kind = "var"
+	}
 	ti := &TypeInfo{
-		Kind:     "func",
-		Name:     goTitle(fi.obj),
-		Type:     types.TypeString(fi.obj.Type(), types.RelativeTo(fi.pkg.Types)),
+		Kind:     kind,
+		Name:     fi.title,
+		Type:     i.declType(fi),
 		TargetID: id,
 	}
-	dp := i.fset.Position(fi.decl.Pos())
+	dp := i.fset.Position(fi.node.Pos())
 	ti.DefinedAt = fmt.Sprintf("%s:%d", dp.Filename, dp.Line)
-	if fi.decl.Doc != nil {
-		ti.Doc = strings.TrimSpace(fi.decl.Doc.Text())
+	if fi.doc != "" {
+		ti.Doc = fi.doc
 	}
 	return ti, nil
 }
@@ -1857,7 +2004,7 @@ func (i *Indexer) Usages(id TargetID) ([]model.Usage, error) {
 		usage := model.Usage{
 			Choice:      u.choice,
 			Caller:      u.parent,
-			CallerTitle: goTitle(parent.obj),
+			CallerTitle: parent.title,
 			File:        pos.Filename,
 			Line:        pos.Line,
 			Kind:        u.kind,
@@ -1868,8 +2015,8 @@ func (i *Indexer) Usages(id TargetID) ([]model.Usage, error) {
 		usage.Excerpt, usage.ExcerptLine = i.excerpt(
 			pos.Filename,
 			pos.Line,
-			i.fset.Position(parent.decl.Pos()).Line,
-			i.fset.Position(parent.decl.End()).Line,
+			i.fset.Position(parent.node.Pos()).Line,
+			i.fset.Position(parent.node.End()).Line,
 		)
 		out = append(out, usage)
 	}
@@ -1983,7 +2130,7 @@ func (i *Indexer) Search(query string, limit int) []SearchResult {
 			continue
 		}
 		fi := i.funcs[id]
-		pos := i.fset.Position(fi.decl.Pos())
+		pos := i.fset.Position(fi.node.Pos())
 		hits = append(hits, hit{
 			res: SearchResult{
 				TargetID: id,

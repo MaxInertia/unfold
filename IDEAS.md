@@ -146,12 +146,17 @@ in either column and the connected rows on the other side light. Only one
 direction is stored; the reverse is derived in the browser. It's also the
 per-repo half of transitive anchor marking at L0.
 
-Next up, in rough order of value: package-level initializers aren't indexed
-(the cobra `var cmd = &cobra.Command{RunE: …}` gap — biggest remaining
-outbound miss, and it closes the usages/callers-tree limitation too); HTTP
-edges joining across repos; third-party router recognizers; transitive anchor
-marking at L0; multiple anchors at once (the UI list is already an array — it
-needs the backend walks to take a set and union the results).
+**Package-level initializers are indexed.** A variable whose initializer holds
+a call is a target in its own right — it opens as a frame, its calls resolve,
+it appears in usages and the callers tree, and it seeds reachability the way
+`init` does. That closes the cobra `var cmd = &cobra.Command{RunE: …}` gap and
+the usages limitation with it.
+
+Next up, in rough order of value: HTTP edges joining across repos; third-party
+router recognizers; transitive anchor marking at L0 (the per-repo half now
+exists as the crossing relation); multiple anchors at once (the UI list is
+already an array — it needs the backend walks to take a set and union the
+results).
 
 ### Sketch
 

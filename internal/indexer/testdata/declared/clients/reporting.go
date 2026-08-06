@@ -44,3 +44,24 @@ func (c *archiveClient) Purge(ctx context.Context) error {
 func DeadPath(ctx context.Context) error {
 	return (&archiveClient{cc: &conn{}}).Purge(ctx)
 }
+
+const ScheduleService_Sync_FullMethodName = "/schedule.v1.ScheduleService/Sync"
+
+type scheduleClient struct{ cc *conn }
+
+func (c *scheduleClient) Sync(ctx context.Context) error {
+	return c.cc.Invoke(ctx, ScheduleService_Sync_FullMethodName, nil, nil)
+}
+
+type task struct{ run func(context.Context) error }
+
+// scheduled is the cobra shape in miniature: a package-level var holding a
+// closure that calls a client. No FuncDecl contains that call, and this is
+// not a command package, so nothing else would make it reachable — it only
+// counts because a package-level initializer runs at program start.
+var scheduled = &task{run: func(ctx context.Context) error {
+	return (&scheduleClient{cc: &conn{}}).Sync(ctx)
+}}
+
+// Keep it referenced so the package compiles cleanly.
+func Scheduled() *task { return scheduled }

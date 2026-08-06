@@ -504,7 +504,7 @@ func TestOwnershipIsByPathNotModuleMetadata(t *testing.T) {
 		}
 	}
 	for _, fi := range idx.funcs {
-		if !strings.Contains(idx.fset.Position(fi.decl.Pos()).Filename, "testdata/declared") {
+		if !strings.Contains(idx.fset.Position(fi.node.Pos()).Filename, "testdata/declared") {
 			continue
 		}
 		if !idx.ownsCode(fi) {
@@ -514,7 +514,7 @@ func TestOwnershipIsByPathNotModuleMetadata(t *testing.T) {
 	}
 	// A dependency stays a dependency.
 	for _, fi := range idx.funcs {
-		if strings.Contains(idx.fset.Position(fi.decl.Pos()).Filename, "testdata/agsdk") {
+		if strings.Contains(idx.fset.Position(fi.node.Pos()).Filename, "testdata/agsdk") {
 			if idx.ownsCode(fi) {
 				t.Errorf("%s is a dependency and must not count as this project's code", fi.id)
 			}
@@ -921,5 +921,109 @@ func TestInboundCrossesToTheCallsItCauses(t *testing.T) {
 		if len(b.Reaches) > 0 {
 			t.Errorf("the relation is stored on inbound only: %+v", b)
 		}
+	}
+}
+
+// loadInitVar indexes testdata/initvar, a command whose real work hangs off
+// package-level variables.
+func loadInitVar(t *testing.T) *Indexer {
+	t.Helper()
+	dir, err := filepath.Abs("testdata/initvar")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	idx := New()
+	if err := idx.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return idx
+}
+
+// A call inside a package-level variable's initializer is still a call. The
+// cobra shape — `var cmd = &Command{RunE: func() { ... }}` — puts real work
+// somewhere no FuncDecl contains, so walking function bodies alone missed it
+// entirely: no call site, no usage, no outbound surface, and a callers tree
+// that dead-ended at the closure.
+func TestPackageLevelInitializersAreIndexed(t *testing.T) {
+	idx := loadInitVar(t)
+
+	// The variable is a target in its own right, so the call has somewhere to
+	// hang and the callers tree has something to walk to.
+	fi := idx.funcs["example.com/initvar.syncCmd"]
+	if fi == nil {
+		t.Fatal("the package-level var holding the closure was not indexed")
+	}
+	if !fi.initializer {
+		t.Error("it should be marked as an initializer, not a function")
+	}
+	if fi.title != "syncCmd" {
+		t.Errorf("title: got %q, want syncCmd", fi.title)
+	}
+
+	// It opens as a frame — a target the callers tree can reach but nothing
+	// can display would be worse than not indexing it.
+	fr, err := idx.Frame("example.com/initvar.syncCmd")
+	if err != nil {
+		t.Fatalf("Frame: %v", err)
+	}
+	if !strings.Contains(fr.Source, "RunE:") {
+		t.Errorf("the frame should show the initializer:\n%s", fr.Source)
+	}
+	if len(fr.Calls) == 0 {
+		t.Error("the frame should carry the call sites inside the initializer")
+	}
+
+	// The call inside the closure is attributed to the variable, which is
+	// what makes "who calls pullOrders?" answerable at all.
+	usages, err := idx.Usages("example.com/initvar.pullOrders")
+	if err != nil {
+		t.Fatalf("Usages: %v", err)
+	}
+	var fromVar bool
+	for _, u := range usages {
+		if u.Caller == "example.com/initvar.syncCmd" {
+			fromVar = true
+		}
+	}
+	if !fromVar {
+		t.Errorf("pullOrders is called from syncCmd's initializer, got %+v", usages)
+	}
+
+	// A direct call in an initializer works the same as one inside a closure.
+	if idx.funcs["example.com/initvar.registry"] == nil {
+		t.Error("a var whose initializer calls a function directly should be indexed too")
+	}
+
+	// But a variable that holds no call is not code to read, and indexing it
+	// would bury the ones that are.
+	if idx.funcs["example.com/initvar.plain"] != nil {
+		t.Error("a var with no call in its initializer should not become a target")
+	}
+}
+
+// The payoff, in the shape that actually bit: a gRPC call reachable *only*
+// through a package-level initializer. It lives in `clients`, which is not a
+// command package, so the blanket "every function of a main package is an
+// entrypoint" rule can't rescue it — the edge exists because the initializer
+// itself is an entrypoint, and before this it didn't exist at all.
+func TestInitializerMakesItsCallsReachable(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	sync := findBinding(sv.Outbound, "grpc.method", "schedule.v1.ScheduleService/Sync")
+	if sync == nil {
+		t.Fatalf("the call held in a package-level var is missing: %+v", sv.Outbound)
+	}
+	if sync.SiteTitle != "scheduled" {
+		t.Errorf("the call site is the variable itself, got %q", sync.SiteTitle)
+	}
+	// The unreachable case still is: indexing initializers must not turn the
+	// reachability filter into a rubber stamp.
+	if dead := findBinding(sv.Outbound, "grpc.method", "archive.v1.ArchiveService/Purge"); dead != nil {
+		t.Errorf("a call nothing reaches should still be filtered out: %+v", dead)
+	}
+	if sv.OutboundUnreachable == 0 {
+		t.Error("the unreachable call site should still be reported")
 	}
 }

@@ -120,14 +120,14 @@ func (i *Indexer) grpcBinding(site TargetID, key string, client TargetID) model.
 		Confidence: model.ConfExact,
 	}
 	if fi := i.funcs[site]; fi != nil {
-		pos := i.fset.Position(fi.decl.Pos())
+		pos := i.fset.Position(fi.node.Pos())
 		b.File, b.Line = pos.Filename, pos.Line
 		// Set here rather than by the shared titles pass, which has already
 		// run by the time this one does.
-		b.SiteTitle = goTitle(fi.obj)
+		b.SiteTitle = fi.title
 	}
 	if fi := i.funcs[client]; fi != nil && client != site {
-		b.Detail = goTitle(fi.obj)
+		b.Detail = fi.title
 	}
 	return b
 }
@@ -173,13 +173,13 @@ func (i *Indexer) directInvokeKey(target TargetID) (string, bool) {
 		return v.path, v.path != ""
 	}
 	fi := i.funcs[target]
-	if fi == nil || fi.decl == nil || fi.decl.Body == nil || fi.pkg.TypesInfo == nil {
+	if fi == nil || fi.body == nil || fi.pkg.TypesInfo == nil {
 		i.invokeCache[target] = invokeResult{}
 		return "", false
 	}
 	info := fi.pkg.TypesInfo
 	var found []string
-	ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
+	ast.Inspect(fi.body, func(n ast.Node) bool {
 		ce, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -277,7 +277,7 @@ func (i *Indexer) entrypointReachable() map[TargetID]bool {
 	// init functions run unconditionally wherever they are, so they seed too.
 	mains := map[*packages.Package]bool{}
 	for _, fi := range i.funcs {
-		if fi.pkg != nil && fi.pkg.Name == "main" && fi.obj.Name() == "main" && i.ownsCode(fi) {
+		if fi.pkg != nil && fi.pkg.Name == "main" && fi.name == "main" && !fi.initializer && i.ownsCode(fi) {
 			mains[fi.pkg] = true
 		}
 	}
@@ -285,7 +285,12 @@ func (i *Indexer) entrypointReachable() map[TargetID]bool {
 		if !i.ownsCode(fi) {
 			continue
 		}
-		if mains[fi.pkg] || fi.obj.Name() == "init" {
+		// A package-level initializer runs at program start, unconditionally
+		// and before main — the same reason init seeds. What it *holds* may
+		// run later (a RunE closure, a registered callback), which is the
+		// same over-approximation already made for main packages above, and
+		// made for the same reason: this code exists to be run.
+		if mains[fi.pkg] || fi.name == "init" || fi.initializer {
 			seeds[id] = true
 		}
 	}

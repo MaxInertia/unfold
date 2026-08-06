@@ -40,11 +40,13 @@ Three usage kinds:
   marks the difference: ref entries are dashed/italic with a ⤳ glyph and an
   "opens bare" note, and tree nodes whose chain passes through a ref carry
   a "partial" badge.
-- **Only references inside indexed function bodies are found.** Package-level
-  initializers (`var handler = myFunc`) and struct literal defaults at
-  package scope aren't walked. This also hides outbound calls made from them —
-  a cobra `var cmd = &cobra.Command{RunE: func(...){ client.Do() }}` contains
-  a call unfold never sees, so it appears in no surface and reaches nothing.
+- **A package-level variable is indexed only if its initializer contains a
+  call.** `var cmd = &cobra.Command{RunE: func(){ client.Do() }}` is a target
+  in its own right: it opens as a frame, its calls resolve, and it shows up in
+  usages and the callers tree as the caller. Variables holding no call
+  (`var timeout = 5 * time.Second`) are skipped — they aren't code to read,
+  and indexing them would bury the ones that are. A `var handler = myFunc`
+  with no call is therefore still not walked for the value reference.
 - **TypeScript**: references inside Angular template HTML aren't covered
   (templates aren't TS AST nodes); `new Foo()` doesn't count as a usage of
   the class (constructors aren't frames); a usage inside an inline
@@ -101,7 +103,12 @@ The service view is a two-sided card, not a graph:
 
   Finally, a call site only counts if execution can **reach** it from one of
   the service's entrypoints — its route handlers, the implementations of the
-  RPCs it declares, any `init`, and every function of a valid `main` package.
+  RPCs it declares, any `init`, every package-level variable initializer, and
+  every function of a valid `main` package. Initializers run at program start,
+  unconditionally and before `main`, which is the same reason `init` seeds.
+  What one *holds* may run later — a `RunE` closure, a callback registered at
+  startup — and that's the same over-approximation made for command packages,
+  for the same reason: this code exists to be run.
   Commands count in their entirety because a command's code exists to be run,
   and much of it is reached in ways a call graph can't show: a framework
   invoking a handler, a callback registered at startup. A repo can hold a client nothing ever invokes,
