@@ -746,6 +746,25 @@ body.resizing {
   flex-basis: 2rem;
 }
 
+/* The outbounds panel. Same shape as the left sidebar — it's the mirror of
+   it, so it shares .tree-inner/.tree-header/.tree-body rather than growing a
+   parallel set of rules that would drift. */
+.out-panel {
+  flex: 0 0 280px;
+  position: sticky;
+  top: 1rem;
+  align-self: flex-start;
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.out-panel--collapsed {
+  flex-basis: 2rem;
+}
+
+
 .tree-inner {
   display: flex;
   flex-direction: column;
@@ -937,9 +956,29 @@ body.resizing {
   letter-spacing: 0.03em;
 }
 
-/* Files | Calls tab switcher in the sidebar header */
+/* Files | Calls tab switcher in the sidebar header. Wraps rather than
+   overflows: the tab strip grew past what 280px holds on one line, and a
+   clipped tab is one you can't discover. */
 .tree-tabs {
   gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+/* Count beside a tab — how many rows are waiting behind it, so you can tell
+   an empty answer from an unvisited one without clicking. */
+.tree-tab-count {
+  margin-left: 0.25rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--call-bg);
+  border: 1px solid var(--call-border);
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 500;
+}
+
+.tree-tab--active .tree-tab-count {
+  color: var(--fg);
 }
 
 .tree-tab {
@@ -1051,6 +1090,18 @@ body.resizing {
 
 .bookmark:hover {
   background: var(--call-bg);
+}
+
+/* The anchor you're currently on. Marked with a rail rather than a badge so
+   the row stays the same height as every other one and the list doesn't
+   reflow as you move between anchors. */
+.bookmark--active {
+  background: var(--call-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.bookmark--active .bookmark-name {
+  font-weight: 600;
 }
 
 .bookmark-open {
@@ -2026,6 +2077,63 @@ body.resizing {
   padding: 0;
 }
 
+/* ===== Anchor panels (entrypoints / outbounds beside the code) ===== */
+.anchor-panel {
+  padding: 0.5rem 0.6rem;
+}
+
+.anchor-panel-hint {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.anchor-panel-hint b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* A panel is a fraction of the width the service columns get, so rows stack
+   instead of trying to hold key and location on one line. */
+.anchor-panel-list .service-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.1rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.anchor-panel-list .service-item:last-child {
+  border-bottom: 0;
+}
+
+/* A panel is roughly a fifth the width the service columns get, so the row's
+   two halves stack as well. Left as a row they simply clip, and what gets cut
+   is the file:line at the end — the part that tells you where to look. */
+.anchor-panel-list .service-item-open {
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+}
+
+.anchor-panel-list .service-key {
+  overflow-wrap: anywhere;
+}
+
+.anchor-panel-list .service-item-meta {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  font-size: 0.68rem;
+}
+
+/* Badges sit under the row rather than stretching it. */
+.anchor-panel-list .service-badge {
+  align-self: flex-start;
+}
+
 /* Rows stay on one line when there's room; an outbound row carrying a
    cross-repo action wraps rather than crushing the key it's scanned by. */
 .service-item {
@@ -2478,10 +2586,19 @@ body.resizing {
   opacity: 0.12;
 }
 
+/* Counts sit in routing channels the layout keeps clear of nodes, but they
+   still cross the edges themselves. paint-order draws the halo first and the
+   glyph over it, so a number stays readable on a thick edge without needing a
+   background rect that would occlude the line. */
 .graph-edge-label {
-  fill: var(--muted);
-  font-size: 9px;
+  fill: var(--fg);
+  font-size: 10px;
+  font-weight: 600;
   text-anchor: middle;
+  paint-order: stroke fill;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 
 .graph-node {
@@ -2492,8 +2609,12 @@ body.resizing {
   border: 1px solid var(--card-border);
   border-radius: 6px;
   background: var(--card-bg);
-  padding: 0 0.35rem;
+  padding: 0 0.5rem;
   transition: opacity 0.12s ease;
+  /* Nodes sit over the edge layer, so an edge routed past one is hidden by
+     it rather than crossing it — which is what makes the reserved channels
+     read as "around" instead of "through". */
+  z-index: 1;
 }
 
 .graph-node--primary {
@@ -2528,14 +2649,14 @@ body.resizing {
 }
 
 .graph-node-name {
-  font-size: 0.76rem;
+  font-size: 0.85rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .graph-node-meta {
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   color: var(--muted);
 }
 

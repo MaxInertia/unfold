@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import type { CallID } from "./types";
+import { LEVELS, type ZoomLevel } from "./zoom";
 
 // A FrameSlice describes the *intent* for one frame in the view tree:
 // which lines are folded, and which call sites are currently expanded
@@ -70,34 +71,99 @@ interface ViewStoreCtx {
   // tree. Used to re-root onto a caller (the old view nests inside the new
   // root at the caller's call site) and to load a pre-unfolded caller chain.
   setView: (symbol: string | null, tree: FrameSlice) => void;
+  // Which rung of the zoom ladder is on screen, and — above the frame — which
+  // service the upper levels are about. Both live here rather than in App so
+  // the hash has exactly one writer: two of them race, and the loser silently
+  // drops whichever half of the state it didn't know about.
+  zoom: ZoomLevel;
+  setZoom: (z: ZoomLevel) => void;
+  service: string | null;
+  setService: (alias: string | null) => void;
+  // Picking a service *and* descending to it is one navigation, so it commits
+  // once. Two calls would cost two history entries for a single click.
+  openService: (alias: string) => void;
 }
 
 const ViewStoreContext = createContext<ViewStoreCtx | null>(null);
 
 export function ViewStoreProvider({ children }: { children: ReactNode }) {
   // Read initial state from the URL hash. The hash carries:
-  //   #symbol=<name>&v=<base64-json-of-slice-tree>
+  //   #symbol=<name>&zoom=<level>&svc=<alias>&v=<base64-json-of-slice-tree>
   const initial = useMemo(() => readHash(), []);
+  // One ref holds everything the URL encodes. Callbacks write through it
+  // rather than closing over individual pieces of state — a stale capture
+  // here doesn't misrender, it writes a hash missing whatever the closure
+  // was too old to see, which then loads back wrong.
+  const urlRef = useRef<UrlState>(initial);
   const rootRef = useRef<FrameSlice>(initial.tree);
   const [symbol, setSymbolState] = useState<string | null>(initial.symbol);
+  const [zoom, setZoomState] = useState<ZoomLevel>(initial.zoom);
+  const [service, setServiceState] = useState<string | null>(initial.service);
   const listeners = useRef<Set<() => void>>(new Set());
 
   const notify = useCallback(() => {
     for (const fn of listeners.current) fn();
   }, []);
 
-  const setSymbol = useCallback((s: string | null) => {
-    setSymbolState(s);
-  }, []);
+  // Commit a change to the URL-backed state. `mode` is the whole point:
+  // expansions replace the current entry (a hundred clicks shouldn't cost a
+  // hundred presses of back), navigations push a new one.
+  const commit = useCallback(
+    (patch: Partial<UrlState>, mode: HistoryMode) => {
+      const next = { ...urlRef.current, ...patch };
+      urlRef.current = next;
+      rootRef.current = next.tree;
+      setSymbolState(next.symbol);
+      setZoomState(next.zoom);
+      setServiceState(next.service);
+      notify();
+      writeHash(next, mode);
+    },
+    [notify],
+  );
+
+  // Opening a symbol is one navigation, so it lands in the code and drops any
+  // explicit service pick in the *same* history entry — the frame now decides
+  // which service you're in. Doing this as a separate effect (as App used to)
+  // both split it across two entries and fired on history restores, undoing
+  // the zoom level the URL had just asked for.
+  const setSymbol = useCallback(
+    (s: string | null) => {
+      commit({ symbol: s, zoom: "frame", service: null }, "push");
+    },
+    [commit],
+  );
+
+  const setZoom = useCallback(
+    (z: ZoomLevel) => {
+      if (urlRef.current.zoom === z) return;
+      commit({ zoom: z }, "push");
+    },
+    [commit],
+  );
+
+  const setService = useCallback(
+    (alias: string | null) => {
+      if (urlRef.current.service === alias) return;
+      commit({ service: alias }, "push");
+    },
+    [commit],
+  );
+
+  const openService = useCallback(
+    (alias: string) => {
+      commit({ service: alias, zoom: "service" }, "push");
+    },
+    [commit],
+  );
 
   const setView = useCallback(
     (s: string | null, tree: FrameSlice) => {
-      rootRef.current = tree;
-      setSymbolState(s);
-      notify();
-      writeHash(s, tree);
+      // Re-rooting is a lateral move, not a zoom: it replaces the view, so it
+      // earns a history entry the same way opening a symbol does.
+      commit({ symbol: s, tree, zoom: "frame", service: null }, "push");
     },
-    [notify],
+    [commit],
   );
 
   const getSlice = useCallback((path: FramePath): FrameSlice => {
@@ -115,11 +181,15 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
 
   const updatePath = useCallback(
     (path: FramePath, updater: (slice: FrameSlice) => FrameSlice) => {
-      rootRef.current = mutate(rootRef.current, path, updater);
+      const tree = mutate(rootRef.current, path, updater);
+      urlRef.current = { ...urlRef.current, tree };
+      rootRef.current = tree;
       notify();
-      writeHash(symbol, rootRef.current);
+      // Expanding is reading, not navigating — it replaces rather than pushes,
+      // or back becomes a per-click undo of every fold you ever opened.
+      writeHash(urlRef.current, "replace");
     },
-    [notify, symbol],
+    [notify],
   );
 
   const setFolds = useCallback(
@@ -251,21 +321,26 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Sync symbol changes to the URL hash too.
+  // React to back/forward. popstate covers history moves; hashchange covers a
+  // hash the user edited by hand. Both re-read rather than trying to invert
+  // the transition, so restoring is the same code path as loading a shared
+  // link — there's only one way to get from a hash to a view.
   useEffect(() => {
-    writeHash(symbol, rootRef.current);
-  }, [symbol]);
-
-  // React to back/forward — reload state if the hash changed externally.
-  useEffect(() => {
-    function onHashChange() {
+    function restore() {
       const next = readHash();
+      urlRef.current = next;
       rootRef.current = next.tree;
       setSymbolState(next.symbol);
+      setZoomState(next.zoom);
+      setServiceState(next.service);
       notify();
     }
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
+    window.addEventListener("popstate", restore);
+    window.addEventListener("hashchange", restore);
+    return () => {
+      window.removeEventListener("popstate", restore);
+      window.removeEventListener("hashchange", restore);
+    };
   }, [notify]);
 
   const ctx = useMemo<ViewStoreCtx>(
@@ -285,6 +360,11 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       symbol,
       setSymbol,
       setView,
+      zoom,
+      setZoom,
+      service,
+      setService,
+      openService,
     }),
     [
       getSlice,
@@ -302,6 +382,11 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       symbol,
       setSymbol,
       setView,
+      zoom,
+      setZoom,
+      service,
+      setService,
+      openService,
     ],
   );
 
@@ -357,10 +442,29 @@ function mutate(
 
 // ----- URL hash encode/decode -----
 
-function readHash(): { symbol: string | null; tree: FrameSlice } {
-  if (typeof location === "undefined") return { symbol: null, tree: emptySlice };
+// Everything the URL round-trips. A history entry is a whole view-state, not
+// just a position: coming forward to a lateral move has to restore the trace
+// that was built there, not only where the cursor was.
+export interface UrlState {
+  symbol: string | null;
+  zoom: ZoomLevel;
+  service: string | null;
+  tree: FrameSlice;
+}
+
+type HistoryMode = "push" | "replace";
+
+function readHash(): UrlState {
+  if (typeof location === "undefined") {
+    return { symbol: null, zoom: "frame", service: null, tree: emptySlice };
+  }
   const params = new URLSearchParams(location.hash.slice(1));
   const symbol = params.get("symbol");
+  const service = params.get("svc");
+  // An unknown level would strand the UI on a rung nothing renders, so a
+  // hand-edited or stale value falls back rather than being trusted.
+  const raw = params.get("zoom");
+  const zoom = LEVELS.includes(raw as ZoomLevel) ? (raw as ZoomLevel) : "frame";
   const v = params.get("v");
   let tree: FrameSlice = emptySlice;
   if (v) {
@@ -370,22 +474,29 @@ function readHash(): { symbol: string | null; tree: FrameSlice } {
       // ignore — invalid encoding, start fresh
     }
   }
-  return { symbol, tree };
+  return { symbol, zoom, service, tree };
 }
 
-function writeHash(symbol: string | null, tree: FrameSlice): void {
+function writeHash(state: UrlState, mode: HistoryMode): void {
   if (typeof location === "undefined") return;
   const params = new URLSearchParams();
-  if (symbol) params.set("symbol", symbol);
-  if (hasState(tree)) {
-    const json = JSON.stringify(tree);
+  if (state.symbol) params.set("symbol", state.symbol);
+  // "frame" is the default, so leaving it out keeps the common link short.
+  if (state.zoom !== "frame") params.set("zoom", state.zoom);
+  if (state.service) params.set("svc", state.service);
+  if (hasState(state.tree)) {
+    const json = JSON.stringify(state.tree);
     // base64 keeps it URL-safe and lets us avoid escaping JSON punctuation.
     params.set("v", btoa(unescape(encodeURIComponent(json))));
   }
   const hash = "#" + params.toString();
   if (hash === location.hash) return;
-  // history.replaceState avoids polluting the back stack on every click.
-  history.replaceState(null, "", location.pathname + location.search + hash);
+  const url = location.pathname + location.search + hash;
+  // A push that lands on the state we're already showing is a duplicate the
+  // user has to press back through twice, so identical hashes are dropped
+  // above regardless of mode.
+  if (mode === "push") history.pushState(null, "", url);
+  else history.replaceState(null, "", url);
 }
 
 function hasState(slice: FrameSlice): boolean {

@@ -134,6 +134,27 @@ so the two stay separate. Value references aren't followed in either
 direction — a function passed as a value has no call site, so a chain through
 one isn't an execution path.
 
+The **saved anchors** list sits at the top of the sidebar (the ☆ in a frame
+header adds one, and they persist per project). Since the anchor is whatever
+frame is open, clicking an entry re-anchors every level at once, and the entry
+you're currently on is marked.
+
+### Both directions, without leaving the code
+
+You usually want to know what reaches a function *while reading it*, not after
+zooming away. So the two anchor walks also render beside the frame:
+
+- **entrypoints** — a sidebar tab at the frame level, listing the inbound
+  bindings that reach the anchor.
+- **outbounds** — a panel on the right, listing the outbound calls the anchor
+  reaches. Collapsed by default; the rail on the right edge opens it.
+
+Neither fetches anything new. They're the same `/api/service` response the
+service level renders in columns, filtered by the reachability flags already
+on it, so the three views can't disagree. An empty panel says which kind of
+empty it is — no surface recognized, no anchor, or a walk that ran and found
+nothing.
+
 ### What the service declares about itself
 
 If the repo root has a `microservice.yaml`, unfold reads it. Declared facts are
@@ -322,10 +343,32 @@ service carries an **index** button that reads just that one.
 The overview is a **layered graph**: dependency direction runs left to right,
 so the shape itself is the information — which services are entry points,
 which are shared leaves, how deep the platform is. Edge thickness is the
-number of RPCs along it. An edge pointing against the layering is a cycle and
-is drawn dashed rather than quietly reordered. Layout is deterministic (layer
-assignment plus barycenter ordering, no force simulation) so the picture is
-the same every load and can be talked about.
+number of RPCs along it. Layout is deterministic (cycle breaking, layer
+assignment, barycenter ordering — no force simulation) so the picture is the
+same every load and can be talked about.
+
+Two things the layering has to get right, because both make it lie otherwise:
+
+- **Edges that skip a layer are routed, not drawn straight.** With `A→B→C` and
+  `A→C`, a straight `A→C` runs through B's column and arrives at C from the
+  same direction B's edge does, so the picture reads as "A stops at B". Long
+  edges are broken into per-layer waypoints that take their own row in the
+  ordering, so `A→C` visibly bends around B and a node can never be stacked on
+  top of an edge.
+- **Cycles are broken before layering, preferring the lightest edge.** Left in,
+  a single back edge inflates the depth of everything downstream: a
+  `ledger→orders` call pushes `orders` past `billing` and `ledger`, and
+  `gateway→orders` then has to snake across the whole graph to reach a service
+  one hop away. The search starts at services nothing calls and walks heaviest
+  edges first, so the loop is closed by the call carrying one RPC rather than
+  the one carrying twelve. Back edges are drawn dashed and bowed clear of the
+  layout.
+
+Edge counts appear on demand — hovering a service, or an anchor lighting a
+path — rather than on every edge at once, and they sit in the routing channels
+the layout keeps clear of nodes. Printing every number always was clutter you
+had to read past, and hovering then added more of it on top of the very nodes
+you were trying to read.
 
 The **anchor carries up to this level too**. Zoom out from a frame and the
 services whose calls lead to it are lit while the rest dim — the same question
@@ -345,10 +388,29 @@ destination doesn't.
 ### The sidebar follows the level
 
 Above the frame there is no call tree to show, so the sidebar stops being
-files/calls/callers/notes and becomes the **filter panel** — text, reach
-(public/platform/internal) and "only entrypoints reaching the anchor" at the
-service level, a service filter at the platform level. Filtering is one
+files/calls/callers/entrypoints/notes and becomes the **filter panel** — text,
+reach (public/platform/internal) and "only entrypoints reaching the anchor" at
+the service level, a service filter at the platform level. Filtering is one
 mechanism across both upper levels rather than two bolted onto each view.
+
+### The URL carries the level, and history carries the moves
+
+The hash encodes the whole view-state — `#symbol=…&zoom=…&svc=…&v=…` — so a
+zoomed-out view is shareable and survives a reload, not just a frame.
+
+The two axes stay separate, as the trail and history always meant to:
+
+- **The trail is vertical.** Zooming never destroys what you came from, so
+  clicking back down it is already the undo for a zoom.
+- **History is lateral.** **alt+←/→** (or the browser's own back/forward) undo
+  the moves that genuinely replace state — opening a symbol, re-rooting
+  through a caller, picking a service — and cover zooms too, as a safety net.
+
+Which transitions push is the whole design: expanding a call `replaceState`s,
+because reading isn't navigating and back shouldn't be a per-click undo of
+every fold you ever opened. Navigations `pushState`, and each is committed
+once — opening a symbol sets the frame level and clears the service pick in a
+*single* entry rather than three you have to press back through.
 
 ### Limitations
 
@@ -363,6 +425,9 @@ mechanism across both upper levels rather than two bolted onto each view.
   which doesn't exist yet.
 - **A lazy workspace searches only what it has indexed.** Opening something in
   a repo indexes it and it stays in the results afterwards.
+- **One anchor at a time.** The anchor is whatever frame is open, so the saved
+  list re-anchors rather than accumulating. Marking several at once needs the
+  backend walks to accept a set and union the results.
 
 ## Diff mode
 

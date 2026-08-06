@@ -15,7 +15,7 @@ export type KeyLike = {
   shiftKey: boolean;
 };
 
-export type KeyScope = "zoom" | "reading" | "search" | "notes";
+export type KeyScope = "zoom" | "history" | "reading" | "search" | "notes";
 
 export interface Keybinding {
   id: string;
@@ -62,6 +62,25 @@ export const KEYBINDINGS: Keybinding[] = [
     description: "zoom back into the code (your expansion state is untouched)",
     matches: withAlt("ArrowDown"),
   },
+  // Vertical movement is the trail (alt+↑/↓); horizontal is history. Keeping
+  // them on separate axes is the point: back/forward undoes *lateral* moves —
+  // re-rooting, switching an impl, opening a service — and only doubles as a
+  // zoom undo as a safety net, so there aren't two gestures for "go back"
+  // that disagree about what they'll do.
+  {
+    id: "history.back",
+    scope: "history",
+    keys: ["alt", "←"],
+    description: "go back to the previous view (re-roots, zooms, opened services)",
+    matches: withAlt("ArrowLeft"),
+  },
+  {
+    id: "history.forward",
+    scope: "history",
+    keys: ["alt", "→"],
+    description: "go forward again after going back",
+    matches: withAlt("ArrowRight"),
+  },
   {
     id: "search.openFirst",
     scope: "search",
@@ -97,6 +116,7 @@ export function matches(id: string, e: KeyLike): boolean {
 
 export const SCOPE_LABELS: Record<KeyScope, string> = {
   zoom: "zoom",
+  history: "history",
   reading: "reading",
   search: "search",
   notes: "notes",

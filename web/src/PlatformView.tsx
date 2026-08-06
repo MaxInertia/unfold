@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchPlatformView, indexRepo } from "./api";
-import { edgePath, layout, NODE_H, NODE_W } from "./platformLayout";
+import { edgePath, labelPoint, layout, NODE_H, NODE_W } from "./platformLayout";
 import type { PlatformEdge, PlatformService, PlatformView as PlatformViewT, TargetID } from "./types";
 
 // The L0 (platform) zoom level: every service in the workspace and the calls
@@ -115,6 +115,13 @@ export function PlatformView({
   );
 }
 
+// Roughly what's left below the header, search box and graph chrome. A floor
+// keeps a short window from squashing the graph rather than scrolling it.
+function availableHeight(): number {
+  if (typeof window === "undefined") return 0;
+  return Math.max(380, window.innerHeight - 280);
+}
+
 function edgeCounts(view: PlatformViewT, alias: string) {
   const out = view.edges.filter((e) => e.from === alias);
   const inc = view.edges.filter((e) => e.to === alias);
@@ -141,7 +148,16 @@ function Graph({
   onIndex: (alias: string) => void;
 }) {
   const [hover, setHover] = useState<string | null>(null);
-  const l = useMemo(() => layout(services, edges), [services, edges]);
+  // How much height the graph may spread into. Measured from the window
+  // rather than the container because the container is sized *by* the graph —
+  // reading it back would be circular.
+  const [room, setRoom] = useState(() => availableHeight());
+  useEffect(() => {
+    const onResize = () => setRoom(availableHeight());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const l = useMemo(() => layout(services, edges, room), [services, edges, room]);
 
   // Hovering a service dims everything it isn't connected to. That's the
   // filtering that keeps a large workspace readable without hiding anything.
@@ -166,6 +182,9 @@ function Graph({
     if (hover !== null) return e.from !== hover && e.to !== hover;
     return anchored && !e.reachesAnchor;
   };
+  // Only label edges once something has narrowed the picture — hovering a
+  // service, or an anchor that lit a path through it.
+  const showLabels = hover !== null || anchored;
 
   return (
     <div className="graph-scroll">
@@ -173,6 +192,13 @@ function Graph({
         <svg className="graph-edges" width={l.width} height={l.height} aria-hidden="true">
           {l.edges.map((e) => {
             const faded = dimEdge(e.edge);
+            // Counts are shown on demand, not always. Stroke width already
+            // carries weight at a glance; printing every number on every edge
+            // was clutter you had to read past, and hovering then added more
+            // of it. Now hovering is what *reveals* the counts, for the
+            // handful of edges you asked about.
+            const label = !faded && showLabels && e.edge.calls.length > 1;
+            const at = label ? labelPoint(e) : null;
             return (
               <g key={`${e.edge.from}->${e.edge.to}:${e.edge.kind}`}>
                 <path
@@ -184,12 +210,8 @@ function Graph({
                   // edge; one RPC and twenty shouldn't look the same.
                   strokeWidth={Math.min(4, 1 + Math.log2(e.edge.calls.length + 1))}
                 />
-                {!faded && e.edge.calls.length > 1 && (
-                  <text
-                    className="graph-edge-label"
-                    x={(e.from.x + NODE_W + e.to.x) / 2}
-                    y={(e.from.y + e.to.y) / 2 + NODE_H / 2 - 4}
-                  >
+                {at && (
+                  <text className="graph-edge-label" x={at.x} y={at.y + 3}>
                     {e.edge.calls.length}
                   </text>
                 )}

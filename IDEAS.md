@@ -117,13 +117,22 @@ Extend unfolding past the boundary of a single repository, so a reading session 
 
 Full design record in the vault: `docs/2026-08-05-unfold-platform-graph.md`.
 
-### Status — 2026-08-06, branch `feat/platform-service-view` (27 commits, unmerged)
+### Status — 2026-08-06, branch `feat/platform-service-view` (unmerged)
 
 Well past the original slice: L1 service view, the declared tier
 (`microservice.yaml` + protos, `--proto-root` pickable in-browser), workspaces
 (`--workspace`, `<repo>::<id>` ids, lazy/eager indexing, cross-repo jump into
 the implementation), the L0 platform graph, and the anchor at every level in
 both directions.
+
+Since then: the zoom level and service pick live in the URL, with navigations
+pushing history and expansions replacing it (alt+←/→); the two anchor walks
+render beside the code as an **entrypoints** sidebar tab and an **outbounds**
+right panel, which is the L1.5 rung arriving as panels rather than a screen;
+the saved-anchor list marks the live anchor; and the L0 graph routes
+layer-skipping edges around intermediate nodes, breaks cycles before layering
+(sacrificing the lightest edge), and shows edge counts on demand in channels
+kept clear of nodes.
 
 **Read the vault doc before touching outbound gRPC**:
 `docs/2026-08-05-unfold-platform-graph.md`. It records the rule set, why each
@@ -134,8 +143,9 @@ aliasing on id qualification).
 Next up, in rough order of value: package-level initializers aren't indexed
 (the cobra `var cmd = &cobra.Command{RunE: …}` gap — biggest remaining
 outbound miss, and it closes the usages/callers-tree limitation too); HTTP
-edges joining across repos; zoom level in the URL; third-party router
-recognizers; transitive anchor marking at L0.
+edges joining across repos; third-party router recognizers; transitive anchor
+marking at L0; multiple anchors at once (the UI list is already an array — it
+needs the backend walks to take a set and union the results).
 
 ### Sketch
 
