@@ -67,3 +67,47 @@ var _ InventoryServiceClient = (*inventoryServiceClient)(nil)
 func (s *Server) chargeCustomer(ctx context.Context) error {
 	return (&billingServiceClient{cc: &grpcConn{}}).Charge(ctx)
 }
+
+// --- shapes that must NOT become outbound edges, or must not double up ---
+
+// annotate stands in for grpc-gateway's runtime.AnnotateContext, which takes a
+// method path as an ordinary argument. It issues no RPC; passing the string
+// around is not calling it.
+func annotate(ctx context.Context, method string) context.Context {
+	_ = method
+	return ctx
+}
+
+const DupService_Ping_FullMethodName = "/dup.v1.DupService/Ping"
+
+// Two generated clients for the same RPC, as happens when generated code is
+// duplicated across packages. One call site should still be one row.
+type dupServiceClient struct{ cc *grpcConn }
+
+func (c *dupServiceClient) Ping(ctx context.Context) error {
+	return c.cc.Invoke(ctx, DupService_Ping_FullMethodName, nil, nil)
+}
+
+type dupServiceAltClient struct{ cc *grpcConn }
+
+func (c *dupServiceAltClient) Ping(ctx context.Context) error {
+	return c.cc.Invoke(ctx, DupService_Ping_FullMethodName, nil, nil)
+}
+
+// serveWithGateway passes a method path around without calling anything, and
+// pings through both duplicate clients.
+func (s *Server) serveWithGateway(ctx context.Context) error {
+	ctx = annotate(ctx, "/ai_assistants.v1.Assistants/ListAssistants")
+	if err := (&dupServiceClient{cc: &grpcConn{}}).Ping(ctx); err != nil {
+		return err
+	}
+	return (&dupServiceAltClient{cc: &grpcConn{}}).Ping(ctx)
+}
+
+// deadPath calls a client, but nothing calls deadPath and it is not an
+// entrypoint — so the call site exists yet execution never arrives. This is
+// what the reachability filter excludes, as opposed to a stub with no callers
+// at all, which never produces a site in the first place.
+func (s *Server) deadPath(ctx context.Context) error {
+	return (&inventoryServiceClient{cc: &grpcConn{}}).Reserve(ctx)
+}

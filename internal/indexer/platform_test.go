@@ -647,3 +647,118 @@ func TestOnlyReachableCallSitesAreOutboundEdges(t *testing.T) {
 		}
 	}
 }
+
+// A method path handed to a function that issues no RPC is not a call.
+// grpc-gateway's runtime.AnnotateContext takes one as an ordinary argument,
+// and an earlier approach — matching any call site passing a path-shaped
+// literal — turned every one of those into an outbound edge.
+func TestPassingAMethodPathAroundIsNotACall(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	for _, b := range sv.Outbound {
+		if b.Key == "ai_assistants.v1.Assistants/ListAssistants" {
+			t.Errorf("a path passed to a non-RPC helper became an edge at %q", b.SiteTitle)
+		}
+	}
+}
+
+// Generated code duplicated across packages gives a repo several client types
+// per service. One call site calling one RPC is one edge regardless.
+func TestDuplicateClientsProduceOneEdgePerCallSite(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	var rows []string
+	for _, b := range sv.Outbound {
+		if b.Key == "dup.v1.DupService/Ping" {
+			rows = append(rows, b.SiteTitle)
+		}
+	}
+	if len(rows) != 1 {
+		t.Errorf("expected one row for one call site, got %d: %v", len(rows), rows)
+	}
+}
+
+// A call made only while serving a declared RPC is reachable only if the
+// declared surface has been built when reachability is seeded. This pins the
+// pass ordering: run the outbound pass first and a gRPC-only service loses
+// every edge it has, silently.
+func TestDeclaredHandlersSeedReachability(t *testing.T) {
+	idx := loadDeclared(t, "testdata/protoroot")
+
+	// The seed set must contain the implementation of a declared RPC.
+	reach := idx.entrypointReachable()
+	if reach == nil {
+		t.Fatal("expected entrypoints to be recognized in this fixture")
+	}
+	impl, err := idx.LookupSymbol("(*example.com/conversation.Server).GetConversation")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	if !reach[impl] {
+		t.Error("the implementation of a declared RPC must be an entrypoint")
+	}
+
+	sv, err := idx.ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	if findBinding(sv.Outbound, "grpc.method", "search.v1.SearchService/Query") == nil {
+		t.Error("a call made while serving an RPC should be an outbound edge")
+	}
+}
+
+// Call ids were keyed on the call expression's start position, so in a chained
+// call the outer call and the inner one shared an id and one silently replaced
+// the other — losing a usage, and the caller edge with it. That degraded the
+// callers tree generally, not just the platform surface.
+func TestChainedCallsAreIndexedSeparately(t *testing.T) {
+	idx := loadDeclared(t, "testdata/protoroot")
+	// listAccounts is `return agsdk.New().GetMulti(ctx)`: two calls starting
+	// at the same token.
+	target, err := idx.LookupSymbol("(*example.com/agsdk.Client).GetMulti")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	usages, err := idx.Usages(target)
+	if err != nil {
+		t.Fatalf("Usages: %v", err)
+	}
+	var found bool
+	for _, u := range usages {
+		if u.CallerTitle == "Server.listAccounts" {
+			found = true
+		}
+	}
+	if !found {
+		var callers []string
+		for _, u := range usages {
+			callers = append(callers, u.CallerTitle)
+		}
+		t.Errorf("the chained call's usage was lost; callers were %v", callers)
+	}
+}
+
+// Excluded call sites are counted so an empty column can be told apart from a
+// router unfold can't read. Silence about a dropped surface is the failure
+// mode that looks like success.
+func TestUnreachableCallSitesAreCounted(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	// The fixture has a function that calls a client but which nothing
+	// reaches — a call site execution never arrives at. That's distinct from
+	// a stub with no callers, which produces no site to begin with.
+	if sv.OutboundUnreachable == 0 {
+		t.Error("an unreachable call site should be reported as excluded, not silently dropped")
+	}
+	for _, b := range sv.Outbound {
+		if b.SiteTitle == "Server.deadPath" {
+			t.Errorf("an unreachable call site should not be an edge: %+v", b)
+		}
+	}
+}

@@ -11,6 +11,23 @@ import (
 // Outbound gRPC edges, derived from the call graph rather than from scanning
 // for literals.
 //
+// Every rule below exists because its absence produced a wrong answer against
+// a real repository, and each is pinned by a test in platform_test.go:
+//
+//   - a path passed to a helper that issues no RPC is not a call
+//     (TestPassingAMethodPathAroundIsNotACall)
+//   - a generated stub nothing calls is capability, not usage
+//     (TestGeneratedClientStubsAreNotOutboundEdges)
+//   - a call site execution never reaches is not a call, and the exclusion is
+//     counted rather than silent (TestOnlyReachableCallSitesAreOutboundEdges,
+//     TestUnreachableCallSitesAreCounted)
+//   - declared RPC implementations are entrypoints, so the pass must run after
+//     the declared surface (TestDeclaredHandlersSeedReachability)
+//   - duplicated generated clients still make one edge per call site
+//     (TestDuplicateClientsProduceOneEdgePerCallSite)
+//   - the edge belongs to the caller, not to intermediate frames or distant
+//     ones (TestGRPCThroughAHandWrittenSDK, TestDistantCallersAreNotOutboundEdges)
+//
 // The earlier approach asked "does this call site reach a method path?" and
 // then needed a filter for every way that question answers wrongly: a depth
 // bound because chains reach everything, a uniqueness rule because a function
@@ -54,6 +71,19 @@ func (i *Indexer) grpcOutbound() ([]model.Binding, int) {
 		return false
 	}
 
+	// One call site calling one RPC is one edge, however many client types
+	// stand for that RPC. Generated code duplicated across packages gives a
+	// repo several clients per service, and each was producing its own row.
+	seen := map[[2]string]bool{}
+	emit := func(out []model.Binding, site TargetID, key string, client TargetID) []model.Binding {
+		k := [2]string{string(site), key}
+		if seen[k] {
+			return out
+		}
+		seen[k] = true
+		return append(out, i.grpcBinding(site, key, client))
+	}
+
 	var out []model.Binding
 	for id := range i.funcs {
 		key, ok := i.directInvokeKey(id)
@@ -65,7 +95,7 @@ func (i *Indexer) grpcOutbound() ([]model.Binding, int) {
 		// callers are ordinary callers, not the ones making the request.
 		if i.ownsCode(i.funcs[id]) && !i.isGeneratedClient(id) {
 			if keep(id) {
-				out = append(out, i.grpcBinding(id, key, id))
+				out = emit(out, id, key, id)
 			}
 			continue
 		}
@@ -73,7 +103,7 @@ func (i *Indexer) grpcOutbound() ([]model.Binding, int) {
 		// invokes it from this project.
 		for _, site := range i.ownedCallersOf(id) {
 			if keep(site) {
-				out = append(out, i.grpcBinding(site, key, id))
+				out = emit(out, site, key, id)
 			}
 		}
 	}

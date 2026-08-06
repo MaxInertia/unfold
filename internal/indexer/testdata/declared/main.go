@@ -70,5 +70,6 @@ func main() {
 	_ = (&Server{}).listAccounts(context.Background())
 	(&Server{}).wireUp()
 	_ = (&Server{}).chargeCustomer(context.Background())
+	_ = (&Server{}).serveWithGateway(context.Background())
 	_ = (&Server{}).refresh(context.Background())
 }
