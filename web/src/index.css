@@ -548,6 +548,71 @@ body.resizing {
   margin: 0.35rem 0 0.55rem 0;
 }
 
+/* ===== Elided frames =====
+   An intermediate frame whose body is hidden while what it expanded into
+   stays. The bar has to stay visible and legible: it is the only thing
+   preventing the view from claiming the caller reaches the grandchild
+   directly, which would be a quiet lie about the call chain. Kept low
+   enough that a chain of several elisions doesn't out-shout the code. */
+.frame--elided {
+  display: block;
+  margin: 0.2rem 0 0.35rem;
+  border-left: 2px dashed var(--depth-color, var(--card-border));
+  padding-left: 0.4rem;
+}
+
+.elide-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.elide-restore {
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  padding: 0 0.3rem;
+  cursor: pointer;
+}
+
+.elide-restore:hover {
+  color: var(--fg);
+  border-color: var(--call-border);
+}
+
+.elide-through b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* An elided frame's children shouldn't inherit the indent step its body
+   would have had — the point is to bring the two ends together. */
+.frame--elided > .inline-child {
+  margin-top: 0.15rem;
+}
+
+.frame-elide {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0 0.25rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.frame-elide:hover {
+  color: var(--fg);
+  background: var(--call-bg);
+}
+
 .frame-error {
   color: var(--error);
   padding: 0.3rem 0.5rem;

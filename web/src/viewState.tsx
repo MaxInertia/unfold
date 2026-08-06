@@ -18,6 +18,15 @@ import { LEVELS, type ZoomLevel } from "./zoom";
 export interface FrameSlice {
   folds: [number, number][]; // [start, end] inclusive line indices
   expansions: Record<CallID, FrameSlice & { choice: number }>;
+  // Elided: this frame's own source is hidden, but what it expands into is
+  // not — the children render in its place. It is deliberately *not* the same
+  // as collapsing, which would take the children with it. Eliding is how you
+  // bring two distant frames next to each other: with A → B → C all open,
+  // eliding B puts C directly under A's call site.
+  //
+  // It lives here rather than in component state because it's part of the
+  // view — a shared link should reproduce what the sender was looking at.
+  elided?: boolean;
   // Fan-out calls: a record exists per call whose receiver list is open;
   // each expanded receiver index maps to its own nested slice. Many can be
   // open at once (unlike `expansions`, one child per call).
@@ -56,6 +65,9 @@ interface ViewStoreCtx {
   // collapse a frame's whole subtree (expansions + fanouts; folds stay).
   expandMany: (path: FramePath, callIds: CallID[]) => void;
   clearChildren: (path: FramePath) => void;
+  // Hide a frame's own source while keeping what it expanded into. See
+  // FrameSlice.elided.
+  setElided: (path: FramePath, elided: boolean) => void;
   // Fan-out calls: open/close the receiver list, and expand/collapse each
   // receiver (many can be open at once).
   openFanout: (path: FramePath, callId: CallID) => void;
@@ -236,7 +248,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       updatePath(path, (s) => {
         const next = { ...s.expansions };
         delete next[callId];
-        return { ...s, expansions: next };
+        return dropDeadElision({ ...s, expansions: next });
       });
     },
     [updatePath],
@@ -247,6 +259,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       updatePath(path, (s) => {
         if (Object.keys(s.expansions).length === 0 && !s.fanouts) return s;
         // Keep folds — they're this frame's own state, not its subtree.
+        // The elision goes, because it only ever described a subtree.
         return { folds: s.folds, expansions: {} };
       });
     },
@@ -262,6 +275,20 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
           expansions[id] = { folds: [], expansions: {}, choice: 0 };
         }
         return { ...s, expansions };
+      });
+    },
+    [updatePath],
+  );
+
+  const setElided = useCallback(
+    (path: FramePath, elided: boolean) => {
+      updatePath(path, (s) => {
+        if (!!s.elided === elided) return s;
+        if (!elided) {
+          const { elided: _drop, ...rest } = s;
+          return rest;
+        }
+        return { ...s, elided: true };
       });
     },
     [updatePath],
@@ -308,7 +335,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
         if (!cur || !(index in cur)) return s;
         const next = { ...cur };
         delete next[index];
-        return { ...s, fanouts: { ...s.fanouts, [callId]: next } };
+        return dropDeadElision({ ...s, fanouts: { ...s.fanouts, [callId]: next } });
       });
     },
     [updatePath],
@@ -352,6 +379,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       collapse,
       expandMany,
       clearChildren,
+      setElided,
       openFanout,
       closeFanout,
       expandReceiver,
@@ -374,6 +402,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       collapse,
       expandMany,
       clearChildren,
+      setElided,
       openFanout,
       closeFanout,
       expandReceiver,
@@ -406,6 +435,19 @@ export function useFrameSlice(path: FramePath): FrameSlice {
   const [, setTick] = useState(0);
   useEffect(() => store.subscribe(() => setTick((n) => n + 1)), [store]);
   return store.getSlice(path);
+}
+
+// An elision with nothing left under it describes nothing: the frame renders
+// its body again, and a stale flag would silently re-hide it the moment
+// something was expanded there next. Closing the last child clears it.
+function dropDeadElision(s: FrameSlice): FrameSlice {
+  if (!s.elided) return s;
+  const children =
+    Object.keys(s.expansions).length +
+    Object.values(s.fanouts ?? {}).reduce((n, r) => n + Object.keys(r).length, 0);
+  if (children > 0) return s;
+  const { elided: _drop, ...rest } = s;
+  return rest;
 }
 
 function mutate(
@@ -502,6 +544,7 @@ function writeHash(state: UrlState, mode: HistoryMode): void {
 function hasState(slice: FrameSlice): boolean {
   return (
     slice.folds.length > 0 ||
+    !!slice.elided ||
     Object.keys(slice.expansions).length > 0 ||
     Object.keys(slice.fanouts ?? {}).length > 0
   );
