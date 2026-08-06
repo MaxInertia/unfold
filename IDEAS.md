@@ -152,11 +152,16 @@ it appears in usages and the callers tree, and it seeds reachability the way
 `init` does. That closes the cobra `var cmd = &cobra.Command{RunE: …}` gap and
 the usages limitation with it.
 
+**Anchor marking at L0 is transitive.** With `gateway → inbox → conversation`
+and the anchor in conversation, gateway is marked even though it never calls
+conversation — propagation is a fixpoint over the service graph, seeded by the
+crossing relation per repo. It tracks *which inbound keys* lead onward
+separately from *whether the service reaches*, so a call made from a service's
+own `init` marks that service without lighting its callers.
+
 Next up, in rough order of value: HTTP edges joining across repos; third-party
-router recognizers; transitive anchor marking at L0 (the per-repo half now
-exists as the crossing relation); multiple anchors at once (the UI list is
-already an array — it needs the backend walks to take a set and union the
-results).
+router recognizers; multiple anchors at once (the UI list is already an array
+— it needs the backend walks to take a set and union the results).
 
 ### Sketch
 

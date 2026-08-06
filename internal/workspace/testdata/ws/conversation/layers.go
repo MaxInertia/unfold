@@ -42,3 +42,8 @@ func (m *MockConversationServiceServer) StreamConversation(ctx context.Context) 
 func (s *ConversationServer) reachMe() {}
 
 var _ ConversationServiceServer = (*ConversationServer)(nil)
+
+// notCalled is reached by no RPC of this service, so nothing outside it can
+// lead here. It exists to keep transitive marking honest: propagation must
+// follow which key was actually hit, not merely who calls whom.
+func (s *ConversationServer) notCalled() {}

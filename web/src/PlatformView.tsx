@@ -83,10 +83,14 @@ export function PlatformView({
           </span>
         )}
         {/* Say what's missing rather than letting an unindexed service read
-            as one that calls nothing. */}
+            as one that calls nothing. With an anchor this matters more than
+            it looks: reach is transitive, so an unindexed service in the
+            middle of a chain breaks it, and everything behind that service
+            goes unmarked — which is indistinguishable from not reaching. */}
         {unindexed > 0 && (
           <span className="platform-warn">
             {unindexed} not indexed — their outgoing calls are unknown until they are
+            {view.anchorTitle && ", so a service reaching the anchor through one of them isn't marked"}
           </span>
         )}
       </header>

@@ -19,10 +19,21 @@ func (c *conversationServiceClient) GetConversation(ctx context.Context) error {
 	return c.cc.Invoke(ctx, ConversationService_GetConversation_FullMethodName, nil, nil)
 }
 
+// InboxServiceServer is the generated server interface for the RPC this
+// service declares in its manifest.
+type InboxServiceServer interface {
+	ShowThread(ctx context.Context) error
+}
+
 type Server struct{ convo *conversationServiceClient }
 
-func (s *Server) showThread(ctx context.Context) error {
+// ShowThread implements inbox.v1.InboxService. Serving it calls conversation,
+// which is what makes a caller of *this* RPC transitively reach anything
+// inside conversation.
+func (s *Server) ShowThread(ctx context.Context) error {
 	return s.convo.GetConversation(ctx)
 }
 
-func main() { _ = (&Server{}).showThread(context.Background()) }
+var _ InboxServiceServer = (*Server)(nil)
+
+func main() { _ = (&Server{}).ShowThread(context.Background()) }

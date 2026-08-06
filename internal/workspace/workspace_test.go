@@ -38,11 +38,11 @@ func TestDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(dirs) != 2 {
-		t.Fatalf("expected 2 modules, got %v", dirs)
+	if len(dirs) != 3 {
+		t.Fatalf("expected 3 modules, got %v", dirs)
 	}
 	for _, d := range dirs {
-		if base := filepath.Base(d); base != "conversation" && base != "inbox" {
+		if base := filepath.Base(d); base != "conversation" && base != "inbox" && base != "gateway" {
 			t.Errorf("unexpected repo %q", d)
 		}
 	}
@@ -83,8 +83,8 @@ func TestOutboundResolvesToServingRepo(t *testing.T) {
 		t.Errorf("served by: got %q/%q, want conversation", out.ServedBy, out.ServedByRepo)
 	}
 	// The local caller stays reachable — that's the other half of the row.
-	if out.SiteTitle != "Server.showThread" {
-		t.Errorf("caller: got %q, want Server.showThread", out.SiteTitle)
+	if out.SiteTitle != "Server.ShowThread" {
+		t.Errorf("caller: got %q, want Server.ShowThread", out.SiteTitle)
 	}
 }
 
@@ -192,7 +192,7 @@ func TestLazyDefersIndexingUntilResolve(t *testing.T) {
 // after a workspace is opened.
 func TestPrimaryIdsStayUnprefixed(t *testing.T) {
 	w := open(t, ModeEager)
-	id, err := w.LookupSymbol("showThread")
+	id, err := w.LookupSymbol("ShowThread")
 	if err != nil {
 		t.Fatalf("LookupSymbol: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestPlatformViewEdgesFollowIndexing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlatformView: %v", err)
 	}
-	if len(pv.Services) != 2 {
+	if len(pv.Services) != 3 {
 		t.Fatalf("every service should be listed from declarations alone, got %+v", pv.Services)
 	}
 	byAlias := map[string]model.PlatformService{}
@@ -260,6 +260,9 @@ func TestPlatformViewEdgesFollowIndexing(t *testing.T) {
 		t.Error("declared RPC count should come from protos, not from indexing")
 	}
 
+	// Only the primary repo is indexed in lazy mode, so only its outgoing
+	// edge is known — gateway's own call into inbox stays invisible until
+	// gateway is read.
 	if len(pv.Edges) != 1 {
 		t.Fatalf("expected the inbox→conversation edge, got %+v", pv.Edges)
 	}
@@ -267,7 +270,7 @@ func TestPlatformViewEdgesFollowIndexing(t *testing.T) {
 	if e.From != "inbox" || e.To != "conversation" || e.Kind != "grpc.method" {
 		t.Errorf("edge: got %s→%s (%s)", e.From, e.To, e.Kind)
 	}
-	if len(e.Calls) != 1 || e.Calls[0].SiteTitle != "Server.showThread" {
+	if len(e.Calls) != 1 || e.Calls[0].SiteTitle != "Server.ShowThread" {
 		t.Errorf("edge should carry its call site: %+v", e.Calls)
 	}
 
@@ -283,7 +286,7 @@ func TestPlatformViewEdgesFollowIndexing(t *testing.T) {
 		t.Errorf("edges shrank after indexing: %d then %d", len(pv.Edges), len(pv2.Edges))
 	}
 	for _, s := range pv2.Services {
-		if !s.Indexed {
+		if s.Alias != "gateway" && !s.Indexed {
 			t.Errorf("%s should be indexed now", s.Alias)
 		}
 	}
@@ -373,7 +376,7 @@ func TestEnumeratedBindingStillReachesTheAnchor(t *testing.T) {
 // by code that reaches the anchor — but not what the badge claims.
 func TestOnlyInboundBindingsCarryTheAnchorBadge(t *testing.T) {
 	w := open(t, ModeEager)
-	anchor, err := w.LookupSymbol("showThread")
+	anchor, err := w.LookupSymbol("ShowThread")
 	if err != nil {
 		t.Fatalf("LookupSymbol: %v", err)
 	}
@@ -612,6 +615,92 @@ func TestPlatformViewUnanchored(t *testing.T) {
 	for _, e := range pv.Edges {
 		if e.ReachesAnchor {
 			t.Errorf("edge %s->%s marked without an anchor", e.From, e.To)
+		}
+	}
+}
+
+// Reaching the anchor is transitive. gateway never calls conversation at all
+// — it calls inbox, and serving *that* RPC is what calls conversation. The
+// mark used to stop after one hop, because only edges pointing into the
+// anchor's own repo were considered, so gateway read as unrelated to code it
+// genuinely causes to run.
+//
+// The chain is: gateway → inbox.ShowThread → conversation.GetConversation →
+// reachMe. Each link needs a different fact, which is why this took the
+// crossing relation: the platform graph knows gateway calls inbox, but only
+// inbox's own index knows that serving ShowThread is what calls conversation.
+func TestPlatformAnchorMarkingIsTransitive(t *testing.T) {
+	w := open(t, ModeEager)
+	anchor, err := w.LookupSymbol("conversation" + Sep + "reachMe")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	pv, err := w.PlatformView(anchor)
+	if err != nil {
+		t.Fatalf("PlatformView: %v", err)
+	}
+
+	reach := map[string]bool{}
+	for _, s := range pv.Services {
+		reach[s.Alias] = s.ReachesAnchor
+	}
+	if !reach["conversation"] {
+		t.Error("the service holding the anchor should be marked")
+	}
+	if !reach["inbox"] {
+		t.Error("the direct caller should still be marked")
+	}
+	if !reach["gateway"] {
+		t.Error("a service that reaches the anchor only through inbox should be marked")
+	}
+
+	// The edge gateway→inbox carries the mark on the specific RPC, not just
+	// on the edge: which call matters is the useful part.
+	var found bool
+	for _, e := range pv.Edges {
+		if e.From != "gateway" || e.To != "inbox" {
+			continue
+		}
+		if !e.ReachesAnchor {
+			t.Error("the gateway→inbox edge leads to the anchor and should be marked")
+		}
+		for _, c := range e.Calls {
+			if c.Key == "inbox.v1.InboxService/ShowThread" && c.ReachesAnchor {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the RPC that leads onward should be marked: %+v", pv.Edges)
+	}
+}
+
+// Transitivity must not become "everything upstream". An anchor that nothing
+// leads to marks only the service holding it — if propagation ignored which
+// key was hit and just walked the service graph backwards, every caller would
+// light up and the marking would stop meaning anything.
+func TestPlatformAnchorMarkingStaysReachability(t *testing.T) {
+	w := open(t, ModeEager)
+	// notCalled is served by nothing: no RPC of conversation leads to it.
+	anchor, err := w.LookupSymbol("conversation" + Sep + "notCalled")
+	if err != nil {
+		t.Fatalf("LookupSymbol: %v", err)
+	}
+	pv, err := w.PlatformView(anchor)
+	if err != nil {
+		t.Fatalf("PlatformView: %v", err)
+	}
+	for _, s := range pv.Services {
+		if s.Alias == "conversation" {
+			continue // holds the code
+		}
+		if s.ReachesAnchor {
+			t.Errorf("%s does not reach this anchor and must not be marked", s.Alias)
+		}
+	}
+	for _, e := range pv.Edges {
+		if e.ReachesAnchor {
+			t.Errorf("no edge leads to this anchor: %s→%s", e.From, e.To)
 		}
 	}
 }

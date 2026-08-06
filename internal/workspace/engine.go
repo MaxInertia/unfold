@@ -367,6 +367,9 @@ func (w *Workspace) PlatformView(anchor model.TargetID) (*model.PlatformView, er
 	// grouped is keyed by from→to→kind so several calls between the same
 	// pair collapse into one edge carrying its call sites.
 	grouped := map[[3]string][]model.PlatformCall{}
+	// crossings[alias][outboundKey] = the inbound keys of that service which
+	// lead to that outbound call. Per repo, from the crossing relation.
+	crossings := map[string]map[string]map[string]bool{}
 
 	for _, alias := range w.order {
 		r := w.repos[alias]
@@ -381,8 +384,6 @@ func (w *Workspace) PlatformView(anchor model.TargetID) (*model.PlatformView, er
 			Primary: alias == w.primary,
 			Indexed: loaded,
 			Methods: len(r.methods),
-			// The anchor's own service always counts: the code is in it.
-			ReachesAnchor: anchorRepo != "" && alias == anchorRepo,
 		}
 		if loadErr != nil {
 			svc.Error = loadErr.Error()
@@ -395,6 +396,30 @@ func (w *Workspace) PlatformView(anchor model.TargetID) (*model.PlatformView, er
 		sv, err := idx.ServiceView("")
 		if err != nil {
 			continue
+		}
+		// The crossing relation, lifted to keys: which of this service's own
+		// inbound RPCs lead to each call it makes. This is what carries a mark
+		// past the first hop — without it we know inbox calls conversation,
+		// but not that serving inbox's own ShowThread is what causes it.
+		outKeyOf := map[string]string{}
+		for _, b := range sv.Outbound {
+			outKeyOf[b.ID] = declKey(b.Kind, b.Key)
+		}
+		for _, b := range sv.Inbound {
+			inKey := declKey(b.Kind, b.Key)
+			for _, id := range b.Reaches {
+				out, ok := outKeyOf[id]
+				if !ok {
+					continue
+				}
+				if crossings[alias] == nil {
+					crossings[alias] = map[string]map[string]bool{}
+				}
+				if crossings[alias][out] == nil {
+					crossings[alias][out] = map[string]bool{}
+				}
+				crossings[alias][out][inKey] = true
+			}
 		}
 		for _, b := range sv.Outbound {
 			to, ok := w.servedBy[declKey(b.Kind, b.Key)]
@@ -416,25 +441,77 @@ func (w *Workspace) PlatformView(anchor model.TargetID) (*model.PlatformView, er
 	for n := range pv.Services {
 		byAlias[pv.Services[n].Alias] = &pv.Services[n]
 	}
+
+	// Which inbound keys of each service lead to the anchor, and which
+	// services do. Marking used to stop after one hop — only edges pointing
+	// *into* the anchor's own repo were ever considered — so a service that
+	// reached the anchor through an intermediate read as unrelated, which is
+	// the opposite of what the level is for.
+	//
+	// Propagation is a fixpoint rather than a walk because the service graph
+	// has cycles: an edge can be marked, then later gain a reason to mark its
+	// caller, and the key set is finite so repeating until nothing changes
+	// terminates. Two things are tracked, and conflating them would be wrong:
+	// a service can reach the anchor via a call made from its own init or
+	// main, with no inbound key responsible — it is marked, but there is
+	// nothing for *its* callers to inherit.
+	reaching := map[string]map[string]bool{}
+	serviceReaches := map[string]bool{}
+	if anchorRepo != "" {
+		reaching[anchorRepo] = reachingKeys
+		serviceReaches[anchorRepo] = true
+	}
+	if anchorRepo != "" {
+		for changed := true; changed; {
+			changed = false
+			for k, calls := range grouped {
+				from, to, kind := k[0], k[1], k[2]
+				dest := reaching[to]
+				if dest == nil {
+					continue
+				}
+				for _, c := range calls {
+					key := declKey(kind, c.Key)
+					if !dest[key] {
+						continue
+					}
+					if !serviceReaches[from] {
+						serviceReaches[from] = true
+						changed = true
+					}
+					// What in `from` causes this call is what its own callers
+					// would have to hit — that's the next hop's seed.
+					for inKey := range crossings[from][key] {
+						if reaching[from] == nil {
+							reaching[from] = map[string]bool{}
+						}
+						if !reaching[from][inKey] {
+							reaching[from][inKey] = true
+							changed = true
+						}
+					}
+				}
+			}
+		}
+	}
+
 	for k, calls := range grouped {
 		sort.Slice(calls, func(a, b int) bool { return calls[a].Key < calls[b].Key })
 		e := model.PlatformEdge{From: k[0], To: k[1], Kind: k[2], Calls: calls}
-		if k[1] == anchorRepo {
+		if dest := reaching[k[1]]; dest != nil {
 			for n := range e.Calls {
-				if reachingKeys[declKey(e.Kind, e.Calls[n].Key)] {
+				if dest[declKey(e.Kind, e.Calls[n].Key)] {
 					e.Calls[n].ReachesAnchor = true
 					e.ReachesAnchor = true
 				}
 			}
-			// A service calling an API that leads to the anchor is on the
-			// path to it, which is exactly what the level should highlight.
-			if e.ReachesAnchor {
-				if s := byAlias[e.From]; s != nil {
-					s.ReachesAnchor = true
-				}
-			}
 		}
 		pv.Edges = append(pv.Edges, e)
+	}
+	for alias := range serviceReaches {
+		if s := byAlias[alias]; s != nil {
+			s.ReachesAnchor = true
+		}
 	}
 	sort.Slice(pv.Edges, func(a, b int) bool {
 		if pv.Edges[a].From != pv.Edges[b].From {

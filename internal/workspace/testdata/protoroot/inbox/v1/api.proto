@@ -1,0 +1,9 @@
+syntax = "proto3";
+package inbox.v1;
+
+message ShowRequest { string id = 1; }
+message ShowResponse { string body = 1; }
+
+service InboxService {
+  rpc ShowThread(ShowRequest) returns (ShowResponse);
+}

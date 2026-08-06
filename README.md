@@ -104,14 +104,13 @@ The service view is a two-sided card, not a graph:
   Finally, a call site only counts if execution can **reach** it from one of
   the service's entrypoints — its route handlers, the implementations of the
   RPCs it declares, any `init`, every package-level variable initializer, and
-  every function of a valid `main` package. Initializers run at program start,
-  unconditionally and before `main`, which is the same reason `init` seeds.
-  What one *holds* may run later — a `RunE` closure, a callback registered at
-  startup — and that's the same over-approximation made for command packages,
-  for the same reason: this code exists to be run.
-  Commands count in their entirety because a command's code exists to be run,
-  and much of it is reached in ways a call graph can't show: a framework
-  invoking a handler, a callback registered at startup. A repo can hold a client nothing ever invokes,
+  every function of a valid `main` package. Commands count in their entirety,
+  and initializers count because they run at program start — unconditionally,
+  before `main`, the same reason `init` seeds. Both over-approximate in the
+  same direction and for the same reason: this code exists to be run, and much
+  of it is reached in ways a call graph can't show — a framework invoking a
+  handler, a `RunE` closure held in a variable, a callback registered at
+  startup. A repo can hold a client nothing ever invokes,
   and no amount of classifying the client tells you whether the service uses
   it; reachability answers that directly. When call sites are excluded this
   way the count is reported next to the column, because a service whose
@@ -416,6 +415,27 @@ the service level answers with entrypoints, one granularity out. The RPCs that
 lead there are marked individually, so an edge says *which* of its calls
 matter.
 
+Reach is **transitive**. With `gateway → inbox → conversation` and the anchor
+inside `conversation`, gateway is marked even though it never calls
+conversation at all: it calls inbox, and serving *that* RPC is what calls
+conversation. Each link needs a different fact, which is why this needs the
+crossing relation — the platform graph knows gateway calls inbox, but only
+inbox's own index knows that serving `ShowThread` is what causes the call
+onward.
+
+Propagation is a fixpoint, because the service graph has cycles. Two things
+are tracked separately, and conflating them would over-mark: whether a service
+reaches the anchor, and *which of its own inbound keys* lead there. A service
+can reach the anchor from a call made in its `init` or `main`, with no inbound
+key responsible — it's marked, but its callers inherit nothing, because
+nothing they could hit leads onward. That distinction is what keeps this
+reachability rather than "everything upstream": walking the service graph
+backwards without it would light the whole graph and mean nothing.
+
+An unindexed service in the middle of a chain breaks it — everything behind it
+goes unmarked, which looks identical to not reaching. The header says so when
+an anchor is set.
+
 Hovering a service dims everything it isn't connected to, and takes precedence
 while held. Both answer "what is connected to the thing I care about", so they
 share the dimming rather than competing for it.
@@ -458,11 +478,9 @@ once — opening a symbol sets the frame level and clears the service pick in a
   walking deeper would index vendored copies and testdata modules.
 - **Only gRPC edges join.** HTTP outbound keys are collected but not yet
   matched against other repos' route registrations.
-- **Anchor marking at the platform level is one hop.** A service is lit when it
-  calls an API of the anchor's service that leads to the anchor. A service that
-  reaches it only *through* another service isn't lit — that needs forward
-  reachability from each repo's inbound handlers to its outbound call sites,
-  which doesn't exist yet.
+- **Transitive anchor marking needs every service on the chain indexed.** A
+  chain through an unindexed service can't be followed, so everything behind
+  it goes unmarked.
 - **A lazy workspace searches only what it has indexed.** Opening something in
   a repo indexes it and it stays in the results afterwards.
 - **One anchor at a time.** The anchor is whatever frame is open, so the saved
