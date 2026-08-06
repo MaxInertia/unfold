@@ -1284,6 +1284,17 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 		return ci
 	}
 
+	// A conversion is not a call. `[]byte(s)`, `time.Duration(n)`, `(*T)(p)`
+	// all parse as CallExpr, and nameSpan's fallback spans the whole type
+	// expression — so each one became a call site with no name, no target and
+	// nothing to expand: a decoration on `[]byte` that does nothing when
+	// clicked. go/types answers this exactly rather than by shape, which
+	// matters because a conversion to a named type is syntactically identical
+	// to calling a function of that name.
+	if tv, ok := info.Types[ce.Fun]; ok && tv.IsType() {
+		return nil
+	}
+
 	switch fn := ce.Fun.(type) {
 	case *ast.Ident:
 		// foo()  — package-level function or local name

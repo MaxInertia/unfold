@@ -44,11 +44,16 @@ func TestLoadSelf(t *testing.T) {
 	// ranges). The span text should be a function-name token — i.e. the
 	// last segment of the call's display name.
 	for i, c := range frame.Calls {
-		if c.SpanStart < 0 || c.SpanEnd > len(frame.Source) || c.SpanStart >= c.SpanEnd {
+		if c.SpanStart < 0 || c.SpanEnd > utf16Len(frame.Source) || c.SpanStart >= c.SpanEnd {
 			t.Errorf("bad span for %q: [%d,%d) (source len %d)", c.DisplayName, c.SpanStart, c.SpanEnd, len(frame.Source))
 			continue
 		}
-		got := frame.Source[c.SpanStart:c.SpanEnd]
+		// Spans are UTF-16 code-unit offsets, because the frontend indexes
+		// the source as a JavaScript string. Slicing Source by them as if
+		// they were bytes only works while every frame happens to be pure
+		// ASCII — one em dash in a comment above the call and the assertion
+		// starts comparing garbage, which is what it did.
+		got := utf16Slice(frame.Source, c.SpanStart, c.SpanEnd)
 		// Name-only span means the span text equals either the full display
 		// name (for plain identifiers) or the trailing segment after the
 		// final "." (for selector calls like fmt.Println).
@@ -710,5 +715,82 @@ func TestSearchRanksLeafMatchesFirst(t *testing.T) {
 	}
 	if !sawLeaf {
 		t.Fatal("expected at least one leaf match for 'load' (e.g. Indexer.Load)")
+	}
+}
+
+// utf16Slice extracts [start,end) in UTF-16 code units, which is the unit
+// CallSite spans are reported in.
+func utf16Slice(s string, start, end int) string {
+	u := utf16.Encode([]rune(s))
+	if start < 0 || end > len(u) || start > end {
+		return ""
+	}
+	return string(utf16.Decode(u[start:end]))
+}
+
+func utf16Len(s string) int { return len(utf16.Encode([]rune(s))) }
+
+// A conversion is not a call. `[]byte(s)` and friends parse as CallExpr, and
+// the name-span fallback covers the whole type expression — so each one used
+// to become a call site with no name, no target and nothing to expand: a
+// decoration painted over `[]byte` that did nothing when clicked. Since
+// `[]byte(...)` is everywhere in Go, so was the phantom.
+//
+// It stayed hidden because the self-test only sampled main(), which happened
+// to contain no conversions until one was added.
+func TestConversionsAreNotCallSites(t *testing.T) {
+	dir, err := filepath.Abs("testdata/initvar")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	idx := New()
+	if err := idx.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Every recorded call in this project's own code must name something. An
+	// empty display name is a span the UI paints but the user can't act on.
+	//
+	// Scoped to owned code deliberately. Dependency bodies still produce a
+	// few unnamed spans from two *other* shapes — a generic call
+	// (`abi.TypeFor[T]()`, an IndexExpr the display-name switch doesn't
+	// handle) and a call of a returned function (`fd.addrFunc()(x)`). Both
+	// are real calls rather than conversions, so they're a different fix, and
+	// asserting on stdlib here would tie this test to the Go version.
+	for id, fi := range idx.funcs {
+		if !idx.ownsCode(fi) {
+			continue
+		}
+		for _, c := range fi.calls {
+			if c.displayName == "" {
+				t.Errorf("%s: call site with no name at %s", id, idx.fset.Position(c.pos))
+			}
+		}
+	}
+
+	// The conversion itself must be gone: initvar's registry initializer holds
+	// no conversion, but pullOrders' `[]byte`-shaped neighbours in the wider
+	// index did. Assert directly on a conversion-bearing frame instead.
+	conv, err := idx.Frame("example.com/initvar.syncCmd")
+	if err == nil {
+		for _, c := range conv.Calls {
+			if c.DisplayName == "" {
+				t.Errorf("unnamed span in an initializer frame: %+v", c)
+			}
+		}
+	}
+
+	// And the real calls in the same function survive — the check must not be
+	// so eager that it drops ordinary calls.
+	fr, err := idx.Frame("example.com/initvar.pullOrders")
+	if err != nil {
+		t.Fatalf("Frame: %v", err)
+	}
+	var names []string
+	for _, c := range fr.Calls {
+		names = append(names, c.DisplayName)
+	}
+	if len(names) == 0 {
+		t.Errorf("pullOrders should still carry its call sites, got %v", names)
 	}
 }
