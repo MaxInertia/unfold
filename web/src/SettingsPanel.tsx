@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { Fragment, useEffect } from "react";
 import { updateSettings, useSettings } from "./settings";
+import { bindingsByScope, matches, SCOPE_LABELS } from "./keybindings";
 
 // SettingsPanel is a right-side panel (not a modal) so the code view stays
 // visible while toggling — every control takes effect live.
@@ -8,7 +9,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (matches("ui.dismiss", e)) onClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -73,6 +74,33 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             <option value="indent">classic indent</option>
           </select>
         </label>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-title">keyboard</div>
+        {/* Rendered from the same registry the handlers match against, so
+            this list is the app's actual behaviour rather than a description
+            of it that can fall out of date. */}
+        {bindingsByScope().map(([scope, bindings]) => (
+          <div key={scope} className="settings-keys-group">
+            <div className="settings-keys-scope">{SCOPE_LABELS[scope]}</div>
+            <ul className="settings-keys">
+              {bindings.map((b) => (
+                <li key={b.id} className="settings-key">
+                  <span className="settings-key-chord">
+                    {b.keys.map((k, i) => (
+                      <Fragment key={k}>
+                        {i > 0 && <span className="settings-key-plus">+</span>}
+                        <kbd>{k}</kbd>
+                      </Fragment>
+                    ))}
+                  </span>
+                  <span className="settings-key-desc">{b.description}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </div>
     </aside>
   );

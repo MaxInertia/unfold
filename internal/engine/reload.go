@@ -115,3 +115,96 @@ func (r *Reloadable) Usages(id model.TargetID) ([]model.Usage, error) {
 	defer r.mu.RUnlock()
 	return r.cur.Usages(id)
 }
+
+// ServiceView forwards to the current engine when it has recognizers. The
+// wrapper always satisfies model.PlatformEngine (method sets are static), so
+// an engine without them is reported at call time.
+func (r *Reloadable) ServiceView(anchor model.TargetID) (*model.ServiceView, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	pe, ok := r.cur.(model.PlatformEngine)
+	if !ok {
+		return nil, model.ErrNoPlatformView
+	}
+	return pe.ServiceView(anchor)
+}
+
+// SetProtoRoot forwards to the current engine and updates the package-level
+// default, so the choice survives the engine rebuilds watch mode performs.
+func (r *Reloadable) SetProtoRoot(dir string) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	pr, ok := r.cur.(interface{ SetProtoRoot(string) error })
+	if !ok {
+		return model.ErrNoPlatformView
+	}
+	err := pr.SetProtoRoot(dir)
+	// Record it even on failure: the user picked it, and a reload shouldn't
+	// silently revert to a different directory than the one on screen.
+	ProtoRoot = dir
+	return err
+}
+
+// Resolve forwards the cross-repo hop to the current engine when it
+// federates repositories.
+func (r *Reloadable) Resolve(kind, key string) (*model.Resolution, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cr, ok := r.cur.(model.CrossRepoResolver)
+	if !ok {
+		return nil, model.ErrNoWorkspace
+	}
+	return cr.Resolve(kind, key)
+}
+
+// PlatformView forwards the workspace-level view when one is open.
+func (r *Reloadable) PlatformView(anchor model.TargetID) (*model.PlatformView, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	we, ok := r.cur.(model.WorkspaceEngine)
+	if !ok {
+		return nil, model.ErrNoWorkspace
+	}
+	return we.PlatformView(anchor)
+}
+
+// ServiceViewOf forwards the view of a named workspace service.
+func (r *Reloadable) ServiceViewOf(repo string, anchor model.TargetID) (*model.ServiceView, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	we, ok := r.cur.(model.WorkspaceEngine)
+	if !ok {
+		return nil, model.ErrNoWorkspace
+	}
+	return we.ServiceViewOf(repo, anchor)
+}
+
+// IndexRepo forwards on-demand indexing of one workspace service.
+func (r *Reloadable) IndexRepo(alias string) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ir, ok := r.cur.(interface{ IndexRepo(string) error })
+	if !ok {
+		return model.ErrNoWorkspace
+	}
+	return ir.IndexRepo(alias)
+}
+
+// PlatformAvailable reports whether the engine currently held can serve a
+// service view, so /api/health advertises the zoom-out affordance honestly
+// even though the wrapper's own method set can't.
+func (r *Reloadable) PlatformAvailable() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.cur.(model.PlatformEngine)
+	return ok
+}
+
+// WorkspaceAvailable reports whether the engine currently held is a
+// workspace, for the same reason.
+func (r *Reloadable) WorkspaceAvailable() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.cur.(model.WorkspaceEngine)
+	return ok
+}

@@ -8,14 +8,28 @@ import { SettingsPanel } from "./SettingsPanel";
 import { useSettings } from "./settings";
 import { NotesList } from "./NotesUI";
 import { loadNotes } from "./notes";
-import { fetchSymbol, search } from "./api";
-import type { Frame as FrameT, SearchResult } from "./types";
+import { ServiceView } from "./ServiceView";
+import { PlatformView } from "./PlatformView";
+import { EntrypointsPanel, OutboundsPanel } from "./AnchorPanels";
+import { ZoomTrail } from "./ZoomTrail";
+import {
+  emptyServiceFilters,
+  PlatformFilterPanel,
+  ServiceFilterPanel,
+  type ServiceFilters,
+} from "./ZoomSidebar";
+import { repoOf, zoomIn, zoomOut } from "./zoom";
+import { matches } from "./keybindings";
+import { fetchServiceView, fetchSymbol, search } from "./api";
+import type { Frame as FrameT, SearchResult, ServiceView as ServiceViewT } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
 import { ReloadProvider, useReloadRevision } from "./reload";
 import { setBookmarkProject, useBookmarks } from "./bookmarks";
 
 const TREE_COLLAPSED_KEY = "unfold.tree.collapsed";
 const SIDEBAR_WIDTH_KEY = "unfold.sidebar.width";
+const RIGHT_COLLAPSED_KEY = "unfold.right.collapsed";
+const RIGHT_WIDTH_KEY = "unfold.right.width";
 const SIDEBAR_MIN = 200;
 
 export function App() {
@@ -39,14 +53,62 @@ function AppShell() {
   const [treeCollapsed, setTreeCollapsed] = useState(
     () => localStorage.getItem(TREE_COLLAPSED_KEY) === "1",
   );
-  const [sidebarTab, setSidebarTab] = useState<"files" | "calls" | "callers" | "notes">("calls");
+  const [sidebarTab, setSidebarTab] = useState<
+    "files" | "calls" | "callers" | "entrypoints" | "notes"
+  >("calls");
   const [reindexed, setReindexed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settings = useSettings();
+  // Zoom is a level, not a tab: the frame tree stays mounted in the view
+  // store either way, so switching levels never costs expansion state. It
+  // lives in the store (and so in the URL) rather than in local state, which
+  // is what makes a zoomed-out view shareable and back/forward-able.
+  const setZoom = store.setZoom;
+  const [platform, setPlatform] = useState(false);
+  const [workspace, setWorkspace] = useState(false);
+  // Now that the level comes from the URL it can name a rung this session
+  // doesn't have — a hand-edited hash, or a link shared from a workspace into
+  // a plain repo. Fall back to the nearest level that exists rather than
+  // rendering a view whose data can't be fetched. The store keeps what it was
+  // asked for, so the level returns on its own if the missing capability
+  // shows up (health resolves, a workspace opens).
+  const zoom = !platform
+    ? "frame"
+    : store.zoom === "platform" && !workspace
+      ? "service"
+      : store.zoom;
+  // The service surface for whatever is anchored. One owner, one request:
+  // the trail, the sidebar's facet counts, the L1 columns, and both anchor
+  // panels are all views onto this single response.
+  const [serviceView, setServiceView] = useState<ServiceViewT | null>(null);
+  // Bumped when the proto root changes, to refetch the declared surface.
+  const [protoRevision, setProtoRevision] = useState(0);
+  // Filters live here, not inside the views, because the sidebar owns them
+  // once you're above the frame level.
+  const [serviceFilters, setServiceFilters] = useState<ServiceFilters>(emptyServiceFilters);
+  const [platformFilter, setPlatformFilter] = useState("");
+  const selectedService = store.service;
+  const setSelectedService = store.setService;
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
   });
+  // The right panel starts collapsed: it's a second thing competing with the
+  // code for horizontal space, and unlike the left one it has a single tab.
+  // Opening it should be a choice, not something you have to undo on first run.
+  const [rightCollapsed, setRightCollapsed] = useState(
+    () => localStorage.getItem(RIGHT_COLLAPSED_KEY) !== "0",
+  );
+  const [rightWidth, setRightWidth] = useState(() => {
+    const v = Number(localStorage.getItem(RIGHT_WIDTH_KEY));
+    return v >= SIDEBAR_MIN ? v : 280;
+  });
+
+  // Which service the views are about. Zooming out follows the code you were
+  // reading — the frame's own repo — rather than snapping back to the one
+  // unfold was launched in; an explicit pick at the platform level overrides
+  // that until you descend into code again.
+  const serviceRepo = selectedService ?? repoOf(rootFrame?.id);
 
   // Flash a brief toast whenever watch mode reindexes (revision > 0).
   useEffect(() => {
@@ -64,14 +126,26 @@ function AppShell() {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
   }, [sidebarWidth]);
 
-  // Drag the handle on the sidebar's right edge to resize it.
-  function onResizeStart(e: React.PointerEvent) {
+  useEffect(() => {
+    localStorage.setItem(RIGHT_COLLAPSED_KEY, rightCollapsed ? "1" : "0");
+  }, [rightCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem(RIGHT_WIDTH_KEY, String(rightWidth));
+  }, [rightWidth]);
+
+  // Drag a panel's inner edge to resize it. The right panel grows the other
+  // way, so its delta is inverted — otherwise dragging left would shrink the
+  // thing you're pulling toward you.
+  function onResizeStart(e: React.PointerEvent, side: "left" | "right" = "left") {
     e.preventDefault();
     const startX = e.clientX;
-    const startW = sidebarWidth;
+    const startW = side === "left" ? sidebarWidth : rightWidth;
+    const setter = side === "left" ? setSidebarWidth : setRightWidth;
+    const sign = side === "left" ? 1 : -1;
     const max = Math.max(280, Math.floor(window.innerWidth * 0.6));
     const move = (ev: PointerEvent) => {
-      setSidebarWidth(Math.min(max, Math.max(SIDEBAR_MIN, startW + ev.clientX - startX)));
+      setter(Math.min(max, Math.max(SIDEBAR_MIN, startW + sign * (ev.clientX - startX))));
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -110,10 +184,67 @@ function AppShell() {
       .then((h) => {
         setTarget(h.target ?? null);
         setBookmarkProject(h.target ?? null); // namespace bookmarks per project
+        setPlatform(!!h.platform);
+        setWorkspace(!!h.workspace);
       })
       .catch(() => {});
     loadNotes();
   }, []);
+
+  // Everything the trail shows comes from one request: the service's name,
+  // whether the current frame is even *in* that service, and how many
+  // entrypoints reach it. The backend only echoes an anchor that belongs to
+  // the service being described, so viewing another service correctly drops
+  // the anchor tail instead of implying a frame it doesn't contain.
+  useEffect(() => {
+    if (!platform) return;
+    let alive = true;
+    fetchServiceView(rootFrame?.id ?? null, serviceRepo)
+      .then((v) => alive && setServiceView(v))
+      .catch(() => alive && setServiceView(null));
+    return () => {
+      alive = false;
+    };
+  }, [platform, rootFrame?.id, serviceRepo, revision, protoRevision]);
+
+  const serviceName = serviceView?.name ?? null;
+  const trailAnchor = serviceView?.anchorTitle ?? null;
+  const entrypointCount = serviceView?.anchor
+    ? serviceView.inbound.filter((b) => b.reachesAnchor).length
+    : null;
+  // How many outbound calls the anchor's code path makes — the right panel's
+  // badge, and the reason to open it at all.
+  const outboundCount = serviceView?.anchor
+    ? serviceView.outbound.filter((b) => b.reachedByAnchor).length
+    : null;
+
+  // Keyboard zoom and history. The chords live in the keybinding registry,
+  // which is also what the settings panel lists — so the documented shortcut
+  // and the wired one can't disagree.
+  //
+  // History isn't gated on platform mode: re-rooting through a caller is a
+  // lateral move worth undoing in a single repo too.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (matches("history.back", e)) {
+        e.preventDefault();
+        history.back();
+      } else if (matches("history.forward", e)) {
+        e.preventDefault();
+        history.forward();
+      } else if (platform && matches("zoom.out", e)) {
+        e.preventDefault();
+        setZoom(zoomOut(zoom, workspace));
+      } else if (platform && matches("zoom.in", e)) {
+        e.preventDefault();
+        setZoom(zoomIn(zoom, workspace));
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [platform, workspace, zoom, setZoom]);
+
+
 
   return (
     <div
@@ -154,39 +285,73 @@ function AppShell() {
             </button>
           ) : (
             <>
-              <BookmarksPanel onOpen={(id) => store.setSymbol(id)} />
+              <BookmarksPanel
+                anchor={rootFrame?.id ?? null}
+                onOpen={(id) => store.setSymbol(id)}
+              />
               <div className="tree-inner">
+                {/* The sidebar follows the zoom level. Above the frame there
+                    is no call tree to show, and what you need instead is a
+                    way to cut a large surface down — so the tabs give way to
+                    the filter panel rather than sitting there describing a
+                    frame you're no longer looking at. */}
                 <div className="tree-header tree-tabs">
-                  <button
-                    type="button"
-                    className={`tree-tab${sidebarTab === "files" ? " tree-tab--active" : ""}`}
-                    onClick={() => setSidebarTab("files")}
-                  >
-                    files
-                  </button>
-                  <button
-                    type="button"
-                    className={`tree-tab${sidebarTab === "calls" ? " tree-tab--active" : ""}`}
-                    onClick={() => setSidebarTab("calls")}
-                  >
-                    calls
-                  </button>
-                  <button
-                    type="button"
-                    className={`tree-tab${sidebarTab === "callers" ? " tree-tab--active" : ""}`}
-                    onClick={() => setSidebarTab("callers")}
-                    title="who calls the focused function — expand to walk toward entry points"
-                  >
-                    callers
-                  </button>
-                  <button
-                    type="button"
-                    className={`tree-tab${sidebarTab === "notes" ? " tree-tab--active" : ""}`}
-                    onClick={() => setSidebarTab("notes")}
-                    title="all notes in this project"
-                  >
-                    notes
-                  </button>
+                  {zoom === "frame" ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`tree-tab${sidebarTab === "files" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("files")}
+                      >
+                        files
+                      </button>
+                      <button
+                        type="button"
+                        className={`tree-tab${sidebarTab === "calls" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("calls")}
+                      >
+                        calls
+                      </button>
+                      <button
+                        type="button"
+                        className={`tree-tab${sidebarTab === "callers" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("callers")}
+                        title="who calls the focused function — expand to walk toward entry points"
+                      >
+                        callers
+                      </button>
+                      {/* Only offered in platform mode, because without a
+                          recognized surface the tab would have nothing to
+                          show and no honest way to say why. */}
+                      {platform && (
+                        <button
+                          type="button"
+                          className={`tree-tab${
+                            sidebarTab === "entrypoints" ? " tree-tab--active" : ""
+                          }`}
+                          onClick={() => setSidebarTab("entrypoints")}
+                          title="the routes, RPCs and subscriptions that reach this frame — why this code runs at all"
+                        >
+                          entrypoints
+                          {entrypointCount !== null && entrypointCount > 0 && (
+                            <span className="tree-tab-count">{entrypointCount}</span>
+                          )}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className={`tree-tab${sidebarTab === "notes" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("notes")}
+                        title="all notes in this project"
+                      >
+                        notes
+                      </button>
+                    </>
+                  ) : (
+                    <span className="tree-tab tree-tab--active tree-tab--static">
+                      {zoom === "platform" ? "services" : "filters"}
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="tree-collapse"
@@ -198,10 +363,20 @@ function AppShell() {
                   </button>
                 </div>
                 <div className="tree-body">
-                  {sidebarTab === "files" ? (
+                  {zoom === "platform" ? (
+                    <PlatformFilterPanel text={platformFilter} onChange={setPlatformFilter} />
+                  ) : zoom === "service" ? (
+                    <ServiceFilterPanel
+                      view={serviceView}
+                      filters={serviceFilters}
+                      onChange={setServiceFilters}
+                    />
+                  ) : sidebarTab === "files" ? (
                     <FileTree onOpen={(id) => store.setSymbol(id)} />
                   ) : sidebarTab === "notes" ? (
                     <NotesList />
+                  ) : sidebarTab === "entrypoints" ? (
+                    <EntrypointsPanel view={serviceView} onOpen={(id) => store.setSymbol(id)} />
                   ) : !rootFrame ? (
                     <p className="tree-placeholder">
                       Pick a function to see its {sidebarTab === "callers" ? "callers" : "call tree"}.
@@ -227,17 +402,52 @@ function AppShell() {
         )}
         <div className="app-content">
           <SymbolPicker onPick={(s) => store.setSymbol(s)} />
+          {platform && (
+            <ZoomTrail
+              level={zoom}
+              hasPlatform={workspace}
+              serviceName={serviceName}
+              anchorTitle={trailAnchor}
+              entrypointCount={entrypointCount}
+              onZoom={setZoom}
+            />
+          )}
           {error && <div className="app-error">{error}</div>}
           {loading && <div className="app-loading">loading…</div>}
-          {rootFrame && (
-            <div className="app-root-frame">
-              {/* Remount the whole frame tree on reindex so every expanded
-                  child refetches; the expansion intent persists in the store. */}
-              <Frame key={revision} frame={rootFrame} path={[]} />
-              <StickyHeaders />
-            </div>
+          {zoom === "platform" ? (
+            <PlatformView
+              anchor={rootFrame?.id ?? null}
+              filter={platformFilter}
+              selected={selectedService}
+              onSelect={setSelectedService}
+              onOpenService={store.openService}
+              // setSymbol already lands you in the code and clears the service
+              // pick, in one history entry.
+              onOpenSite={(id) => store.setSymbol(id)}
+            />
+          ) : zoom === "service" ? (
+            <ServiceView
+              view={serviceView}
+              filters={serviceFilters}
+              onProtoRootChanged={() => setProtoRevision((n) => n + 1)}
+              onOpen={(id) => store.setSymbol(id)}
+            />
+          ) : (
+            rootFrame && (
+              <div className="app-root-frame">
+                {/* Remount the whole frame tree on reindex so every expanded
+                    child refetches; the expansion intent persists in the store. */}
+                <Frame
+                  key={revision}
+                  frame={rootFrame}
+                  path={[]}
+                  onZoomOut={platform ? () => setZoom("service") : undefined}
+                />
+                <StickyHeaders />
+              </div>
+            )
           )}
-          {!rootFrame && !loading && !error && (
+          {zoom === "frame" && !rootFrame && !loading && !error && (
             <p className="app-hint">
               Search for a function above and select one to start. Click any
               underlined call site to expand its body inline; interface calls
@@ -253,30 +463,109 @@ function AppShell() {
             </p>
           )}
         </div>
+        {/* The outbound half of the anchor, mirrored across the code: what
+            reaches this frame sits on the left, what this frame reaches sits
+            on the right. Frame level only — above it the service columns
+            already show both sides, so a third copy would just be stale. */}
+        {platform && zoom === "frame" && (
+          <>
+            {!rightCollapsed && (
+              <div
+                className="resize-handle"
+                onPointerDown={(e) => onResizeStart(e, "right")}
+                role="separator"
+                aria-orientation="vertical"
+                title="drag to resize"
+              />
+            )}
+            <aside
+              className={`out-panel${rightCollapsed ? " out-panel--collapsed" : ""}`}
+              style={rightCollapsed ? undefined : { flex: `0 0 ${rightWidth}px` }}
+            >
+              {rightCollapsed ? (
+                <button
+                  type="button"
+                  className="tree-expand"
+                  onClick={() => setRightCollapsed(false)}
+                  title="show what this frame calls out to"
+                  aria-label="show outbounds panel"
+                >
+                  <span className="tree-expand-icon">‹</span>
+                  <span className="tree-expand-label">
+                    outbounds{outboundCount ? ` · ${outboundCount}` : ""}
+                  </span>
+                </button>
+              ) : (
+                <div className="tree-inner">
+                  <div className="tree-header tree-tabs">
+                    <span className="tree-tab tree-tab--active tree-tab--static">
+                      outbounds
+                      {outboundCount !== null && outboundCount > 0 && (
+                        <span className="tree-tab-count">{outboundCount}</span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      className="tree-collapse"
+                      onClick={() => setRightCollapsed(true)}
+                      title="collapse panel"
+                      aria-label="collapse outbounds panel"
+                    >
+                      ›
+                    </button>
+                  </div>
+                  <div className="tree-body">
+                    <OutboundsPanel view={serviceView} onOpen={(id) => store.setSymbol(id)} />
+                  </div>
+                </div>
+              )}
+            </aside>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-// The saved-symbols list, shown atop the sidebar. Hidden when empty — the
+// The saved-anchors list, shown atop the sidebar. Hidden when empty — the
 // star in each frame header is how you add one.
-function BookmarksPanel({ onOpen }: { onOpen: (id: string) => void }) {
+//
+// These are anchors, not just a reading list: the anchor is whatever frame is
+// open, so clicking one here re-anchors every level at once — the entrypoints
+// that reach it, the calls it makes, the lit rows at L1, the marked service
+// at L0. The list is rendered from an array precisely so selecting several at
+// once later is a change of arity, not of shape.
+function BookmarksPanel({
+  anchor,
+  onOpen,
+}: {
+  // The live anchor, so the list can say which entry you're currently on
+  // rather than looking like four equally-inactive links.
+  anchor: string | null;
+  onOpen: (id: string) => void;
+}) {
   const { bookmarks, remove } = useBookmarks();
   if (bookmarks.length === 0) return null;
   return (
     <div className="bookmarks">
       <div className="bookmarks-header">
-        <span className="bookmarks-title">bookmarks</span>
+        <span className="bookmarks-title" title="saved anchors — click one to anchor on it">
+          anchors
+        </span>
         <span className="bookmarks-count">{bookmarks.length}</span>
       </div>
       <ul className="bookmarks-list">
         {bookmarks.map((b) => (
-          <li key={b.targetId} className="bookmark">
+          <li
+            key={b.targetId}
+            className={`bookmark${b.targetId === anchor ? " bookmark--active" : ""}`}
+          >
             <button
               type="button"
               className="bookmark-open"
               onClick={() => onOpen(b.targetId)}
               title={b.targetId}
+              aria-current={b.targetId === anchor ? "true" : undefined}
             >
               <span className="bookmark-name">{b.title}</span>
               <span className="bookmark-loc">
@@ -382,7 +671,7 @@ function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && results[0]) onPick(results[0].targetId);
+          if (matches("search.openFirst", e) && results[0]) onPick(results[0].targetId);
         }}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}

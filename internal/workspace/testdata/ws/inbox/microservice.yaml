@@ -1,0 +1,5 @@
+microservice:
+  name: inbox
+  protoPaths:
+    - path: inbox/v1/api.proto
+      excludeFromSdk: false

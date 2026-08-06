@@ -70,6 +70,142 @@ export interface Usage {
   excerptLine: number; // 1-based file line of excerpt's first line
 }
 
+// ----- platform / zoom-out (mirrors model.Binding and model.ServiceView) -----
+
+export type BindingRole = "inbound" | "outbound";
+export type BindingConfidence = "exact" | "declared" | "inferred";
+// How far a piece of inbound surface reaches — a more useful primary grouping
+// than kind, since what you want to know about an entrypoint is who can get
+// to it.
+export type BindingVisibility = "public" | "platform" | "internal";
+
+// One place the code touches something outside itself, keyed by a string the
+// other end of the edge also names. Within a single repo only one end is
+// visible, so an outbound binding with no matching inbound one is normal.
+export interface Binding {
+  // Identifies this binding within one ServiceView, so the crossing relation
+  // can name bindings without repeating them. Not durable across reindexes.
+  id?: string;
+  role: BindingRole;
+  kind: string; // "http.route" | "pubsub.topic" | "pubsub.subscription" | "http.call"
+  key: string; // the join key, e.g. "POST /v1/orders"
+  detail?: string; // provenance, e.g. "ServeMux.HandleFunc"
+  target?: TargetID; // the handler, when it's an indexed function
+  targetTitle?: string;
+  // Set instead of target when several implementations match and none is
+  // unambiguous — a service behind decorators, say. Enumerating beats both
+  // guessing and dropping the link.
+  candidates?: Candidate[];
+  site: TargetID; // the function containing the registration/call
+  siteTitle?: string;
+  file: string;
+  line: number;
+  confidence?: BindingConfidence;
+  visibility?: BindingVisibility;
+  // The workspace service implementing this outbound key, resolved from
+  // declarations alone — naming it costs no Go index. Opening it does, which
+  // is why that goes through /api/resolve.
+  servedBy?: string;
+  servedByRepo?: string;
+  // Declared by the manifest but not implemented in code — a publicRoutes
+  // entry nothing registers, or a proto method with no implementation.
+  stale?: boolean;
+  reachesAnchor?: boolean; // this entrypoint transitively reaches the anchor
+  // The mirror, for outbound: the anchored frame reaches this call site, so
+  // it's a call the anchor's code path actually makes.
+  reachedByAnchor?: boolean;
+  // The crossing relation, on inbound bindings only: the outbound bindings
+  // this entrypoint can cause. The other direction is derived rather than
+  // sent, so there's one source of truth instead of two that can disagree.
+  reaches?: string[];
+  // Whether the walk ran at all. An inbound binding with no indexed handler
+  // has nothing to walk from, and "can't tell" must not render as "reaches
+  // nothing" — that's the more confident claim, and the wrong one.
+  crossingKnown?: boolean;
+}
+
+export interface ServiceView {
+  name: string;
+  module?: string;
+  root?: string;
+  anchor?: TargetID; // the frame zoomed out from, carried up as the anchor
+  anchorTitle?: string;
+  inbound: Binding[];
+  outbound: Binding[];
+  // Why part of the view may be missing (usually an unresolvable proto root).
+  warning?: string;
+  // Outbound calls excluded because execution can't reach them from any
+  // recognized entrypoint — reported so an empty column can be told apart
+  // from a router unfold can't read.
+  outboundUnreachable?: number;
+  protoRoot?: string; // the shared proto repository currently configured
+  repos?: RepoInfo[]; // present when a workspace of several repos is open
+  // The manifest declares protoPaths that can't be resolved yet — the cue to
+  // offer the picker rather than just reporting the problem.
+  needsProtoRoot?: boolean;
+}
+
+export interface RepoInfo {
+  alias: string;
+  name: string;
+  dir: string;
+  primary?: boolean;
+  indexed?: boolean; // its Go code is loaded; lazy repos start false
+  error?: string;
+}
+
+// The answer to "open the implementation of this key". target is empty when
+// the serving repo is known but its implementation couldn't be identified.
+export interface Resolution {
+  repo: string;
+  service: string;
+  target?: TargetID;
+  title?: string;
+  stale?: boolean;
+  note?: string;
+  candidates?: Candidate[];
+}
+
+// The L0 view. Services come from declarations so all are listed; edges need
+// a service's code to have been read, so an un-indexed service shows no
+// outgoing calls — which the view says rather than implying it calls nothing.
+export interface PlatformView {
+  services: PlatformService[];
+  edges: PlatformEdge[];
+  // The frame this view was zoomed out from, carried up so the platform level
+  // marks what reaches it — the same anchor the service level uses.
+  anchor?: TargetID;
+  anchorTitle?: string;
+}
+
+export interface PlatformService {
+  alias: string;
+  name: string;
+  dir: string;
+  primary?: boolean;
+  indexed?: boolean;
+  error?: string;
+  methods?: number; // RPCs it declares, known from protos alone
+  reachesAnchor?: boolean; // holds the anchor, or calls an API leading to it
+}
+
+export interface PlatformEdge {
+  from: string;
+  to: string;
+  kind: string;
+  calls: PlatformCall[];
+  reachesAnchor?: boolean;
+}
+
+export interface PlatformCall {
+  key: string;
+  reachesAnchor?: boolean;
+  site?: TargetID;
+  siteTitle?: string;
+  file?: string;
+  line?: number;
+}
+
 export interface TypeInfo {
   kind: string;
   name: string;

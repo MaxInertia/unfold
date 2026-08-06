@@ -1,0 +1,9 @@
+syntax = "proto3";
+package conversation.v1;
+
+message PurgeRequest { string id = 1; }
+message PurgeResponse {}
+
+service MaintenanceService {
+  rpc Purge(PurgeRequest) returns (PurgeResponse);
+}

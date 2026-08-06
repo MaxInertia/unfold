@@ -9,18 +9,24 @@
 package indexer
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
+	"github.com/MaxInertia/unfold/internal/manifest"
 	"github.com/MaxInertia/unfold/internal/model"
+	"github.com/MaxInertia/unfold/internal/platform"
+	"github.com/MaxInertia/unfold/internal/protoapi"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/packages"
 )
@@ -98,8 +104,11 @@ const (
 	KindIndirect  = model.KindIndirect
 )
 
-// Indexer implements model.Engine.
-var _ model.Engine = (*Indexer)(nil)
+// Indexer implements model.Engine, and the optional platform half of it.
+var (
+	_ model.Engine         = (*Indexer)(nil)
+	_ model.PlatformEngine = (*Indexer)(nil)
+)
 
 // Indexer holds loaded packages and the per-function call-site index.
 type Indexer struct {
@@ -125,18 +134,73 @@ type Indexer struct {
 	// dispatch to it, and value references). Built once during Load.
 	usagesByTarget map[TargetID][]*usageInfo
 
+	// invokeCache memoizes invokeInfo per target; a client method's body is
+	// scanned once however many call sites reach it.
+	invokeCache map[TargetID]invokeResult
+
+	// bindings are the platform edges recognized in this project — routes it
+	// serves, topics it names, calls it makes out. Collected during Load in
+	// the same body walk that resolves call sites.
+	bindings []model.Binding
+
+	// Identity of the indexed project, for the service-level view. The
+	// manifest's declared name wins; the repo directory is the fallback.
+	serviceName string
+	modulePath  string
+	rootDir     string
+
+	// mf is the parsed microservice.yaml, nil when the repo has none.
+	mf *manifest.Manifest
+
+	// protoRoot is the shared proto repository that a manifest's protoPaths
+	// resolve against. Empty disables proto loading — the paths are relative
+	// to a repo unfold has no way to locate on its own.
+	protoRoot string
+	// outboundUnreachable counts outbound call sites excluded because
+	// execution can't reach them from any recognized entrypoint.
+	outboundUnreachable int
+
+	// protoErr records why the declared gRPC surface is missing, so the UI
+	// can say "proto root is wrong" instead of showing an empty surface as
+	// though the service had none.
+	protoErr string
+
 	// fileBytes caches the raw source of files whose functions we've
 	// produced frames for, so we don't re-read on every /body request.
 	fileBytesMu sync.Mutex
 	fileBytes   map[string][]byte
 }
 
+// invokeResult memoizes the method path a function issues in its own body,
+// empty when it issues none, or several (a generic transport standing for no
+// particular RPC).
+type invokeResult struct {
+	path string
+}
+
+// funcInfo is one indexed body of code. Usually that's a function, but not
+// always: a package-level variable's initializer holds calls too, and they
+// execute — so it is indexed the same way and everything downstream (frames,
+// usages, callers, reachability) works on it without knowing the difference.
+//
+// obj and decl are therefore nil for an initializer. The fields below them
+// are the ones every entry has, and are what the rest of the indexer reads:
+// asking a variable for its *ast.FuncDecl is a question with no answer.
 type funcInfo struct {
 	id    TargetID
-	obj   *types.Func
-	decl  *ast.FuncDecl
+	obj   *types.Func    // nil for a package-level initializer
+	decl  *ast.FuncDecl  // nil ditto
 	pkg   *packages.Package
 	calls []*callInfo
+
+	node  ast.Node // the whole declaration — its range is the frame
+	body  ast.Node // what to walk for calls; nil when there's nothing to walk
+	title string   // display name
+	name  string   // bare identifier, for main/init checks
+	doc   string
+	// initializer marks a package-level variable rather than a function. It
+	// runs at program start, which is why it seeds reachability.
+	initializer bool
 }
 
 type callInfo struct {
@@ -202,6 +266,12 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.callsByID = make(map[CallID]*callInfo)
 	i.interfaceImpls = buildInterfaceImpls(pkgs)
 	i.usagesByTarget = make(map[TargetID][]*usageInfo)
+	i.bindings = nil
+	i.outboundUnreachable = 0
+	i.invokeCache = make(map[TargetID]invokeResult)
+	i.mf = nil
+	i.protoErr = ""
+	i.identify(dir, pkgs)
 
 	// Pass 1: register every FuncDecl as a target.
 	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
@@ -225,9 +295,91 @@ func (i *Indexer) Load(dir, pattern string) error {
 					// build constraints), keep the first.
 					return true
 				}
-				i.funcs[tid] = &funcInfo{id: tid, obj: obj, decl: fd, pkg: pkg}
+				fi := &funcInfo{id: tid, obj: obj, decl: fd, pkg: pkg, node: fd, title: goTitle(obj), name: obj.Name()}
+				if fd.Body != nil {
+					fi.body = fd.Body
+				}
+				if fd.Doc != nil {
+					fi.doc = strings.TrimSpace(fd.Doc.Text())
+				}
+				i.funcs[tid] = fi
 				return true
 			})
+		}
+	})
+
+	// Pass 1b: package-level variables whose initializer contains a call.
+	//
+	// `var cmd = &cobra.Command{RunE: func(...) { client.Do() }}` holds a call
+	// that no FuncDecl contains, so pass 2 never reached it: no call site, no
+	// usage, no outbound surface, and nothing for the callers tree to walk
+	// through. It was the largest remaining blind spot, and it hides exactly
+	// the code that wires a program together.
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		if pkg.TypesInfo == nil {
+			return
+		}
+		for _, file := range pkg.Syntax {
+			for _, d := range file.Decls {
+				gd, ok := d.(*ast.GenDecl)
+				// Only var: a const initializer can't call anything, and a
+				// type or import has nothing to run.
+				if !ok || gd.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok || len(vs.Values) == 0 || len(vs.Names) == 0 {
+						continue
+					}
+					// Registering every variable would fill the index with
+					// frames for `var timeout = 5s`. Only those that actually
+					// hold calls are code worth reading as code.
+					if !containsCall(vs.Values) {
+						continue
+					}
+					obj, _ := pkg.TypesInfo.Defs[vs.Names[0]].(*types.Var)
+					if obj == nil || obj.Pkg() == nil {
+						continue
+					}
+					// A package can't declare a func and a var with the same
+					// name, so this shares one namespace with FullName safely.
+					tid := TargetID(obj.Pkg().Path() + "." + obj.Name())
+					if _, dup := i.funcs[tid]; dup {
+						continue
+					}
+					names := make([]string, 0, len(vs.Names))
+					for _, n := range vs.Names {
+						names = append(names, n.Name)
+					}
+					// A lone `var x = …` reads as Go only if the frame starts
+					// at the keyword, so the declaration is the range. Inside
+					// a `var ( … )` block it can't be — the block holds other
+					// variables — so the spec is, and the frame opens on the
+					// line itself. The body walked is the spec either way.
+					var node ast.Node = vs
+					doc := vs.Doc
+					if len(gd.Specs) == 1 {
+						node = gd
+						if gd.Doc != nil {
+							doc = gd.Doc
+						}
+					}
+					fi := &funcInfo{
+						id:          tid,
+						pkg:         pkg,
+						node:        node,
+						body:        vs,
+						title:       strings.Join(names, ", "),
+						name:        obj.Name(),
+						initializer: true,
+					}
+					if doc != nil {
+						fi.doc = strings.TrimSpace(doc.Text())
+					}
+					i.funcs[tid] = fi
+				}
+			}
 		}
 	})
 
@@ -235,7 +387,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	// an indexed function but are not a call's name token are recorded as
 	// value references (the function passed around as a value).
 	for _, fi := range i.funcs {
-		if fi.decl.Body == nil {
+		if fi.body == nil {
 			continue
 		}
 		// goLaunched collects the CallExpr that are the operand of a `go`
@@ -245,13 +397,29 @@ func (i *Indexer) Load(dir, pattern string) error {
 		// same way: a CallExpr is visited before the Ident that names it.
 		goLaunched := make(map[*ast.CallExpr]bool)
 		callNames := make(map[*ast.Ident]bool)
-		ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
+		ast.Inspect(fi.body, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.GoStmt:
 				goLaunched[node.Call] = true
 			case *ast.CallExpr:
 				if name := nameIdent(node.Fun); name != nil {
 					callNames[name] = true
+				}
+				// Binding extraction is independent of call resolution: a
+				// recognized call site (mux.HandleFunc) is an ordinary
+				// resolvable call *and* a platform edge, and a call whose
+				// target we can't resolve can still carry a usable key.
+				//
+				// Only this module's own call sites count. A route a
+				// dependency registers, or a gRPC call it makes internally,
+				// isn't part of *this* service's surface — and since
+				// invokePath follows chains without a depth limit, admitting
+				// dependency sites would bury the real edges under library
+				// plumbing.
+				if i.ownsCode(fi) {
+					if facts, ok := i.callFacts(fi, node); ok {
+						i.bindings = append(i.bindings, platform.Extract(facts)...)
+					}
 				}
 				ci := i.resolveCall(fi, node)
 				if ci == nil {
@@ -311,7 +479,757 @@ func (i *Indexer) Load(dir, pattern string) error {
 		}
 	}
 
+	// Titles for binding endpoints, resolved once the whole function set is
+	// known (a route registered in one package can hand off to a handler
+	// defined in another, so this can't be done during the walk).
+	for n := range i.bindings {
+		b := &i.bindings[n]
+		if fi := i.funcs[b.Target]; fi != nil {
+			b.TargetTitle = fi.title
+		} else {
+			b.Target = "" // handler isn't an indexed function; don't offer a dead link
+		}
+		if fi := i.funcs[b.Site]; fi != nil {
+			b.SiteTitle = fi.title
+		}
+	}
+	// Declared surface is folded in after the code-derived bindings, so the
+	// publicRoutes cross-check can see what the code actually registered.
+	i.applyVisibility()
+	i.bindings = append(i.bindings, i.declaredBindings()...)
+
+	// Outbound gRPC is a call-graph question rather than a per-call-site one,
+	// so it runs as its own pass. It goes *after* the declared surface
+	// because it seeds reachability from the inbound entrypoints, and for a
+	// gRPC-only service those are the proto-declared implementations — seed
+	// before they exist and every outbound edge looks unreachable.
+	grpcOut, unreachable := i.grpcOutbound()
+	i.bindings = append(i.bindings, grpcOut...)
+	i.outboundUnreachable = unreachable
+
+	i.sortBindings()
+	i.computeCrossings()
+
 	return nil
+}
+
+// SetProtoRoot points the indexer at the shared proto repository that a
+// manifest's protoPaths are relative to. Without it the declared gRPC surface
+// is skipped, since those paths don't resolve against the service's own
+// directory.
+//
+// It works before Load (the flag path) and after (the user picking a
+// directory in the UI). Changing it doesn't need a re-index: the declared
+// surface is derived from the manifest and the protos, and depends on the Go
+// index only to link an RPC to its implementation — so only the declared
+// bindings are recomputed. The returned error reports an unusable root; the
+// previous declared surface is dropped either way, since keeping a surface
+// built from a directory the user just replaced would be a lie.
+func (i *Indexer) SetProtoRoot(dir string) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.protoRoot = dir
+	i.protoErr = ""
+	if i.mf == nil {
+		return nil // nothing loaded yet, or no manifest — Load will apply it
+	}
+	kept := make([]model.Binding, 0, len(i.bindings))
+	for _, b := range i.bindings {
+		if b.Confidence != model.ConfDeclared {
+			kept = append(kept, b)
+		}
+	}
+	i.bindings = append(kept, i.declaredBindings()...)
+	i.sortBindings()
+	// The declared surface changed, so both the ids and what each entrypoint
+	// reaches have to be rebuilt — a proto root that adds RPCs adds
+	// entrypoints, and those reach outbound calls nothing else did.
+	i.computeCrossings()
+	// Only a root that yielded nothing is worth rejecting: a partial failure
+	// still produced a usable surface, and the warning on the view says which
+	// files were skipped.
+	if i.protoErr != "" && !i.hasDeclaredGRPC() {
+		return errors.New(i.protoErr)
+	}
+	return nil
+}
+
+// ProtoRoot reports the configured shared proto repository, if any.
+func (i *Indexer) ProtoRoot() string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.protoRoot
+}
+
+// sortBindings orders the surface deterministically.
+//
+// The location tiebreak matters: pass 2 walks functions in map order, so two
+// call sites sharing a kind and key would otherwise swap places between runs.
+// That makes output unstable for anyone diffing it and quietly flaky for
+// tests that pick "the" binding for a key.
+func (i *Indexer) sortBindings() {
+	sort.SliceStable(i.bindings, func(a, b int) bool {
+		x, y := i.bindings[a], i.bindings[b]
+		if x.Kind != y.Kind {
+			return x.Kind < y.Kind
+		}
+		if x.Key != y.Key {
+			return x.Key < y.Key
+		}
+		if x.File != y.File {
+			return x.File < y.File
+		}
+		if x.Line != y.Line {
+			return x.Line < y.Line
+		}
+		return x.SiteTitle < y.SiteTitle
+	})
+}
+
+// dropRelayedBindings removes edges that were discovered by following a call
+// chain but belong to a call site further in.
+
+// identify records what to call this project at the service level. The repo
+// (module) directory name is the fallback; a microservice.yaml at the project
+// root overrides it, and the module path is kept alongside as the unambiguous
+// identifier.
+func (i *Indexer) identify(dir string, pkgs []*packages.Package) {
+	root := dir
+	for _, p := range pkgs {
+		if p.Module != nil && p.Module.Dir != "" {
+			root = p.Module.Dir
+			i.modulePath = p.Module.Path
+			break
+		}
+	}
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	i.rootDir = filepath.Clean(root)
+	i.serviceName = filepath.Base(i.rootDir)
+	if i.serviceName == "." || i.serviceName == string(filepath.Separator) {
+		i.serviceName = i.modulePath
+	}
+
+	// A manifest is optional; most repos unfold opens won't have one. A
+	// malformed one is worth reporting but not worth failing the index over
+	// — the code-derived view is still correct without it.
+	m, err := manifest.Read(i.rootDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unfold: %v\n", err)
+		return
+	}
+	i.mf = m
+	if m == nil {
+		return
+	}
+	if m.Name != "" {
+		i.serviceName = m.Name
+	}
+}
+
+// declaredBindings turns the manifest into bindings: the proto-declared gRPC
+// surface, plus any publicRoutes the code never registered.
+//
+// Declared facts are the strongest tier — a proto is the contract both the
+// server and its generated SDK are built from — but they're also the ones
+// that rot, so anything the index can't corroborate is marked stale rather
+// than presented as real surface.
+func (i *Indexer) declaredBindings() []model.Binding {
+	if i.mf == nil {
+		return nil
+	}
+	var out []model.Binding
+
+	paths, excluded := i.mf.IncludedProtos()
+	if len(paths) > 0 {
+		if i.protoRoot == "" {
+			i.protoErr = fmt.Sprintf("%d proto path(s) declared but no --proto-root was given", len(paths))
+		} else {
+			// Partial results are normal: one unreadable proto shouldn't hide
+			// the surface the others declare, so methods and the error are
+			// both used.
+			methods, err := protoapi.Load(i.protoRoot, paths, excluded)
+			if err != nil {
+				i.protoErr = err.Error()
+				fmt.Fprintf(os.Stderr, "unfold: %v\n", err)
+			}
+			for _, m := range methods {
+				b := model.Binding{
+					Role:       model.RoleInbound,
+					Kind:       "grpc.method",
+					Key:        m.FullName,
+					Detail:     m.File,
+					Confidence: model.ConfDeclared,
+					Visibility: model.VisPlatform,
+					File:       filepath.Join(i.protoRoot, m.File),
+				}
+				if m.ExcludedFromSDK {
+					// Implemented here, but no other service can call it.
+					b.Visibility = model.VisInternal
+					b.Detail = m.File + " (excluded from SDK)"
+				}
+				if m.ClientStreaming || m.ServerStreaming {
+					b.Detail += " · streaming"
+				}
+				// Link to the implementation, and distinguish "nothing
+				// implements this" (stale — the declaration is out of date)
+				// from "several candidates, couldn't tell which" (not stale;
+				// the RPC is fine, the *link* is what's missing). Conflating
+				// them would report a healthy service as rotten.
+				target, candidates := i.implementationOfRPC(m.Service, m.Name)
+				switch {
+				case target != "":
+					b.Target = target
+					b.TargetTitle = i.funcs[target].title
+					b.Site = target
+					b.SiteTitle = b.TargetTitle
+				case len(candidates) == 0:
+					b.Stale = true
+				default:
+					// Several implementations and no way to tell which is
+					// "the" one — a service behind decorators, or one with
+					// generated mocks beside the real thing. Enumerate them:
+					// dropping the link left the row unopenable *and*
+					// unreachable, since reachability is computed from the
+					// very fields that were left empty.
+					for _, c := range candidates {
+						b.Candidates = append(b.Candidates, model.Candidate{
+							TargetID: c,
+							Label:    i.funcs[c].title,
+						})
+					}
+					b.Detail += fmt.Sprintf(" · %d implementations", len(candidates))
+				}
+				out = append(out, b)
+			}
+		}
+	}
+
+	// A declared public route nothing registers is the drift case worth
+	// surfacing; one that *is* registered gets marked public in place, below.
+	for _, route := range i.mf.PublicRoutes {
+		if i.routeRegistered(route) {
+			continue
+		}
+		out = append(out, model.Binding{
+			Role:       model.RoleInbound,
+			Kind:       "http.route",
+			Key:        route,
+			Detail:     "declared in " + manifest.Name,
+			Confidence: model.ConfDeclared,
+			Visibility: model.VisPublic,
+			Stale:      true,
+		})
+	}
+	return out
+}
+
+// applyVisibility classifies the code-derived inbound surface against the
+// manifest: a route the manifest calls public is public, everything else the
+// code registered is internal until something says otherwise.
+func (i *Indexer) applyVisibility() {
+	public := map[string]bool{}
+	if i.mf != nil {
+		for _, r := range i.mf.PublicRoutes {
+			public[r] = true
+		}
+	}
+	for n := range i.bindings {
+		b := &i.bindings[n]
+		if b.Role != model.RoleInbound || b.Visibility != "" {
+			continue
+		}
+		if public[routePath(b.Key)] {
+			b.Visibility = model.VisPublic
+		} else {
+			b.Visibility = model.VisInternal
+		}
+	}
+}
+
+// routeRegistered reports whether the code registers a route at this path.
+// publicRoutes are bare paths, so the method half of a "POST /x" key is
+// ignored on both sides of the comparison.
+func (i *Indexer) routeRegistered(route string) bool {
+	for _, b := range i.bindings {
+		if b.Kind == "http.route" && routePath(b.Key) == route {
+			return true
+		}
+	}
+	return false
+}
+
+// routePath drops the optional leading method from a route key.
+func routePath(key string) string {
+	if _, rest, ok := strings.Cut(key, " "); ok {
+		return rest
+	}
+	return key
+}
+
+// implementationOf finds the Go method implementing an RPC, and reports how
+// many plausible candidates there were.
+//
+// gRPC forces the implementation's method name to equal the RPC's, so the
+// name is a reliable starting point — but a loaded package set contains that
+// name several times over: the generated client, the Unimplemented embed,
+// mocks, and the real server. Filtering those out is what makes the match
+// usable rather than perpetually ambiguous:
+//
+//   - must be a method (a bare function of that name is something else),
+//
+//   - must not itself invoke gRPC — that's the *client* for this very RPC,
+//     identified by the same Invoke literal the outbound recognizer reads,
+//
+//   - must not be a generated Unimplemented stub,
+//
+//   - and main-module methods win outright, since a match inside a
+//     dependency is someone else's implementation, not this service's.
+//
+//   - and test files and generated mocks are skipped, since a double is
+//     never the implementation being asked about.
+//
+// Zero candidates means nothing implements the RPC — a real staleness signal.
+// Several means unfold can't tell which, which is a different claim: the
+// candidates are returned so the caller can offer them all rather than
+// dropping the link.
+func (i *Indexer) implementationOf(name string) (TargetID, []TargetID) {
+	return i.implementationOfRPC("", name)
+}
+
+// implementationOfRPC narrows by the generated server interface when the
+// service is known.
+//
+// Matching on the method name alone is far too loose in a real service: a
+// decorator, a metrics wrapper, an auth layer and the server itself all
+// declare the same method, and enumerating all of them is barely better than
+// guessing. But gRPC generates an interface per service — `<Service>Server`,
+// carrying exactly that service's methods — so the types implementing it are
+// the only real answers. That's a structural test, not a naming one: a
+// decorator implements the interface and belongs in the list; a helper that
+// merely shares a method name does not.
+func (i *Indexer) implementationOfRPC(service, name string) (TargetID, []TargetID) {
+	if impls := i.serverImplementors(service); impls != nil {
+		var narrowed []TargetID
+		_, all := i.implementationByName(name)
+		for _, id := range all {
+			if fi := i.funcs[id]; fi != nil {
+				if recv, _ := receiverParts(fi); impls[recv] {
+					narrowed = append(narrowed, id)
+				}
+			}
+		}
+		if len(narrowed) == 1 {
+			return narrowed[0], narrowed
+		}
+		if len(narrowed) > 1 {
+			return "", narrowed
+		}
+		// The interface exists but nothing indexed implements it; fall
+		// through rather than claiming the RPC is unimplemented.
+	}
+	return i.implementationByName(name)
+}
+
+// serverImplementors returns the receiver types implementing <service>Server,
+// or nil when no such interface is in the index.
+func (i *Indexer) serverImplementors(service string) map[string]bool {
+	if service == "" {
+		return nil
+	}
+	bare := service[strings.LastIndex(service, ".")+1:]
+	want := bare + "Server"
+	out := map[string]bool{}
+	for key, impls := range i.interfaceImpls {
+		if key[strings.LastIndex(key, ".")+1:] != want {
+			continue
+		}
+		for _, t := range impls {
+			if n, _ := namedTypeParts(t); n != "" {
+				out[n] = true
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// receiverParts returns a method's receiver type name and package.
+func receiverParts(fi *funcInfo) (name, pkgPath string) {
+	if fi.obj == nil {
+		return "", "" // an initializer has no receiver
+	}
+	sig, _ := fi.obj.Type().(*types.Signature)
+	if sig == nil || sig.Recv() == nil {
+		return "", ""
+	}
+	return namedTypeParts(sig.Recv().Type())
+}
+
+func (i *Indexer) implementationByName(name string) (TargetID, []TargetID) {
+	var local, any []TargetID
+	for id, fi := range i.funcs {
+		if fi.obj == nil || fi.obj.Name() != name {
+			continue
+		}
+		sig, _ := fi.obj.Type().(*types.Signature)
+		if sig == nil || sig.Recv() == nil {
+			continue
+		}
+		recv, _ := namedTypeParts(sig.Recv().Type())
+		if strings.HasPrefix(recv, "Unimplemented") || isDouble(recv) {
+			continue
+		}
+		if _, isClient := i.directInvokeKey(id); isClient {
+			continue // a generated client method, not a server implementation
+		}
+		if pos := i.fset.Position(fi.decl.Pos()); strings.HasSuffix(pos.Filename, "_test.go") {
+			continue
+		}
+		any = append(any, id)
+		if i.ownsCode(fi) {
+			local = append(local, id)
+		}
+	}
+	if len(local) > 0 {
+		any = local
+	}
+	sort.Slice(any, func(a, b int) bool { return any[a] < any[b] })
+	if len(any) == 1 {
+		return any[0], any
+	}
+	return "", any
+}
+
+// isDouble reports whether a receiver type name looks like a test double
+// rather than an implementation. Naming is the only signal available — a mock
+// satisfies the same interface as the real thing by construction — but the
+// conventions are near-universal.
+func isDouble(recv string) bool {
+	l := strings.ToLower(recv)
+	for _, p := range []string{"mock", "fake", "stub", "spy"} {
+		if strings.HasPrefix(l, p) || strings.HasSuffix(l, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// callFacts reduces a call site to the neutral shape recognizers consume.
+// Reports false when the callee can't be identified — a builtin, an
+// immediately-invoked literal, or a call in a package that failed to type
+// check.
+func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool) {
+	info := fi.pkg.TypesInfo
+	if info == nil {
+		return platform.Call{}, false
+	}
+	var obj *types.Func
+	switch fn := ce.Fun.(type) {
+	case *ast.Ident:
+		obj, _ = info.Uses[fn].(*types.Func)
+	case *ast.SelectorExpr:
+		if sel, ok := info.Selections[fn]; ok {
+			obj, _ = sel.Obj().(*types.Func)
+		} else {
+			obj, _ = info.Uses[fn.Sel].(*types.Func)
+		}
+	}
+	if obj == nil || obj.Pkg() == nil {
+		return platform.Call{}, false
+	}
+
+	pos := i.fset.Position(ce.Pos())
+	c := platform.Call{
+		PkgPath: obj.Pkg().Path(),
+		Func:    obj.Name(),
+		Site:    fi.id,
+		File:    pos.Filename,
+		Line:    pos.Line,
+	}
+	if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil {
+		c.Recv, c.RecvPkg = namedTypeParts(sig.Recv().Type())
+	}
+	for _, a := range ce.Args {
+		c.Args = append(c.Args, argFacts(info, a))
+	}
+	return c, true
+}
+
+// namedTypeParts unwraps a receiver type to its bare name and package, so a
+// recognizer can match on ("net/http", "ServeMux") without caring whether the
+// method was declared on the value or the pointer.
+func namedTypeParts(t types.Type) (name, pkgPath string) {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok || named.Obj() == nil {
+		return "", ""
+	}
+	if pkg := named.Obj().Pkg(); pkg != nil {
+		pkgPath = pkg.Path()
+	}
+	return named.Obj().Name(), pkgPath
+}
+
+// argFacts extracts the two things recognizers read off an argument: its
+// constant string value, and the function it names when it's a function
+// value. Using the type checker's constant folding (rather than looking for
+// *ast.BasicLit) means `"POST " + routePrefix` resolves like a literal.
+func argFacts(info *types.Info, e ast.Expr) platform.Arg {
+	var a platform.Arg
+	if tv, ok := info.Types[e]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
+		a.Value = constant.StringVal(tv.Value)
+		a.Known = true
+	}
+	switch v := e.(type) {
+	case *ast.Ident:
+		if f, ok := info.Uses[v].(*types.Func); ok {
+			a.Target = TargetID(f.FullName())
+		}
+	case *ast.SelectorExpr:
+		if sel, ok := info.Selections[v]; ok {
+			if f, ok := sel.Obj().(*types.Func); ok {
+				a.Target = TargetID(f.FullName())
+			}
+		} else if f, ok := info.Uses[v.Sel].(*types.Func); ok {
+			a.Target = TargetID(f.FullName())
+		}
+	case *ast.CallExpr:
+		// A conversion wrapping the real argument, e.g.
+		// http.Handle("/x", http.HandlerFunc(h)) — look through it.
+		if tv, ok := info.Types[v.Fun]; ok && tv.IsType() && len(v.Args) == 1 {
+			return argFacts(info, v.Args[0])
+		}
+	}
+	return a
+}
+
+// ServiceView implements model.PlatformEngine.
+func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	sv := &model.ServiceView{
+		Name:                i.serviceName,
+		Module:              i.modulePath,
+		Root:                i.rootDir,
+		ProtoRoot:           i.protoRoot,
+		Warning:             i.protoErr,
+		OutboundUnreachable: i.outboundUnreachable,
+		// The cue for the UI to offer a picker: protos are declared but the
+		// surface didn't come out, so a root is missing or wrong.
+		NeedsProtoRoot: i.needsProtoRoot(),
+		Inbound:        []model.Binding{},
+		Outbound:       []model.Binding{},
+	}
+	// An anchor that isn't an indexed function (a stale URL, a file frame)
+	// degrades to the plain service view rather than erroring — the view is
+	// still correct, it just can't mark anything.
+	// Two walks, because the anchor asks two different questions. Backwards
+	// answers "what runs this code" and marks the entrypoints; forwards
+	// answers "what does this code run" and marks the calls it makes.
+	var reaching, reached map[TargetID]bool
+	if fi := i.funcs[anchor]; fi != nil {
+		sv.Anchor = anchor
+		sv.AnchorTitle = fi.title
+		reaching = i.callersClosure(anchor)
+		reached = i.forwardClosure(map[TargetID]bool{anchor: true})
+	}
+
+	for _, b := range i.bindings {
+		if b.Role == model.RoleInbound {
+			// Only inbound surface is marked. The closure runs backwards
+			// (who reaches the anchor), which answers "which entrypoints run
+			// this code". The outbound question is the mirror image — which
+			// calls the anchor itself makes — and needs a forward walk, so
+			// labelling outbound rows with this closure would state
+			// something true but not what the badge claims.
+			if reaching != nil && bindingReaches(b, reaching) {
+				b.ReachesAnchor = true
+			}
+			sv.Inbound = append(sv.Inbound, b)
+		} else {
+			if reached != nil && reached[b.Site] {
+				b.ReachedByAnchor = true
+			}
+			sv.Outbound = append(sv.Outbound, b)
+		}
+	}
+	return sv, nil
+}
+
+// needsProtoRoot reports whether the manifest declares protos that the
+// current root can't resolve at all — no root set, or one that yielded
+// nothing. A root that resolved most files and tripped on one is *not* the
+// wrong root, so it warns without prompting for a replacement.
+func (i *Indexer) needsProtoRoot() bool {
+	if i.mf == nil {
+		return false
+	}
+	paths, _ := i.mf.IncludedProtos()
+	if len(paths) == 0 {
+		return false
+	}
+	return i.protoRoot == "" || !i.hasDeclaredGRPC()
+}
+
+// hasDeclaredGRPC reports whether any RPC came out of the declared protos.
+// Only the declared inbound surface counts: an outbound grpc.method binding
+// is recognized from code and says nothing about whether the proto root
+// resolved.
+func (i *Indexer) hasDeclaredGRPC() bool {
+	for _, b := range i.bindings {
+		if b.Kind == "grpc.method" && b.Role == model.RoleInbound && b.Confidence == model.ConfDeclared {
+			return true
+		}
+	}
+	return false
+}
+
+// bindingReaches reports whether any endpoint of a binding reaches the
+// anchor. Candidates count: an RPC with three possible implementations is
+// still an entrypoint to the anchor if any one of them leads there, and
+// checking only Target/Site silently excluded every enumerated binding.
+func bindingReaches(b model.Binding, reaching map[TargetID]bool) bool {
+	if reaching[b.Target] || reaching[b.Site] {
+		return true
+	}
+	for _, c := range b.Candidates {
+		if reaching[c.TargetID] {
+			return true
+		}
+	}
+	return false
+}
+
+// callersClosure returns every function that transitively reaches target,
+// including target itself. It walks the usage index backwards, which makes
+// it the same traversal the callers tree uses — an inbound binding whose
+// handler lands in this set is an entrypoint through which the anchor runs.
+//
+// Value references are not followed: a function passed as a value has no call
+// site, so a chain through one isn't an execution path (the same limitation
+// the callers tree documents).
+func (i *Indexer) callersClosure(target TargetID) map[TargetID]bool {
+	seen := map[TargetID]bool{target: true}
+	queue := []TargetID{target}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, u := range i.usagesByTarget[cur] {
+			if u.kind == model.UsageRef || seen[u.parent] {
+				continue
+			}
+			seen[u.parent] = true
+			queue = append(queue, u.parent)
+		}
+	}
+	return seen
+}
+
+// computeCrossings fills in, for every inbound binding, which outbound
+// bindings its handler can actually cause — the relation joining the two
+// halves of the service view.
+//
+// Both columns describe the same service but neither says anything about the
+// other, so "this route is hit, what does the service then call?" — and read
+// backwards, "what has to be hit for this call to happen?" — had no answer
+// short of unfolding the handler by hand. It's also the missing piece for
+// transitive anchor marking at the platform level: propagating a mark from
+// one service to its callers needs exactly this, per repo.
+//
+// Walking forwards from each entrypoint costs one closure per inbound
+// binding. The alternative — one backwards closure per outbound binding — is
+// the better shape when a service has far more routes than calls, and is
+// worth switching to if this ever shows up in a profile. It isn't a different
+// answer, only a different traversal order.
+//
+// Seeds are the handler and its candidates, never the registration site: a
+// function that registers a route doesn't run it, so seeding from the site
+// would attribute every call the registrar makes to every route it registers.
+func (i *Indexer) computeCrossings() {
+	for n := range i.bindings {
+		i.bindings[n].ID = "b" + strconv.Itoa(n)
+		i.bindings[n].Reaches = nil
+		i.bindings[n].CrossingKnown = false
+	}
+
+	type outbound struct {
+		site TargetID
+		id   string
+	}
+	var outs []outbound
+	for _, b := range i.bindings {
+		if b.Role == model.RoleOutbound && b.Site != "" {
+			outs = append(outs, outbound{site: b.Site, id: b.ID})
+		}
+	}
+	for n := range i.bindings {
+		b := &i.bindings[n]
+		if b.Role != model.RoleInbound {
+			continue
+		}
+		seeds := map[TargetID]bool{}
+		if b.Target != "" {
+			seeds[b.Target] = true
+		}
+		// An enumerated binding reaches what *any* of its implementations
+		// reaches: unfold can't tell which one serves, so claiming only the
+		// first would be a guess dressed as a fact.
+		for _, c := range b.Candidates {
+			if c.TargetID != "" {
+				seeds[c.TargetID] = true
+			}
+		}
+		if len(seeds) == 0 {
+			continue // no handler to walk from: unknown, not empty
+		}
+		// Knowable is about having a handler to walk from, not about finding
+		// anything. A service with no outbound surface at all still gives a
+		// determined answer for each of its entrypoints — "calls nothing" —
+		// and reporting that as "can't tell" would be the wrong claim.
+		b.CrossingKnown = true
+		if len(outs) == 0 {
+			continue // nothing to reach; skip the walk, keep the answer
+		}
+		reached := i.forwardClosure(seeds)
+		for _, o := range outs {
+			if reached[o.site] {
+				b.Reaches = append(b.Reaches, o.id)
+			}
+		}
+	}
+}
+
+// containsCall reports whether any of these expressions contains a call,
+// anywhere — including inside a function literal, which is the shape that
+// matters most here (a handler or RunE closure held in a package-level var).
+func containsCall(exprs []ast.Expr) bool {
+	found := false
+	for _, e := range exprs {
+		ast.Inspect(e, func(n ast.Node) bool {
+			if found {
+				return false
+			}
+			if _, ok := n.(*ast.CallExpr); ok {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // nameIdent returns the identifier that names a call's function — the same
@@ -345,7 +1263,12 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 	if !ok {
 		return nil
 	}
-	pos := i.fset.Position(ce.Pos())
+	// Key the call by its *name* token, not by the expression start. In a
+	// chained call like `sdk.New().Get(ctx)` the outer CallExpr and the inner
+	// `sdk.New()` begin at the same token, so keying on ce.Pos() gave them
+	// the same id and one silently replaced the other in the index — losing a
+	// usage, and with it the caller edge for whichever lost.
+	pos := i.fset.Position(spanPos)
 	id := CallID(fmt.Sprintf("%s:%d", pos.Filename, pos.Offset))
 
 	ci := &callInfo{
@@ -403,6 +1326,43 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 	}
 
 	return ci
+}
+
+// ownsCode reports whether a function is part of the project being read, as
+// opposed to a dependency.
+//
+// This is decided by file path, not by module metadata. `pkg.Module` is nil
+// under vendored builds and some go.work configurations, and the previous
+// `Module.Main` test then answered "no" for *every* function — which silently
+// dropped every code-derived binding while the declared surface, which comes
+// from protos rather than code, carried on looking fine. Path containment is
+// what "this repo's own code" means anyway, and it's always available.
+func (i *Indexer) ownsCode(fi *funcInfo) bool {
+	if fi == nil {
+		return false
+	}
+	if i.rootDir == "" {
+		// Nothing to compare against; fall back to module metadata.
+		return fi.pkg != nil && fi.pkg.Module != nil && fi.pkg.Module.Main
+	}
+	if fi.node == nil {
+		return false
+	}
+	return underDir(i.fset.Position(fi.node.Pos()).Filename, i.rootDir)
+}
+
+// underDir reports whether path lies inside dir, comparing whole path
+// segments so a sibling checkout like "orders-v2" isn't read as being inside
+// "orders".
+func underDir(path, dir string) bool {
+	if path == "" || dir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(dir, filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func isInterface(t types.Type) bool {
@@ -573,12 +1533,12 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown target %q", id)
 	}
-	if fi.decl.Body == nil {
+	if fi.body == nil {
 		return nil, fmt.Errorf("target %q has no body", id)
 	}
 
-	startPos := i.fset.Position(fi.decl.Pos())
-	endPos := i.fset.Position(fi.decl.End())
+	startPos := i.fset.Position(fi.node.Pos())
+	endPos := i.fset.Position(fi.node.End())
 	src, err := i.readRange(startPos.Filename, startPos.Offset, endPos.Offset)
 	if err != nil {
 		return nil, err
@@ -609,7 +1569,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 
 	return &Frame{
 		ID:        id,
-		Title:     goTitle(fi.obj),
+		Title:     fi.title,
 		File:      startPos.Filename,
 		Language:  "go",
 		StartLine: startPos.Line,
@@ -650,7 +1610,7 @@ func (i *Indexer) Files() []string {
 		if fi.pkg == nil || fi.pkg.Module == nil || !fi.pkg.Module.Main {
 			continue
 		}
-		set[i.fset.Position(fi.decl.Pos()).Filename] = struct{}{}
+		set[i.fset.Position(fi.node.Pos()).Filename] = struct{}{}
 	}
 	out := make([]string, 0, len(set))
 	for f := range set {
@@ -691,7 +1651,7 @@ func (i *Indexer) fileFrame(path string) (*Frame, error) {
 	i.mu.RLock()
 	var infos []*callInfo
 	for _, fi := range i.funcs {
-		if i.fset.Position(fi.decl.Pos()).Filename != path {
+		if i.fset.Position(fi.node.Pos()).Filename != path {
 			continue
 		}
 		infos = append(infos, fi.calls...)
@@ -766,9 +1726,9 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 		if !ok {
 			return nil, fmt.Errorf("unknown target %q", id)
 		}
-		start := i.fset.Position(fi.decl.Pos())
+		start := i.fset.Position(fi.node.Pos())
 		srcBase, fileName, pkg = start.Offset, start.Filename, fi.pkg
-		astFile = fileContaining(fi.decl, fi.pkg)
+		astFile = fileContaining(fi.node, fi.pkg)
 	}
 	if astFile == nil || pkg == nil || pkg.TypesInfo == nil {
 		return nil, nil
@@ -824,8 +1784,8 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 		i.mu.RLock()
 		if dfi, ok := i.funcs[fullName]; ok {
 			ti.TargetID = fullName
-			if dfi.decl.Doc != nil {
-				ti.Doc = strings.TrimSpace(dfi.decl.Doc.Text())
+			if dfi.doc != "" {
+				ti.Doc = dfi.doc
 			}
 		}
 		i.mu.RUnlock()
@@ -897,6 +1857,24 @@ func typeDefinition(t types.Type, qual types.Qualifier) string {
 	}
 }
 
+// declType renders a target's type: a signature for a function, the declared
+// variable's type for an initializer. Both answer "what is this", which is
+// what the card asks — they just live in different halves of go/types.
+func (i *Indexer) declType(fi *funcInfo) string {
+	if fi.obj != nil {
+		return types.TypeString(fi.obj.Type(), types.RelativeTo(fi.pkg.Types))
+	}
+	vs, ok := fi.node.(*ast.ValueSpec)
+	if !ok || fi.pkg == nil || fi.pkg.TypesInfo == nil || len(vs.Names) == 0 {
+		return ""
+	}
+	obj, _ := fi.pkg.TypesInfo.Defs[vs.Names[0]].(*types.Var)
+	if obj == nil {
+		return ""
+	}
+	return types.TypeString(obj.Type(), types.RelativeTo(fi.pkg.Types))
+}
+
 // describeTarget builds the TypeInfo of a target's own declaration.
 func (i *Indexer) describeTarget(id TargetID) (*TypeInfo, error) {
 	i.mu.RLock()
@@ -905,16 +1883,20 @@ func (i *Indexer) describeTarget(id TargetID) (*TypeInfo, error) {
 	if !ok {
 		return nil, nil
 	}
+	kind := "func"
+	if fi.initializer {
+		kind = "var"
+	}
 	ti := &TypeInfo{
-		Kind:     "func",
-		Name:     goTitle(fi.obj),
-		Type:     types.TypeString(fi.obj.Type(), types.RelativeTo(fi.pkg.Types)),
+		Kind:     kind,
+		Name:     fi.title,
+		Type:     i.declType(fi),
 		TargetID: id,
 	}
-	dp := i.fset.Position(fi.decl.Pos())
+	dp := i.fset.Position(fi.node.Pos())
 	ti.DefinedAt = fmt.Sprintf("%s:%d", dp.Filename, dp.Line)
-	if fi.decl.Doc != nil {
-		ti.Doc = strings.TrimSpace(fi.decl.Doc.Text())
+	if fi.doc != "" {
+		ti.Doc = fi.doc
 	}
 	return ti, nil
 }
@@ -1022,7 +2004,7 @@ func (i *Indexer) Usages(id TargetID) ([]model.Usage, error) {
 		usage := model.Usage{
 			Choice:      u.choice,
 			Caller:      u.parent,
-			CallerTitle: goTitle(parent.obj),
+			CallerTitle: parent.title,
 			File:        pos.Filename,
 			Line:        pos.Line,
 			Kind:        u.kind,
@@ -1033,8 +2015,8 @@ func (i *Indexer) Usages(id TargetID) ([]model.Usage, error) {
 		usage.Excerpt, usage.ExcerptLine = i.excerpt(
 			pos.Filename,
 			pos.Line,
-			i.fset.Position(parent.decl.Pos()).Line,
-			i.fset.Position(parent.decl.End()).Line,
+			i.fset.Position(parent.node.Pos()).Line,
+			i.fset.Position(parent.node.End()).Line,
 		)
 		out = append(out, usage)
 	}
@@ -1148,7 +2130,7 @@ func (i *Indexer) Search(query string, limit int) []SearchResult {
 			continue
 		}
 		fi := i.funcs[id]
-		pos := i.fset.Position(fi.decl.Pos())
+		pos := i.fset.Position(fi.node.Pos())
 		hits = append(hits, hit{
 			res: SearchResult{
 				TargetID: id,

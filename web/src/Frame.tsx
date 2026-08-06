@@ -16,6 +16,7 @@ import { useBookmarks } from "./bookmarks";
 import { CallersPanel } from "./Callers";
 import { depthColor } from "./StickyHeaders";
 import { useSettings } from "./settings";
+import { matches } from "./keybindings";
 import { useNotes } from "./notes";
 import { NoteCard, NoteComposer } from "./NotesUI";
 
@@ -32,9 +33,13 @@ interface FrameProps {
   // A call site whose target appears here (or is this frame itself) is
   // recursive: expanding it would re-open a function already on screen.
   ancestors?: TargetID[];
+  // Zoom out to the service level. Passed only to the root frame — the
+  // header control and the trail are two gestures for the same move, kept
+  // side by side so one can be picked after using both.
+  onZoomOut?: () => void;
 }
 
-export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
+export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: FrameProps) {
   const store = useViewStore();
   const slice = useFrameSlice(path);
   const bookmarks = useBookmarks();
@@ -358,7 +363,7 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
   useEffect(() => {
     if (!selection) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setSelection(null);
+      if (matches("ui.dismiss", e)) setSelection(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -813,6 +818,16 @@ export function Frame({ frame, path, onClose, ancestors = [] }: FrameProps) {
             title="show callers — pick one to splice it above (re-roots the view)"
           >
             ▲ callers
+          </button>
+        )}
+        {onZoomOut && (
+          <button
+            type="button"
+            className="frame-zoom-out"
+            onClick={onZoomOut}
+            title="zoom out to the service (alt+↑) — shows which entrypoints reach this frame"
+          >
+            ▴ service
           </button>
         )}
         {isFileFrame && (

@@ -746,6 +746,25 @@ body.resizing {
   flex-basis: 2rem;
 }
 
+/* The outbounds panel. Same shape as the left sidebar — it's the mirror of
+   it, so it shares .tree-inner/.tree-header/.tree-body rather than growing a
+   parallel set of rules that would drift. */
+.out-panel {
+  flex: 0 0 280px;
+  position: sticky;
+  top: 1rem;
+  align-self: flex-start;
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.out-panel--collapsed {
+  flex-basis: 2rem;
+}
+
+
 .tree-inner {
   display: flex;
   flex-direction: column;
@@ -937,9 +956,29 @@ body.resizing {
   letter-spacing: 0.03em;
 }
 
-/* Files | Calls tab switcher in the sidebar header */
+/* Files | Calls tab switcher in the sidebar header. Wraps rather than
+   overflows: the tab strip grew past what 280px holds on one line, and a
+   clipped tab is one you can't discover. */
 .tree-tabs {
   gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+/* Count beside a tab — how many rows are waiting behind it, so you can tell
+   an empty answer from an unvisited one without clicking. */
+.tree-tab-count {
+  margin-left: 0.25rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--call-bg);
+  border: 1px solid var(--call-border);
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 500;
+}
+
+.tree-tab--active .tree-tab-count {
+  color: var(--fg);
 }
 
 .tree-tab {
@@ -1051,6 +1090,18 @@ body.resizing {
 
 .bookmark:hover {
   background: var(--call-bg);
+}
+
+/* The anchor you're currently on. Marked with a rail rather than a badge so
+   the row stays the same height as every other one and the list doesn't
+   reflow as you move between anchors. */
+.bookmark--active {
+  background: var(--call-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.bookmark--active .bookmark-name {
+  font-weight: 600;
 }
 
 .bookmark-open {
@@ -1856,4 +1907,1213 @@ body.resizing {
   white-space: pre;
   overflow: auto;
   max-height: 16rem;
+}
+
+/* ----- zoom: trail + service level ----- */
+
+/* The trail reads as a level indicator, not a path: every entry stays put
+   when you zoom, because the tail is what anchors the upper levels. */
+.zoom-trail {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+}
+
+.zoom-crumb {
+  font: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.05rem 0.4rem;
+  cursor: pointer;
+}
+
+.zoom-crumb:hover {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.zoom-crumb--active {
+  color: var(--fg);
+  font-weight: 600;
+  border-color: var(--card-border);
+  background: var(--card-bg);
+  cursor: default;
+}
+
+/* Below the active level: still present, visibly "where you came from". */
+.zoom-crumb--ghost {
+  opacity: 0.55;
+}
+
+/* The route slot has no single answer until one is picked, so it states the
+   count rather than choosing an entrypoint on your behalf. */
+.zoom-crumb--slot {
+  cursor: default;
+  font-style: italic;
+}
+
+.zoom-crumb--slot:hover {
+  color: var(--muted);
+  border-color: transparent;
+  background: none;
+}
+
+.zoom-sep {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.frame-zoom-out {
+  font: inherit;
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.05rem 0.45rem;
+  cursor: pointer;
+  flex: none;
+}
+
+.frame-zoom-out:hover {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.service {
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  overflow: hidden;
+}
+
+.service-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid var(--card-border);
+  background: rgba(127, 127, 127, 0.04);
+}
+
+.service-name {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.service-module {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.service-anchor {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Inbound left, service in the middle, outbound right — a two-sided
+   dependency card. Collapses to one column when there isn't room. */
+.service-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0;
+}
+
+.service-col {
+  padding: 0.7rem 0.8rem 1rem;
+  min-width: 0;
+}
+
+.service-col--outbound {
+  border-left: 1px solid var(--card-border);
+}
+
+.service-col-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.service-col-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.service-col-count {
+  font-size: 0.72rem;
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+}
+
+.service-col-hint,
+.service-empty {
+  margin: 0.15rem 0 0.7rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.service-group-kind {
+  margin: 0.7rem 0 0.25rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.service-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ===== The crossing relation: tracing one side to the other ===== */
+
+/* The trace control. Sits before the row's own action rather than replacing
+   it — opening source is the more common intent and shouldn't be displaced. */
+.service-cross-pick {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.15rem 0.25rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+/* Revealed on hover, so a column of eighty routes isn't eighty glyphs of
+   chrome — but kept visible once armed, or the control you just used
+   vanishes. */
+.service-item:hover .service-cross-pick,
+.service-cross-pick:focus-visible,
+.service-cross-pick--on {
+  opacity: 1;
+}
+
+.service-cross-pick:hover {
+  color: var(--fg);
+  border-color: var(--call-border);
+}
+
+.service-cross-pick--on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* The traced row itself: marked distinctly from the rows it connects to, so
+   "the one I picked" and "the ones it reaches" don't read the same. */
+.service-item--crossed {
+  background: var(--call-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+  border-radius: 4px;
+}
+
+.service-trace {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.4rem 0.6rem 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--call-border);
+  border-radius: 6px;
+  background: var(--call-bg);
+  font-size: 0.78rem;
+}
+
+.service-trace-key {
+  font-weight: 600;
+}
+
+.service-trace-summary {
+  color: var(--muted);
+}
+
+.service-trace-clear {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.service-trace-clear:hover {
+  color: var(--fg);
+}
+
+/* ===== Anchor panels (entrypoints / outbounds beside the code) ===== */
+.anchor-panel {
+  padding: 0.5rem 0.6rem;
+}
+
+.anchor-panel-hint {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.anchor-panel-hint b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* A panel is a fraction of the width the service columns get, so rows stack
+   instead of trying to hold key and location on one line. */
+.anchor-panel-list .service-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.1rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.anchor-panel-list .service-item:last-child {
+  border-bottom: 0;
+}
+
+/* A panel is roughly a fifth the width the service columns get, so the row's
+   two halves stack as well. Left as a row they simply clip, and what gets cut
+   is the file:line at the end — the part that tells you where to look. */
+.anchor-panel-list .service-item-open {
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+}
+
+.anchor-panel-list .service-key {
+  overflow-wrap: anywhere;
+}
+
+.anchor-panel-list .service-item-meta {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  font-size: 0.68rem;
+}
+
+/* Badges sit under the row rather than stretching it. */
+.anchor-panel-list .service-badge {
+  align-self: flex-start;
+}
+
+/* Rows stay on one line when there's room; an outbound row carrying a
+   cross-repo action wraps rather than crushing the key it's scanned by. */
+.service-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.15rem 0;
+}
+
+.service-item-open {
+  flex: 1 1 15rem;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.1rem 0.3rem;
+  margin-left: -0.3rem;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg);
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Long keys and handler names truncate rather than wrapping: the column is
+   scanned vertically, so a ragged left edge costs more than a clipped tail
+   (the full text is in the row's tooltip). */
+.service-key,
+.service-handler,
+.service-loc {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The key is what the column is scanned by, so the metadata beside it gives
+   way first when the row runs out of room. */
+.service-key {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.service-item-meta {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.service-item-meta {
+  min-width: 0;
+}
+
+.service-item-open:hover {
+  background: var(--call-bg);
+}
+
+.service-key {
+  font-size: 0.82rem;
+}
+
+.service-item-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.service-handler--site {
+  font-style: italic;
+}
+
+/* With an anchor loaded the reaching entrypoints are lit and the rest dim,
+   so a large inbound surface stays readable — you read the two that matter,
+   with the rest as context rather than noise. */
+.service-item--reaches .service-key {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.service-item--dim {
+  opacity: 0.45;
+}
+
+.service-badge {
+  font-size: 0.65rem;
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  border: 1px solid var(--card-border);
+  color: var(--muted);
+  flex: none;
+}
+
+.service-badge--reaches {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+/* Non-exact resolution is always labelled: a platform edge that was guessed
+   must not read like one that was proven. */
+.service-badge--inferred,
+.service-badge--declared {
+  color: var(--goroutine-fg);
+  border-color: var(--goroutine-border);
+  background: var(--goroutine-bg);
+}
+
+/* ----- settings: keyboard reference ----- */
+
+.settings-keys-group + .settings-keys-group {
+  margin-top: 0.7rem;
+}
+
+.settings-keys-scope {
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.settings-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.settings-key {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+  font-size: 0.78rem;
+}
+
+.settings-key-chord {
+  display: flex;
+  align-items: baseline;
+  gap: 0.15rem;
+  flex: none;
+  /* Fixed column so the descriptions line up down the list. */
+  min-width: 4.75rem;
+}
+
+.settings-key kbd {
+  font: inherit;
+  font-size: 0.72rem;
+  border: 1px solid var(--card-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  background: var(--card-bg);
+  color: var(--fg);
+}
+
+.settings-key-plus {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.settings-key-desc {
+  color: var(--muted);
+}
+
+.service-warning {
+  margin: 0;
+  padding: 0.45rem 0.8rem;
+  border-bottom: 1px solid var(--card-border);
+  background: var(--goroutine-bg);
+  color: var(--goroutine-fg);
+  font-size: 0.75rem;
+}
+
+/* A declared binding with no implementation has nothing to open. */
+.service-item-open--dead {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.service-item-open--dead:hover {
+  background: none;
+}
+
+.service-badge--stale {
+  color: var(--error);
+  border-color: var(--error);
+  background: transparent;
+}
+
+/* ----- proto root picker ----- */
+
+.proto-open,
+.proto-use,
+.proto-cancel {
+  font: inherit;
+  font-size: 0.72rem;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--fg);
+  padding: 0.1rem 0.5rem;
+  cursor: pointer;
+}
+
+.proto-open:hover,
+.proto-use:hover,
+.proto-cancel:hover {
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.proto-open {
+  margin-top: 0.35rem;
+}
+
+.proto-picker {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-width: 34rem;
+}
+
+.proto-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.proto-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.proto-field input {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.proto-cwd {
+  font-size: 0.68rem;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Scrolls inside itself: a home directory can hold a lot of folders, and the
+   picker must not push the service card off screen. */
+.proto-dirs {
+  list-style: none;
+  margin: 0;
+  padding: 0.2rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.proto-dirs li button {
+  font: inherit;
+  font-size: 0.75rem;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.proto-dirs li button:hover {
+  background: var(--call-bg);
+}
+
+.proto-empty {
+  font-size: 0.72rem;
+  opacity: 0.7;
+  padding: 0.1rem 0.3rem;
+}
+
+.proto-error {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--error);
+}
+
+.proto-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* ----- workspace / cross-repo ----- */
+
+.service-repos {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.35rem 0.8rem;
+  border-bottom: 1px solid var(--card-border);
+  font-size: 0.7rem;
+}
+
+.service-repos-label {
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Un-indexed repos read as dimmer: a lazy workspace can only cross-link and
+   search what it has loaded, and showing that beats looking broken. */
+.service-repo {
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 0 0.45rem;
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.service-repo--indexed {
+  opacity: 1;
+}
+
+/* The repo unfold was launched in stays legible; the one currently being
+   viewed is the one that's highlighted. */
+.service-repo--primary {
+  color: var(--fg);
+  opacity: 1;
+}
+
+.service-repo--current {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+  opacity: 1;
+}
+
+.service-cross {
+  font: inherit;
+  font-size: 0.7rem;
+  border: 1px solid var(--call-border);
+  border-radius: 999px;
+  background: var(--call-bg);
+  color: var(--accent);
+  padding: 0 0.45rem;
+  cursor: pointer;
+  flex: none;
+}
+
+.service-cross:hover:not(:disabled) {
+  background: var(--call-bg-hover);
+}
+
+.service-cross:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.service-cross-error {
+  font-size: 0.68rem;
+  color: var(--error);
+}
+
+/* ----- platform level (L0) ----- */
+
+.platform {
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  overflow: hidden;
+}
+
+.platform-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid var(--card-border);
+  background: rgba(127, 127, 127, 0.04);
+}
+
+.platform-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.platform-counts {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.platform-warn {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--goroutine-fg);
+}
+
+/* The layered graph. Positioned absolutely over an SVG edge layer so the
+   nodes stay real buttons — a <foreignObject> would work but loses focus and
+   hover behaviour that comes free with plain DOM. */
+/* A deep workspace is wider than the card, so the graph scrolls inside itself
+   rather than stretching the page — the same rule the rest of the UI follows
+   for wide content. */
+.graph-scroll {
+  margin: 0.6rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.graph {
+  position: relative;
+}
+
+.graph-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.graph-edge {
+  fill: none;
+  stroke: var(--call-border);
+  transition: opacity 0.12s ease;
+}
+
+/* A back edge points against the layering — the graph has a cycle there, and
+   drawing it distinctly beats pretending the layering was clean. */
+.graph-edge--back {
+  stroke: var(--goroutine-border);
+  stroke-dasharray: 4 3;
+}
+
+.graph-edge--faded {
+  opacity: 0.12;
+}
+
+/* Counts sit in routing channels the layout keeps clear of nodes, but they
+   still cross the edges themselves. paint-order draws the halo first and the
+   glyph over it, so a number stays readable on a thick edge without needing a
+   background rect that would occlude the line. */
+.graph-edge-label {
+  fill: var(--fg);
+  font-size: 10px;
+  font-weight: 600;
+  text-anchor: middle;
+  paint-order: stroke fill;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.graph-node {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  padding: 0 0.5rem;
+  transition: opacity 0.12s ease;
+  /* Nodes sit over the edge layer, so an edge routed past one is hidden by
+     it rather than crossing it — which is what makes the reserved channels
+     read as "around" instead of "through". */
+  z-index: 1;
+}
+
+.graph-node--primary {
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+/* Not indexed: its incoming edges are known (they come from other services'
+   code) but its outgoing ones aren't, so it reads as provisional. */
+.graph-node--unindexed {
+  border-style: dashed;
+  opacity: 0.75;
+}
+
+.graph-node--dim {
+  opacity: 0.2;
+}
+
+.graph-node-open {
+  font: inherit;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  background: none;
+  border: none;
+  text-align: left;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0;
+}
+
+.graph-node-name {
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-node-meta {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.platform-card {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0.3rem 0.45rem;
+  min-width: 0;
+}
+
+.platform-card--primary {
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.platform-card-open {
+  font: inherit;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  background: none;
+  border: none;
+  text-align: left;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0;
+}
+
+.platform-card-name {
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-card-meta {
+  display: flex;
+  gap: 0.45rem;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.platform-index,
+.slice-back,
+.slice-open {
+  font: inherit;
+  font-size: 0.68rem;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--muted);
+  padding: 0 0.35rem;
+  cursor: pointer;
+  flex: none;
+}
+
+.platform-index:hover:not(:disabled),
+.slice-back:hover,
+.slice-open:hover {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.platform-card-error {
+  font-size: 0.68rem;
+  color: var(--error);
+}
+
+.platform-empty {
+  grid-column: 1 / -1;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* The slice around one service: callers | service | callees. Legible at any
+   workspace size because only one service's neighbourhood is ever drawn. */
+.slice-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.8rem;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.slice-warn {
+  font-size: 0.7rem;
+  color: var(--goroutine-fg);
+}
+
+.slice-columns {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.8rem;
+  padding: 0.7rem 0.8rem 1rem;
+  align-items: start;
+}
+
+.slice-col {
+  min-width: 0;
+}
+
+.slice-col--callees {
+  border-left: 1px solid var(--card-border);
+  padding-left: 0.8rem;
+}
+
+.slice-col-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.slice-col-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.slice-focus {
+  align-self: center;
+  text-align: center;
+}
+
+.slice-focus-node {
+  border: 1px solid var(--call-border);
+  background: var(--call-bg);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.slice-focus-meta {
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+
+.slice-edge + .slice-edge {
+  margin-top: 0.5rem;
+}
+
+.slice-peer {
+  font: inherit;
+  font-size: 0.78rem;
+  background: none;
+  border: none;
+  border-bottom: 1px dashed var(--call-border);
+  color: var(--accent);
+  padding: 0;
+  cursor: pointer;
+}
+
+.slice-calls {
+  list-style: none;
+  margin: 0.15rem 0 0;
+  padding: 0;
+}
+
+.slice-call {
+  font: inherit;
+  display: flex;
+  gap: 0.45rem;
+  align-items: baseline;
+  width: 100%;
+  min-width: 0;
+  background: none;
+  border: none;
+  text-align: left;
+  color: var(--fg);
+  padding: 0.05rem 0.25rem;
+  margin-left: -0.25rem;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.slice-call:hover:not(:disabled) {
+  background: var(--call-bg);
+}
+
+.slice-call:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.slice-call-key {
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slice-call-site {
+  font-size: 0.68rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----- sidebar filter panel (service + platform levels) ----- */
+
+.tree-tab--static {
+  cursor: default;
+}
+
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.6rem;
+}
+
+.filters-text {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  width: 100%;
+}
+
+.filters-group {
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem 0.45rem;
+  margin: 0;
+}
+
+.filters-group legend {
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 0.25rem;
+}
+
+.filters-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  padding: 0.05rem 0;
+}
+
+.filters-count {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.filters-hint,
+.filters-clear {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.filters-clear {
+  font-family: inherit;
+  align-self: flex-start;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  cursor: pointer;
+}
+
+.filters-clear:hover {
+  color: var(--accent);
+  border-color: var(--call-border);
+}
+
+.service-filtered {
+  padding: 0.3rem 0.8rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--card-border);
+}
+
+/* An RPC with several implementations: the same "don't guess" affordance the
+   impl switcher gives interface call sites. */
+.impl-picker {
+  display: contents;
+}
+
+.impl-toggle {
+  font: inherit;
+  font-size: 0.68rem;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  padding: 0 0.4rem;
+  cursor: pointer;
+  flex: none;
+}
+
+.impl-toggle:hover,
+.impl-toggle--open {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.impl-list {
+  flex: 1 1 100%;
+  list-style: none;
+  margin: 0.1rem 0 0.2rem 0.8rem;
+  padding: 0;
+  border-left: 2px solid var(--card-border);
+}
+
+.impl-list button {
+  font: inherit;
+  font-size: 0.74rem;
+  background: none;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  width: 100%;
+  text-align: left;
+}
+
+.impl-list button:hover {
+  background: var(--call-bg);
+  color: var(--accent);
+}
+
+/* Anchored at the platform level: the services whose calls lead to the frame
+   you zoomed out from, marked the same way entrypoints are one level down. */
+.graph-node--reaches {
+  border-color: var(--call-border);
+  box-shadow: 0 0 0 2px var(--call-bg);
+}
+
+.graph-node--reaches .graph-node-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.graph-edge--reaches {
+  stroke: var(--accent);
+}
+
+/* RPCs clustered under their service: the service is stated once and the rows
+   are its methods, instead of the package prefix repeating on every line. */
+.rpc-group {
+  margin-top: 0.25rem;
+}
+
+.rpc-group-service {
+  font-size: 0.74rem;
+  color: var(--fg);
+  opacity: 0.85;
+}
+
+.rpc-group .service-list {
+  margin-left: 0.7rem;
+  border-left: 1px solid var(--card-border);
+  padding-left: 0.4rem;
+}
+
+/* Says what a column left out. An empty surface and a surface unfold couldn't
+   read look identical otherwise. */
+.service-col-note {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  color: var(--goroutine-fg);
 }
