@@ -117,21 +117,25 @@ Extend unfolding past the boundary of a single repository, so a reading session 
 
 Full design record in the vault: `docs/2026-08-05-unfold-platform-graph.md`.
 
-### Status — slice B shipped 2026-08-05 (`feat/platform-service-view`)
+### Status — 2026-08-06, branch `feat/platform-service-view` (27 commits, unmerged)
 
-The L1 service view for a single repo is in: `internal/platform` recognizers
-(net/http routes, GCP Pub/Sub topics/subscriptions, outbound net/http calls),
-`model.Binding` with confidence tiering, the optional `model.PlatformEngine`,
-`GET /api/service[?anchor=]`, and the web UI — two-sided service card, anchor
-highlighting, the zoom trail, both zoom gestures, and alt+↑/↓. See the README's
-"Zooming out" section for behaviour and limitations. What's below stands as the
-design record; the parts still unbuilt are called out inline.
+Well past the original slice: L1 service view, the declared tier
+(`microservice.yaml` + protos, `--proto-root` pickable in-browser), workspaces
+(`--workspace`, `<repo>::<id>` ids, lazy/eager indexing, cross-repo jump into
+the implementation), the L0 platform graph, and the anchor at every level in
+both directions.
 
-Not yet built from this entry: the federating engine and cross-repo key joins
-(so outbound keys resolve to nothing), junction cards, vstore/BigQuery resource
-nodes, the L0 platform level, Terraform-derived metadata, and the L1.5
-entrypoints level as its own screen — L1.5 exists as *data* (which inbound
-bindings reach the anchor) but has no view of its own.
+**Read the vault doc before touching outbound gRPC**:
+`docs/2026-08-05-unfold-platform-graph.md`. It records the rule set, why each
+rule exists, the approach that failed and why, and the core-index bugs this
+work uncovered (chained-call id collision, map-dependent binding order, slice
+aliasing on id qualification).
+
+Next up, in rough order of value: package-level initializers aren't indexed
+(the cobra `var cmd = &cobra.Command{RunE: …}` gap — biggest remaining
+outbound miss, and it closes the usages/callers-tree limitation too); HTTP
+edges joining across repos; zoom level in the URL; third-party router
+recognizers; transitive anchor marking at L0.
 
 ### Sketch
 
