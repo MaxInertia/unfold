@@ -6,6 +6,37 @@ When reading code that's heavily decomposed (DI, layered services, lots of small
 
 See [`PLAN.md`](./PLAN.md) for architecture, scope, and phasing.
 
+## Eliding intermediate frames
+
+Following a path downward often means passing through frames you don't care
+about — a thin wrapper, a decorator, a helper that only forwards. Once three
+or four are spliced in, the two frames you're actually comparing are screens
+apart.
+
+**elide** in a frame's header hides that frame's body while keeping everything
+it expanded into. With `A → B → C` all open, eliding `B` puts `C` directly
+under `A`'s call site.
+
+This is deliberately not collapsing. Closing `B` would take `C` with it; the
+point here is the opposite — drop the middle, keep the ends, and bring them
+together. It nests, so any number of intermediates can be folded away at once.
+
+Two rules follow from what it's for:
+
+- **Only offered on a frame with something open inside it.** On a leaf there
+  is nothing to keep, so hiding the body would just be closing the frame the
+  long way round.
+- **The hop is still stated.** An elided frame leaves one line — `⋯ through
+  writeJSON` — with its location and a control to restore it. Removing it
+  entirely would leave a view in which the caller appears to call the
+  grandchild directly, which is the same class of lie the rest of the tool
+  works to avoid.
+
+Elisions live in the view state, so they survive a reload and travel in a
+shared link. Closing an elided frame's last child clears the elision rather
+than leaving it armed to re-hide the body next time something is expanded
+there.
+
 ## Usages / callers
 
 Unfolding follows execution *downward*; the usages feature is the reverse

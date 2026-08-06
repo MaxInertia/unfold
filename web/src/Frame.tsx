@@ -619,9 +619,12 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     }
   }
 
-  function renderLineExtras(lineIdx: number): ReactNode {
+  // The frames expanded at these call sites. Pulled out of renderLineExtras
+  // because eliding needs the same children without the source they'd
+  // normally hang off — the whole point is to keep the children and drop the
+  // body, so one renderer has to serve both.
+  function renderChildren(calls: CallSite[]): ReactNode[] {
     const extras: ReactNode[] = [];
-    const calls = lineCallsCache.get(lineIdx) ?? [];
     for (const call of calls) {
       if (call.kind === "fanout") {
         if (isFanoutOpen(slice, call.id)) {
@@ -655,6 +658,11 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
         );
       }
     }
+    return extras;
+  }
+
+  function renderLineExtras(lineIdx: number): ReactNode {
+    const extras: ReactNode[] = renderChildren(lineCallsCache.get(lineIdx) ?? []);
     // The selection action bar renders right at the selection (after its
     // last line), not at the frame top — a selection made deep in a long
     // frame would otherwise have its actions scrolled out of view.
@@ -764,6 +772,58 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
         }
       : undefined;
 
+  // Eliding only means anything for a frame with something expanded inside
+  // it. On a leaf there is nothing to keep, so hiding the body would just be
+  // closing the frame the long way round — and offering a control that
+  // silently does what "×" already does is worse than not offering it.
+  const hasOpenChildren =
+    Object.keys(slice.expansions).length > 0 ||
+    Object.keys(slice.fanouts ?? {}).length > 0;
+
+  if (slice.elided && hasOpenChildren) {
+    // The body is gone but the hop is not: saying "through X" keeps the chain
+    // honest, because the alternative is a view in which the caller appears
+    // to call the grandchild directly. That would be the same class of lie
+    // the rest of the tool works to avoid.
+    return (
+      <div
+        className="frame frame--elided"
+        style={{ "--depth-color": depthColor(depth) } as React.CSSProperties}
+        data-frame-key={pathKey(path)}
+        data-frame-title={frameTitle(frame)}
+        data-frame-loc={`${shortPath(frame.file)}:${frame.startLine}`}
+      >
+        <div className="elide-bar">
+          <button
+            type="button"
+            className="elide-restore"
+            onClick={() => store.setElided(path, false)}
+            title="show this frame's body again"
+          >
+            ⋯
+          </button>
+          <span className="elide-through">
+            through <b>{frameTitle(frame)}</b>
+          </span>
+          <button
+            type="button"
+            className="frame-loc frame-loc--link"
+            title="open in editor"
+            onClick={() => openInEditor(frame.file, frame.startLine).catch(() => {})}
+          >
+            {shortPath(frame.file)}:{frame.startLine}
+          </button>
+          {onClose && (
+            <button className="frame-close" onClick={onClose} aria-label="collapse">
+              ×
+            </button>
+          )}
+        </div>
+        {renderChildren(frame.calls)}
+      </div>
+    );
+  }
+
   return (
     <div
       className={`frame${settings.depthRails ? " frame--railed" : ""}`}
@@ -868,6 +928,18 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             title="collapse everything expanded inside this frame"
           >
             collapse all
+          </button>
+        )}
+        {/* Only offered on an intermediate frame — one with something open
+            inside it. Eliding a leaf would just be closing it. */}
+        {hasOpenChildren && path.length > 0 && (
+          <button
+            type="button"
+            className="frame-elide"
+            onClick={() => store.setElided(path, true)}
+            title="hide this frame's body and keep what it expands into — brings the caller and the frames below it together"
+          >
+            elide
           </button>
         )}
         <button
