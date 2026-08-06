@@ -640,7 +640,7 @@ func TestOnlyReachableCallSitesAreOutboundEdges(t *testing.T) {
 	// Clients sitting in the repo that nothing reaches are not calls.
 	for _, unused := range []string{
 		"billing.v1.BillingService/Refund",
-		"inventory.v1.InventoryService/Reserve",
+		"archive.v1.ArchiveService/Purge",
 	} {
 		if site, ok := sites[unused]; ok {
 			t.Errorf("%s is never called (found at %q)", unused, site)
@@ -757,8 +757,35 @@ func TestUnreachableCallSitesAreCounted(t *testing.T) {
 		t.Error("an unreachable call site should be reported as excluded, not silently dropped")
 	}
 	for _, b := range sv.Outbound {
-		if b.SiteTitle == "Server.deadPath" {
+		if b.SiteTitle == "DeadPath" {
 			t.Errorf("an unreachable call site should not be an edge: %+v", b)
 		}
+	}
+}
+
+// A command's code exists to be run, so a valid main package is an entrypoint
+// in its entirety — not just its main function.
+//
+// Plenty of what a command does is reached in ways the call-graph walk can't
+// follow: a cobra RunE closure held in a package-level var, a callback
+// registered at init. The fixture's cmd/reporter is exactly that shape, and
+// seeding only `func main` left the RPC it calls looking unreachable.
+func TestCommandPackagesAreEntrypoints(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	b := findBinding(sv.Outbound, "grpc.method", "reporting.v1.ReportingService/Export")
+	if b == nil {
+		var keys []string
+		for _, o := range sv.Outbound {
+			if o.Kind == "grpc.method" {
+				keys = append(keys, o.Key)
+			}
+		}
+		t.Fatalf("an RPC called only from a command should be an outbound edge; got %v", keys)
+	}
+	if b.SiteTitle == "" {
+		t.Errorf("the edge should name its call site: %+v", b)
 	}
 }

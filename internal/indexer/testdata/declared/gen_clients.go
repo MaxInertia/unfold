@@ -103,11 +103,3 @@ func (s *Server) serveWithGateway(ctx context.Context) error {
 	}
 	return (&dupServiceAltClient{cc: &grpcConn{}}).Ping(ctx)
 }
-
-// deadPath calls a client, but nothing calls deadPath and it is not an
-// entrypoint — so the call site exists yet execution never arrives. This is
-// what the reachability filter excludes, as opposed to a stub with no callers
-// at all, which never produces a site in the first place.
-func (s *Server) deadPath(ctx context.Context) error {
-	return (&inventoryServiceClient{cc: &grpcConn{}}).Reserve(ctx)
-}

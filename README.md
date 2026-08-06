@@ -42,7 +42,9 @@ Three usage kinds:
   a "partial" badge.
 - **Only references inside indexed function bodies are found.** Package-level
   initializers (`var handler = myFunc`) and struct literal defaults at
-  package scope aren't walked.
+  package scope aren't walked. This also hides outbound calls made from them —
+  a cobra `var cmd = &cobra.Command{RunE: func(...){ client.Do() }}` contains
+  a call unfold never sees, so it appears in no surface and reaches nothing.
 - **TypeScript**: references inside Angular template HTML aren't covered
   (templates aren't TS AST nodes); `new Foo()` doesn't count as a usage of
   the class (constructors aren't frames); a usage inside an inline
@@ -99,7 +101,10 @@ The service view is a two-sided card, not a graph:
 
   Finally, a call site only counts if execution can **reach** it from one of
   the service's entrypoints — its route handlers, the implementations of the
-  RPCs it declares, or `main`. A repo can hold a client nothing ever invokes,
+  RPCs it declares, any `init`, and every function of a valid `main` package.
+  Commands count in their entirety because a command's code exists to be run,
+  and much of it is reached in ways a call graph can't show: a framework
+  invoking a handler, a callback registered at startup. A repo can hold a client nothing ever invokes,
   and no amount of classifying the client tells you whether the service uses
   it; reachability answers that directly. When call sites are excluded this
   way the count is reported next to the column, because a service whose

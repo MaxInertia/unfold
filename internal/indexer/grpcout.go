@@ -6,6 +6,7 @@ import (
 
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/platform"
+	"golang.org/x/tools/go/packages"
 )
 
 // Outbound gRPC edges, derived from the call graph rather than from scanning
@@ -267,8 +268,24 @@ func (i *Indexer) entrypointReachable() map[TargetID]bool {
 			seeds[c.TargetID] = true
 		}
 	}
+	// Every function of a valid main package counts, not just main itself.
+	// A command's code exists to be run, and plenty of it is reached in ways
+	// this walk can't see — a cobra RunE closure held in a package-level var,
+	// a callback registered at init. Treating the package as an entrypoint
+	// catches RPCs only ever called from a command.
+	//
+	// init functions run unconditionally wherever they are, so they seed too.
+	mains := map[*packages.Package]bool{}
+	for _, fi := range i.funcs {
+		if fi.pkg != nil && fi.pkg.Name == "main" && fi.obj.Name() == "main" && i.ownsCode(fi) {
+			mains[fi.pkg] = true
+		}
+	}
 	for id, fi := range i.funcs {
-		if fi.obj.Name() == "main" && i.ownsCode(fi) {
+		if !i.ownsCode(fi) {
+			continue
+		}
+		if mains[fi.pkg] || fi.obj.Name() == "init" {
 			seeds[id] = true
 		}
 	}
