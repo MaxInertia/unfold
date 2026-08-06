@@ -120,6 +120,10 @@ export interface ServiceView {
   outbound: Binding[];
   // Why part of the view may be missing (usually an unresolvable proto root).
   warning?: string;
+  // Outbound calls excluded because execution can't reach them from any
+  // recognized entrypoint — reported so an empty column can be told apart
+  // from a router unfold can't read.
+  outboundUnreachable?: number;
   protoRoot?: string; // the shared proto repository currently configured
   repos?: RepoInfo[]; // present when a workspace of several repos is open
   // The manifest declares protoPaths that can't be resolved yet — the cue to

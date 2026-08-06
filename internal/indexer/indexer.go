@@ -155,6 +155,10 @@ type Indexer struct {
 	// resolve against. Empty disables proto loading — the paths are relative
 	// to a repo unfold has no way to locate on its own.
 	protoRoot string
+	// outboundUnreachable counts outbound call sites excluded because
+	// execution can't reach them from any recognized entrypoint.
+	outboundUnreachable int
+
 	// protoErr records why the declared gRPC surface is missing, so the UI
 	// can say "proto root is wrong" instead of showing an empty surface as
 	// though the service had none.
@@ -245,6 +249,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.interfaceImpls = buildInterfaceImpls(pkgs)
 	i.usagesByTarget = make(map[TargetID][]*usageInfo)
 	i.bindings = nil
+	i.outboundUnreachable = 0
 	i.invokeCache = make(map[TargetID]invokeResult)
 	i.mf = nil
 	i.protoErr = ""
@@ -374,10 +379,6 @@ func (i *Indexer) Load(dir, pattern string) error {
 		}
 	}
 
-	// Outbound gRPC is a call-graph question rather than a per-call-site one,
-	// so it runs as its own pass now the usage index exists.
-	i.bindings = append(i.bindings, i.grpcOutbound()...)
-
 	// Titles for binding endpoints, resolved once the whole function set is
 	// known (a route registered in one package can hand off to a handler
 	// defined in another, so this can't be done during the walk).
@@ -396,6 +397,16 @@ func (i *Indexer) Load(dir, pattern string) error {
 	// publicRoutes cross-check can see what the code actually registered.
 	i.applyVisibility()
 	i.bindings = append(i.bindings, i.declaredBindings()...)
+
+	// Outbound gRPC is a call-graph question rather than a per-call-site one,
+	// so it runs as its own pass. It goes *after* the declared surface
+	// because it seeds reachability from the inbound entrypoints, and for a
+	// gRPC-only service those are the proto-declared implementations — seed
+	// before they exist and every outbound edge looks unreachable.
+	grpcOut, unreachable := i.grpcOutbound()
+	i.bindings = append(i.bindings, grpcOut...)
+	i.outboundUnreachable = unreachable
+
 	i.sortBindings()
 
 	return nil
@@ -899,11 +910,12 @@ func (i *Indexer) ServiceView(anchor TargetID) (*model.ServiceView, error) {
 	defer i.mu.RUnlock()
 
 	sv := &model.ServiceView{
-		Name:      i.serviceName,
-		Module:    i.modulePath,
-		Root:      i.rootDir,
-		ProtoRoot: i.protoRoot,
-		Warning:   i.protoErr,
+		Name:                i.serviceName,
+		Module:              i.modulePath,
+		Root:                i.rootDir,
+		ProtoRoot:           i.protoRoot,
+		Warning:             i.protoErr,
+		OutboundUnreachable: i.outboundUnreachable,
 		// The cue for the UI to offer a picker: protos are declared but the
 		// surface didn't come out, so a root is missing or wrong.
 		NeedsProtoRoot: i.needsProtoRoot(),

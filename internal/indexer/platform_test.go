@@ -597,14 +597,53 @@ func TestGeneratedClientStubsAreNotOutboundEdges(t *testing.T) {
 		t.Errorf("Charge should belong to its caller, got %q", site)
 	}
 
-	// Stubs nothing calls contribute nothing, however many exist.
+	// Stubs nothing calls contribute nothing, however many exist. (Query is
+	// deliberately absent from this list — a handler calls it, which
+	// TestOnlyReachableCallSitesAreOutboundEdges covers.)
 	for _, uncalled := range []string{
 		"billing.v1.BillingService/Refund",
-		"search.v1.SearchService/Query",
 		"inventory.v1.InventoryService/Reserve",
 	} {
 		if site, ok := keys[uncalled]; ok {
 			t.Errorf("%s is only a generated stub (at %q) — the service never calls it", uncalled, site)
+		}
+	}
+}
+
+// A repo can contain clients nothing uses — generated or not, recognized as
+// clients or not. Classifying the *client* can't answer whether the service
+// calls the RPC; only whether execution reaches the call site can.
+func TestOnlyReachableCallSitesAreOutboundEdges(t *testing.T) {
+	sv, err := loadDeclared(t, "testdata/protoroot").ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	sites := map[string]string{}
+	for _, b := range sv.Outbound {
+		if b.Kind == "grpc.method" {
+			sites[b.Key] = b.SiteTitle
+		}
+	}
+
+	// Reachable from main.
+	if _, ok := sites["billing.v1.BillingService/Charge"]; !ok {
+		t.Errorf("a call reachable from main is an edge; got %v", sites)
+	}
+	// Reachable only from a proto-declared gRPC handler. This is what pins
+	// the ordering: seed reachability before the declared surface exists and
+	// a gRPC-only service loses every outbound edge it has.
+	if site, ok := sites["search.v1.SearchService/Query"]; !ok {
+		t.Errorf("a call made while serving an RPC is an edge; got %v", sites)
+	} else if site != "Server.GetConversation" {
+		t.Errorf("Query should belong to the handler making it, got %q", site)
+	}
+	// Clients sitting in the repo that nothing reaches are not calls.
+	for _, unused := range []string{
+		"billing.v1.BillingService/Refund",
+		"inventory.v1.InventoryService/Reserve",
+	} {
+		if site, ok := sites[unused]; ok {
+			t.Errorf("%s is never called (found at %q)", unused, site)
 		}
 	}
 }

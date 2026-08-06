@@ -141,6 +141,13 @@ export function ServiceView({
           anchored={anchored}
           onOpen={onOpen}
           groupBy={(b) => b.kind}
+          note={
+            view.outboundUnreachable
+              ? `${view.outboundUnreachable} call site${
+                  view.outboundUnreachable === 1 ? "" : "s"
+                } hidden — nothing reaches them from a recognized entrypoint`
+              : undefined
+          }
           empty="No outbound edges recognized. Calls whose URL is built at runtime are skipped rather than guessed."
         />
       </div>
@@ -170,6 +177,7 @@ function Column({
   anchored,
   onOpen,
   groupBy,
+  note,
   empty,
 }: {
   title: string;
@@ -178,6 +186,8 @@ function Column({
   anchored: boolean;
   onOpen: (id: TargetID) => void;
   groupBy: (b: Binding) => string;
+  // Says what was left out, so an empty or short column is never unexplained.
+  note?: string;
   empty: string;
 }) {
   const groups = new Map<string, Binding[]>();
@@ -203,6 +213,7 @@ function Column({
         <span className="service-col-count">{bindings.length}</span>
       </div>
       <p className="service-col-hint">{hint}</p>
+      {note && <p className="service-col-note">{note}</p>}
       {bindings.length === 0 ? (
         <p className="service-empty">{empty}</p>
       ) : (

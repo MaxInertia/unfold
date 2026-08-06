@@ -32,8 +32,28 @@ import (
 //     client. No relay dedup needed; the walk stops at the first owned frame,
 //     so callers further out are never reached in the first place.
 
-// grpcOutbound returns this project's outbound gRPC edges.
-func (i *Indexer) grpcOutbound() []model.Binding {
+// grpcOutbound returns this project's outbound gRPC edges, and how many call
+// sites were excluded as unreachable.
+//
+// The count is returned rather than discarded because silence has to be
+// explainable. If a service registers its handlers in a way unfold can't read,
+// every call site looks unreachable and the surface empties out — which reads
+// as "this service depends on nothing" instead of "unfold couldn't tell".
+// Saying how many were dropped makes the difference visible.
+func (i *Indexer) grpcOutbound() ([]model.Binding, int) {
+	// Only call sites execution can actually reach count. Without this, a
+	// client sitting unused in the repo still produced an edge — the repo
+	// containing the ability to make a call is not the service making it.
+	reachable := i.entrypointReachable()
+	var dropped int
+	keep := func(site TargetID) bool {
+		if reachable == nil || reachable[site] {
+			return true
+		}
+		dropped++
+		return false
+	}
+
 	var out []model.Binding
 	for id := range i.funcs {
 		key, ok := i.directInvokeKey(id)
@@ -44,16 +64,20 @@ func (i *Indexer) grpcOutbound() []model.Binding {
 		// site — business logic talking to grpc directly, not a client. Its
 		// callers are ordinary callers, not the ones making the request.
 		if i.ownsCode(i.funcs[id]) && !i.isGeneratedClient(id) {
-			out = append(out, i.grpcBinding(id, key, id))
+			if keep(id) {
+				out = append(out, i.grpcBinding(id, key, id))
+			}
 			continue
 		}
 		// Otherwise the method stands for the RPC, and the calls are whoever
 		// invokes it from this project.
 		for _, site := range i.ownedCallersOf(id) {
-			out = append(out, i.grpcBinding(site, key, id))
+			if keep(site) {
+				out = append(out, i.grpcBinding(site, key, id))
+			}
 		}
 	}
-	return out
+	return out, dropped
 }
 
 func (i *Indexer) grpcBinding(site TargetID, key string, client TargetID) model.Binding {
@@ -67,6 +91,9 @@ func (i *Indexer) grpcBinding(site TargetID, key string, client TargetID) model.
 	if fi := i.funcs[site]; fi != nil {
 		pos := i.fset.Position(fi.decl.Pos())
 		b.File, b.Line = pos.Filename, pos.Line
+		// Set here rather than by the shared titles pass, which has already
+		// run by the time this one does.
+		b.SiteTitle = goTitle(fi.obj)
 	}
 	if fi := i.funcs[client]; fi != nil && client != site {
 		b.Detail = goTitle(fi.obj)
@@ -182,4 +209,78 @@ func (i *Indexer) isGeneratedClient(target TargetID) bool {
 	// No such interface indexed (hand-rolled client, or generated code whose
 	// interface didn't load) — fall back to the naming codegen guarantees.
 	return strings.HasSuffix(recv, "Client")
+}
+
+// entrypointReachable returns the owned functions execution can actually get
+// to, starting from the service's own entrypoints.
+//
+// This is the check that "does the service call this RPC" ultimately needs. A
+// repo can contain a client — generated or hand-written, recognized as one or
+// not — that nothing ever invokes, and no amount of classifying the *client*
+// tells you whether the service uses it. Asking whether the call site is
+// reachable from somewhere execution begins answers it directly.
+//
+// Entrypoints are the inbound surface (route handlers, the implementations of
+// declared RPCs) plus main. Traversal stays inside owned code: a chain that
+// leaves for a dependency and comes back is not how a service calls its own
+// helpers, and following dependency graphs would cost far more than it finds.
+func (i *Indexer) entrypointReachable() map[TargetID]bool {
+	seeds := map[TargetID]bool{}
+	for _, b := range i.bindings {
+		if b.Role != model.RoleInbound {
+			continue
+		}
+		if b.Target != "" {
+			seeds[b.Target] = true
+		}
+		for _, c := range b.Candidates {
+			seeds[c.TargetID] = true
+		}
+	}
+	for id, fi := range i.funcs {
+		if fi.obj.Name() == "main" && i.ownsCode(fi) {
+			seeds[id] = true
+		}
+	}
+	if len(seeds) == 0 {
+		// No recognized way in — a library, or a router unfold can't read.
+		// Filtering on an empty seed set would erase the whole surface, so
+		// the check declines to run rather than lying about what's called.
+		return nil
+	}
+
+	reached := map[TargetID]bool{}
+	var queue []TargetID
+	for id := range seeds {
+		if fi := i.funcs[id]; fi != nil && i.ownsCode(fi) {
+			reached[id] = true
+			queue = append(queue, id)
+		}
+	}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		fi := i.funcs[cur]
+		if fi == nil {
+			continue
+		}
+		for _, c := range fi.calls {
+			next := []TargetID{c.target}
+			for _, cand := range c.candidates {
+				next = append(next, cand.TargetID)
+			}
+			for _, n := range next {
+				if n == "" || reached[n] {
+					continue
+				}
+				nf := i.funcs[n]
+				if nf == nil || !i.ownsCode(nf) {
+					continue
+				}
+				reached[n] = true
+				queue = append(queue, n)
+			}
+		}
+	}
+	return reached
 }

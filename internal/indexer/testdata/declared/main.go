@@ -15,8 +15,13 @@ type Server struct{}
 func (s *Server) listConversations(w http.ResponseWriter, r *http.Request) {}
 func (s *Server) debugDump(w http.ResponseWriter, r *http.Request)         {}
 
-// GetConversation implements conversation.v1.ConversationService.
-func (s *Server) GetConversation() {}
+// GetConversation implements conversation.v1.ConversationService, and calls
+// another service while serving. Nothing but the gRPC surface reaches this
+// path, so it only counts as outbound if declared entrypoints seed
+// reachability.
+func (s *Server) GetConversation() {
+	_ = (&searchServiceClient{cc: &grpcConn{}}).Query(context.Background())
+}
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()

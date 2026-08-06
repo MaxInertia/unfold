@@ -2906,3 +2906,11 @@ body.resizing {
   border-left: 1px solid var(--card-border);
   padding-left: 0.4rem;
 }
+
+/* Says what a column left out. An empty surface and a surface unfold couldn't
+   read look identical otherwise. */
+.service-col-note {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  color: var(--goroutine-fg);
+}

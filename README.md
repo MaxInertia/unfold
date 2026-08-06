@@ -97,6 +97,15 @@ The service view is a two-sided card, not a graph:
   it's business logic talking to grpc rather than a client standing in for an
   RPC.
 
+  Finally, a call site only counts if execution can **reach** it from one of
+  the service's entrypoints — its route handlers, the implementations of the
+  RPCs it declares, or `main`. A repo can hold a client nothing ever invokes,
+  and no amount of classifying the client tells you whether the service uses
+  it; reachability answers that directly. When call sites are excluded this
+  way the count is reported next to the column, because a service whose
+  handlers are registered in a way unfold can't read would otherwise look like
+  one that depends on nothing.
+
 ### The anchor
 
 The frame you zoomed out from is carried up as the **anchor**. Every inbound

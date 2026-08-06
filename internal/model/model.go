@@ -315,6 +315,11 @@ type ServiceView struct {
 	// cross-link what it has loaded, and saying so beats looking broken.
 	Repos []RepoInfo `json:"repos,omitempty"`
 
+	// OutboundUnreachable counts outbound calls excluded because execution
+	// can't reach them from any entrypoint this engine recognized. Surfaced
+	// so an empty column can be told apart from a router unfold can't read.
+	OutboundUnreachable int `json:"outboundUnreachable,omitempty"`
+
 	// Warning explains why part of the view may be missing — most often a
 	// declared proto surface that couldn't be loaded. An empty surface and a
 	// misconfigured proto root look identical without it.
