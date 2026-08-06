@@ -155,6 +155,39 @@ on it, so the three views can't disagree. An empty panel says which kind of
 empty it is — no surface recognized, no anchor, or a walk that ran and found
 nothing.
 
+### Tracing one column to the other
+
+The two columns describe the same service, but neither says anything about the
+other. The **⇄** on any row joins them:
+
+- pick an **inbound** row → the outbound calls that entrypoint can cause.
+- pick an **outbound** row → the entrypoints that can cause that call.
+
+The connected rows light and the rest dim, the same treatment the anchor uses;
+a trace is a transient focus and wins while it's held. The second direction is
+the one that's genuinely hard by hand — it means walking callers until you hit
+something registered as an entrypoint.
+
+Only the first direction is computed and sent: for each inbound binding, the
+outbound bindings its handler forward-reaches. The reverse is derived in the
+browser, so there's one source of truth rather than two that can disagree.
+Seeds are the handler and its candidates, never the registration site — a
+function that registers a route doesn't run it, and seeding from the site
+would blame every route for every call its registrar makes.
+
+Three outcomes, and they are not the same:
+
+- **reaches N calls** — the walk ran and found them.
+- **reaches no outbound call** — the walk ran and found nothing. A fact.
+- **unknown** — there was no indexed handler to walk from (a `publicRoutes`
+  entry nothing registers, a proto method with no implementation). Reporting
+  this as "calls nothing" would be the more confident claim and the wrong one,
+  so the two are kept apart in the data rather than collapsed in the UI.
+
+This is also the piece transitive anchor marking at the platform level needs:
+propagating a mark from a service to its callers requires knowing, per repo,
+which inbound key leads to which outbound call.
+
 ### What the service declares about itself
 
 If the repo root has a `microservice.yaml`, unfold reads it. Declared facts are

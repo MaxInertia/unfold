@@ -83,6 +83,9 @@ export type BindingVisibility = "public" | "platform" | "internal";
 // other end of the edge also names. Within a single repo only one end is
 // visible, so an outbound binding with no matching inbound one is normal.
 export interface Binding {
+  // Identifies this binding within one ServiceView, so the crossing relation
+  // can name bindings without repeating them. Not durable across reindexes.
+  id?: string;
   role: BindingRole;
   kind: string; // "http.route" | "pubsub.topic" | "pubsub.subscription" | "http.call"
   key: string; // the join key, e.g. "POST /v1/orders"
@@ -111,6 +114,14 @@ export interface Binding {
   // The mirror, for outbound: the anchored frame reaches this call site, so
   // it's a call the anchor's code path actually makes.
   reachedByAnchor?: boolean;
+  // The crossing relation, on inbound bindings only: the outbound bindings
+  // this entrypoint can cause. The other direction is derived rather than
+  // sent, so there's one source of truth instead of two that can disagree.
+  reaches?: string[];
+  // Whether the walk ran at all. An inbound binding with no indexed handler
+  // has nothing to walk from, and "can't tell" must not render as "reaches
+  // nothing" — that's the more confident claim, and the wrong one.
+  crossingKnown?: boolean;
 }
 
 export interface ServiceView {

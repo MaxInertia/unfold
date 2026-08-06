@@ -140,6 +140,12 @@ rule exists, the approach that failed and why, and the core-index bugs this
 work uncovered (chained-call id collision, map-dependent binding order, slice
 aliasing on id qualification).
 
+The **crossing relation** joins the two columns of the service view: for each
+inbound binding, the outbound bindings its handler forward-reaches. Pick a row
+in either column and the connected rows on the other side light. Only one
+direction is stored; the reverse is derived in the browser. It's also the
+per-repo half of transitive anchor marking at L0.
+
 Next up, in rough order of value: package-level initializers aren't indexed
 (the cobra `var cmd = &cobra.Command{RunE: …}` gap — biggest remaining
 outbound miss, and it closes the usages/callers-tree limitation too); HTTP

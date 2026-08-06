@@ -232,6 +232,12 @@ const (
 // Within a single repo only one end is visible, so an outbound Binding whose
 // key nothing here serves is expected, not an error.
 type Binding struct {
+	// ID identifies a binding within one ServiceView, so the crossing
+	// relation below can name bindings without repeating them. It is an
+	// index, not a durable handle: it changes when the surface does, which
+	// is correct for a relation computed from that same surface.
+	ID string `json:"id,omitempty"`
+
 	Role BindingRole `json:"role"`
 	// Kind namespaces the key: "http.route", "pubsub.topic",
 	// "pubsub.subscription", "http.call".
@@ -291,6 +297,23 @@ type Binding struct {
 	// questions and want different walks — backwards for one, forwards for
 	// the other.
 	ReachedByAnchor bool `json:"reachedByAnchor,omitempty"`
+
+	// Reaches lists the IDs of the outbound bindings this inbound entrypoint
+	// can actually cause — the crossing relation, set on inbound bindings
+	// only. It answers "if this route is hit, what does the service call?",
+	// and read backwards, "what has to be hit for this call to happen?".
+	//
+	// One direction is stored and the other is derived, because the relation
+	// is symmetric and storing both would double a payload that is already
+	// the largest thing on the view.
+	//
+	// Absent is not the same as empty, and JSON can't tell them apart — an
+	// omitted list means either "walked, found nothing" or "no handler to
+	// walk from", which are different claims. CrossingKnown carries the
+	// difference so the UI can say "reaches nothing" only when that was
+	// actually determined.
+	Reaches       []string `json:"reaches,omitempty"`
+	CrossingKnown bool     `json:"crossingKnown,omitempty"`
 }
 
 // ServiceView is the zoomed-out picture of one service: what enters it and

@@ -2077,6 +2077,88 @@ body.resizing {
   padding: 0;
 }
 
+/* ===== The crossing relation: tracing one side to the other ===== */
+
+/* The trace control. Sits before the row's own action rather than replacing
+   it — opening source is the more common intent and shouldn't be displaced. */
+.service-cross-pick {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.15rem 0.25rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+/* Revealed on hover, so a column of eighty routes isn't eighty glyphs of
+   chrome — but kept visible once armed, or the control you just used
+   vanishes. */
+.service-item:hover .service-cross-pick,
+.service-cross-pick:focus-visible,
+.service-cross-pick--on {
+  opacity: 1;
+}
+
+.service-cross-pick:hover {
+  color: var(--fg);
+  border-color: var(--call-border);
+}
+
+.service-cross-pick--on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* The traced row itself: marked distinctly from the rows it connects to, so
+   "the one I picked" and "the ones it reaches" don't read the same. */
+.service-item--crossed {
+  background: var(--call-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+  border-radius: 4px;
+}
+
+.service-trace {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.4rem 0.6rem 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--call-border);
+  border-radius: 6px;
+  background: var(--call-bg);
+  font-size: 0.78rem;
+}
+
+.service-trace-key {
+  font-weight: 600;
+}
+
+.service-trace-summary {
+  color: var(--muted);
+}
+
+.service-trace-clear {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.service-trace-clear:hover {
+  color: var(--fg);
+}
+
 /* ===== Anchor panels (entrypoints / outbounds beside the code) ===== */
 .anchor-panel {
   padding: 0.5rem 0.6rem;

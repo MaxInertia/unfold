@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -823,6 +824,102 @@ func TestAnchorMarksTheCallsItMakes(t *testing.T) {
 	for _, b := range sv.Outbound {
 		if b.ReachesAnchor {
 			t.Errorf("outbound rows answer the forward question only: %+v", b)
+		}
+	}
+}
+
+// The two columns of the service view describe the same service but neither
+// says anything about the other. The crossing relation joins them: hit this
+// route, and these are the calls the service makes as a result.
+//
+// It is not "every call in the service" and not "every call on any path that
+// happens to share a helper" — it is forward reachability from *this*
+// entrypoint's handler, which is the only reading that answers the question
+// someone asks when they click a route.
+func TestInboundCrossesToTheCallsItCauses(t *testing.T) {
+	idx := loadDeclared(t, "testdata/protoroot")
+	sv, err := idx.ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+
+	byID := map[string]*model.Binding{}
+	for n := range sv.Outbound {
+		byID[sv.Outbound[n].ID] = &sv.Outbound[n]
+	}
+	keysOf := func(b *model.Binding) []string {
+		var out []string
+		for _, id := range b.Reaches {
+			if o := byID[id]; o != nil {
+				out = append(out, o.Key)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	// GetConversation is a declared RPC whose implementation calls the search
+	// service while serving. That call is caused by this entrypoint.
+	get := findBinding(sv.Inbound, "grpc.method", "conversation.v1.ConversationService/GetConversation")
+	if get == nil {
+		t.Fatal("the declared RPC is missing from the inbound surface")
+	}
+	if !get.CrossingKnown {
+		t.Fatal("its implementation is indexed, so the crossing is knowable")
+	}
+	if got := keysOf(get); len(got) != 1 || got[0] != "search.v1.SearchService/Query" {
+		t.Errorf("GetConversation should cause exactly the search call, got %v", got)
+	}
+
+	// Every id it names must be an outbound binding — a crossing that points
+	// at an inbound row, or at nothing, would render as a phantom.
+	for _, id := range get.Reaches {
+		if byID[id] == nil {
+			t.Errorf("crossing names %q, which is not an outbound binding", id)
+		}
+	}
+
+	// A handler that calls nothing is a *known* empty, not an unknown one.
+	// Collapsing the two would let "unfold can't tell" read as "makes no
+	// calls", which is the more confident of the two claims and the wrong one.
+	list := findBinding(sv.Inbound, "http.route", "GET /v1/conversations")
+	if list == nil {
+		t.Fatal("the public route is missing from the inbound surface")
+	}
+	if !list.CrossingKnown {
+		t.Error("its handler is indexed, so reaching nothing is a determined answer")
+	}
+	if len(list.Reaches) != 0 {
+		t.Errorf("listConversations calls nothing, got %v", keysOf(list))
+	}
+
+	// A route declared in the manifest that no code registers has no handler
+	// at all, so its crossing is genuinely unknown.
+	if retired := findBinding(sv.Inbound, "http.route", "/v1/retired"); retired != nil {
+		if retired.CrossingKnown || len(retired.Reaches) > 0 {
+			t.Errorf("a stale declaration has no handler to walk from: %+v", retired)
+		}
+	}
+
+	// Ids are unique across the whole surface, since one namespace is what
+	// lets the relation name a binding at all.
+	seen := map[string]bool{}
+	for _, b := range append(append([]model.Binding{}, sv.Inbound...), sv.Outbound...) {
+		if b.ID == "" {
+			t.Errorf("binding has no id: %+v", b)
+		}
+		if seen[b.ID] {
+			t.Errorf("duplicate binding id %q", b.ID)
+		}
+		seen[b.ID] = true
+	}
+
+	// Outbound rows never carry the relation: it is stored one way and
+	// inverted by the reader, so a stored reverse copy would be a second
+	// source of truth able to disagree with the first.
+	for _, b := range sv.Outbound {
+		if len(b.Reaches) > 0 {
+			t.Errorf("the relation is stored on inbound only: %+v", b)
 		}
 	}
 }

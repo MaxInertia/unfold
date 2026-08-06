@@ -1,4 +1,6 @@
-import { BindingRow } from "./BindingRow";
+import { useEffect, useMemo, useState } from "react";
+import { BindingRow, displayKey, type CrossingState } from "./BindingRow";
+import { buildCrossing, crossingSummary } from "./crossing";
 import { ProtoRootPicker } from "./ProtoRootPicker";
 import type { Binding, BindingVisibility, ServiceView as ServiceViewT, TargetID } from "./types";
 import { bindingMatches, type ServiceFilters } from "./ZoomSidebar";
@@ -26,6 +28,14 @@ export function ServiceView({
   onProtoRootChanged: () => void;
   onOpen: (id: TargetID) => void;
 }) {
+  // Which binding is being traced across the two columns, by binding id.
+  const [traced, setTraced] = useState<string | null>(null);
+  const crossing = useMemo(() => buildCrossing(view), [view]);
+  // Ids are positions in a surface, so they mean nothing once the surface is
+  // rebuilt — a reindex or a new proto root would otherwise leave the
+  // selection pointing at whatever binding inherited the number.
+  useEffect(() => setTraced(null), [view]);
+
   if (!view) return <div className="app-loading">loading service…</div>;
 
   const anchored = !!view.anchorTitle;
@@ -34,6 +44,19 @@ export function ServiceView({
   const inbound = view.inbound.filter((b) => bindingMatches(b, filters));
   const outbound = view.outbound.filter((b) => bindingMatches(b, filters));
   const hidden = view.inbound.length + view.outbound.length - inbound.length - outbound.length;
+
+  const all = [...view.inbound, ...view.outbound];
+  const tracedBinding = traced ? all.find((b) => b.id === traced) : undefined;
+  const linked = traced ? crossing.linked(traced) : new Set<string>();
+  const crossingFor = (b: Binding): CrossingState | undefined =>
+    b.id
+      ? {
+          active: !!tracedBinding,
+          selected: b.id === traced,
+          linked: linked.has(b.id),
+          onSelect: () => setTraced((cur) => (cur === b.id ? null : b.id!)),
+        }
+      : undefined;
 
   return (
     <div className="service">
@@ -97,6 +120,25 @@ export function ServiceView({
         </div>
       )}
 
+      {/* What's being traced, stated in words. The dimming shows *which* rows
+          connect; only this can say that the answer is zero, or that there
+          isn't one — both of which look identical as "nothing is lit". */}
+      {tracedBinding && (
+        <div className="service-trace">
+          <span className="service-trace-key">{displayKey(tracedBinding)}</span>
+          <span className="service-trace-summary">
+            {crossingSummary(
+              tracedBinding,
+              linked.size,
+              crossing.known(tracedBinding),
+            )}
+          </span>
+          <button type="button" className="service-trace-clear" onClick={() => setTraced(null)}>
+            clear
+          </button>
+        </div>
+      )}
+
       <div className="service-columns">
         <Column
           title="inbound"
@@ -104,6 +146,7 @@ export function ServiceView({
           bindings={inbound}
           anchored={anchored}
           onOpen={onOpen}
+          crossingFor={crossingFor}
           groupBy={visibilityOf}
           empty="No inbound surface recognized. Routes are found via net/http registration; other routers need their own recognizer."
         />
@@ -113,6 +156,7 @@ export function ServiceView({
           bindings={outbound}
           anchored={anchored}
           onOpen={onOpen}
+          crossingFor={crossingFor}
           groupBy={(b) => b.kind}
           note={
             view.outboundUnreachable
@@ -149,6 +193,7 @@ function Column({
   bindings,
   anchored,
   onOpen,
+  crossingFor,
   groupBy,
   note,
   empty,
@@ -158,6 +203,7 @@ function Column({
   bindings: Binding[];
   anchored: boolean;
   onOpen: (id: TargetID) => void;
+  crossingFor: (b: Binding) => CrossingState | undefined;
   groupBy: (b: Binding) => string;
   // Says what was left out, so an empty or short column is never unexplained.
   note?: string;
@@ -217,6 +263,7 @@ function Column({
                       binding={b}
                       anchored={anchored}
                       grouped={!!service}
+                      crossing={crossingFor(b)}
                       onOpen={onOpen}
                     />
                   ))}

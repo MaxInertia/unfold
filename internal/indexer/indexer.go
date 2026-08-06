@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -408,6 +409,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.outboundUnreachable = unreachable
 
 	i.sortBindings()
+	i.computeCrossings()
 
 	return nil
 }
@@ -440,6 +442,10 @@ func (i *Indexer) SetProtoRoot(dir string) error {
 	}
 	i.bindings = append(kept, i.declaredBindings()...)
 	i.sortBindings()
+	// The declared surface changed, so both the ids and what each entrypoint
+	// reaches have to be rebuilt — a proto root that adds RPCs adds
+	// entrypoints, and those reach outbound calls nothing else did.
+	i.computeCrossings()
 	// Only a root that yielded nothing is worth rejecting: a partial failure
 	// still produced a usable surface, and the warning on the view says which
 	// files were skipped.
@@ -1025,6 +1031,80 @@ func (i *Indexer) callersClosure(target TargetID) map[TargetID]bool {
 		}
 	}
 	return seen
+}
+
+// computeCrossings fills in, for every inbound binding, which outbound
+// bindings its handler can actually cause — the relation joining the two
+// halves of the service view.
+//
+// Both columns describe the same service but neither says anything about the
+// other, so "this route is hit, what does the service then call?" — and read
+// backwards, "what has to be hit for this call to happen?" — had no answer
+// short of unfolding the handler by hand. It's also the missing piece for
+// transitive anchor marking at the platform level: propagating a mark from
+// one service to its callers needs exactly this, per repo.
+//
+// Walking forwards from each entrypoint costs one closure per inbound
+// binding. The alternative — one backwards closure per outbound binding — is
+// the better shape when a service has far more routes than calls, and is
+// worth switching to if this ever shows up in a profile. It isn't a different
+// answer, only a different traversal order.
+//
+// Seeds are the handler and its candidates, never the registration site: a
+// function that registers a route doesn't run it, so seeding from the site
+// would attribute every call the registrar makes to every route it registers.
+func (i *Indexer) computeCrossings() {
+	for n := range i.bindings {
+		i.bindings[n].ID = "b" + strconv.Itoa(n)
+		i.bindings[n].Reaches = nil
+		i.bindings[n].CrossingKnown = false
+	}
+
+	type outbound struct {
+		site TargetID
+		id   string
+	}
+	var outs []outbound
+	for _, b := range i.bindings {
+		if b.Role == model.RoleOutbound && b.Site != "" {
+			outs = append(outs, outbound{site: b.Site, id: b.ID})
+		}
+	}
+	for n := range i.bindings {
+		b := &i.bindings[n]
+		if b.Role != model.RoleInbound {
+			continue
+		}
+		seeds := map[TargetID]bool{}
+		if b.Target != "" {
+			seeds[b.Target] = true
+		}
+		// An enumerated binding reaches what *any* of its implementations
+		// reaches: unfold can't tell which one serves, so claiming only the
+		// first would be a guess dressed as a fact.
+		for _, c := range b.Candidates {
+			if c.TargetID != "" {
+				seeds[c.TargetID] = true
+			}
+		}
+		if len(seeds) == 0 {
+			continue // no handler to walk from: unknown, not empty
+		}
+		// Knowable is about having a handler to walk from, not about finding
+		// anything. A service with no outbound surface at all still gives a
+		// determined answer for each of its entrypoints — "calls nothing" —
+		// and reporting that as "can't tell" would be the wrong claim.
+		b.CrossingKnown = true
+		if len(outs) == 0 {
+			continue // nothing to reach; skip the walk, keep the answer
+		}
+		reached := i.forwardClosure(seeds)
+		for _, o := range outs {
+			if reached[o.site] {
+				b.Reaches = append(b.Reaches, o.id)
+			}
+		}
+	}
 }
 
 // nameIdent returns the identifier that names a call's function — the same

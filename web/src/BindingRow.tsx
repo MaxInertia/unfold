@@ -8,16 +8,30 @@ import type { Binding, TargetID } from "./types";
 // about from different altitudes, so they have to look and behave the same;
 // a second hand-written renderer would drift the moment either grew a badge.
 
+// How a row participates in the crossing selection. Absent entirely when the
+// view doesn't offer crossing (the anchor panels show one side only, so there
+// is no opposite column to light).
+export interface CrossingState {
+  // Something is selected, so unrelated rows recede.
+  active: boolean;
+  selected: boolean;
+  // On the opposite side of the selected binding, and connected to it.
+  linked: boolean;
+  onSelect: () => void;
+}
+
 export function BindingRow({
   binding,
   anchored,
   grouped,
+  crossing,
   onOpen,
 }: {
   binding: Binding;
   anchored: boolean;
   // Rendered under a service header, so the row shows only the method.
   grouped?: boolean;
+  crossing?: CrossingState;
   onOpen: (id: TargetID) => void;
 }) {
   // With an anchor loaded, the entrypoints that reach it are lit and the rest
@@ -27,13 +41,27 @@ export function BindingRow({
   // runs. Same treatment, opposite direction — dimming only applies to the
   // side that has an answer, so an unanchored column isn't greyed out.
   const lit = binding.role === "inbound" ? binding.reachesAnchor : binding.reachedByAnchor;
-  const cls = [
-    "service-item",
-    anchored && lit ? "service-item--reaches" : "",
-    anchored && !lit ? "service-item--dim" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  // A crossing selection is a transient focus and wins while it's held, the
+  // same way hovering a service wins over the anchor at the platform level.
+  // Both answer "what connects to the thing I care about", so they share the
+  // dimming rather than fighting over it — otherwise a row could be dim for
+  // one reason and lit for the other at the same time.
+  const cls = crossing?.active
+    ? [
+        "service-item",
+        crossing.selected ? "service-item--crossed" : "",
+        crossing.linked ? "service-item--reaches" : "",
+        !crossing.selected && !crossing.linked ? "service-item--dim" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : [
+        "service-item",
+        anchored && lit ? "service-item--reaches" : "",
+        anchored && !lit ? "service-item--dim" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
 
   // Prefer opening the handler; fall back to the registration site so every
   // row lands in source even when the far end isn't in this index.
@@ -77,6 +105,28 @@ export function BindingRow({
 
   return (
     <li className={cls}>
+      {/* Kept as its own control rather than overloading the row's click: the
+          row opens source, which is the more common intent and shouldn't be
+          taken away to make room for this. */}
+      {crossing && (
+        <button
+          type="button"
+          className={`service-cross-pick${
+            crossing.selected ? " service-cross-pick--on" : ""
+          }`}
+          onClick={crossing.onSelect}
+          aria-pressed={crossing.selected}
+          title={
+            crossing.selected
+              ? "clear — stop tracing from this binding"
+              : binding.role === "inbound"
+                ? "trace: show the outbound calls this entrypoint can cause"
+                : "trace: show the entrypoints that can cause this call"
+          }
+        >
+          ⇄
+        </button>
+      )}
       {open ? (
         <button type="button" className="service-item-open" onClick={() => onOpen(open)} title={openTitle}>
           {body}
