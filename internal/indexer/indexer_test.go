@@ -690,19 +690,26 @@ func TestLeafName(t *testing.T) {
 // match on the receiver type or package path (e.g. every method of the
 // Reloadable type, whose name contains "load"). Indexes the unfold module
 // itself, which contains both for the query "load".
+//
+// Leaf ranking applies *within* a tier, so this looks only at the module's own
+// code — a dependency's leaf match deliberately ranks below the project's
+// receiver-only one. TestSearchRanksOwnCodeAboveDeps covers that half.
 func TestSearchRanksLeafMatchesFirst(t *testing.T) {
 	idx := New()
 	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	res := idx.Search("load", 100)
+	res := idx.Search("load", 500)
 	if len(res) == 0 {
 		t.Fatal("expected results for 'load'")
 	}
 
 	sawLeaf, seenNonLeaf := false, false
 	for _, r := range res {
+		if r.External {
+			continue
+		}
 		isLeaf := strings.Contains(strings.ToLower(leafName(string(r.TargetID))), "load")
 		if isLeaf {
 			sawLeaf = true
@@ -715,6 +722,37 @@ func TestSearchRanksLeafMatchesFirst(t *testing.T) {
 	}
 	if !sawLeaf {
 		t.Fatal("expected at least one leaf match for 'load' (e.g. Indexer.Load)")
+	}
+}
+
+// TestSearchRanksOwnCodeAboveDeps pins the stronger of the two criteria: the
+// project's own code outranks stdlib and dependency code even when the
+// dependency hit is the better textual match. "load" finds far more in
+// protobuf's internals than in unfold, and a picker that offers those first is
+// answering a question nobody asked.
+func TestSearchRanksOwnCodeAboveDeps(t *testing.T) {
+	idx := New()
+	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	res := idx.Search("load", 500)
+	sawOwn, sawDep := false, false
+	for _, r := range res {
+		if r.External {
+			sawDep = true
+			continue
+		}
+		sawOwn = true
+		if sawDep {
+			t.Errorf("own-code match %q ranked after a dependency match", r.TargetID)
+		}
+	}
+	if !sawOwn {
+		t.Fatal("expected unfold's own matches for 'load'")
+	}
+	if !sawDep {
+		t.Fatal("expected dependency matches for 'load' (deps are indexed for resolution)")
 	}
 }
 

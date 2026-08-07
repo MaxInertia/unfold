@@ -2160,11 +2160,21 @@ func matchesSymbol(full, query string) bool {
 }
 
 // Search returns up to `limit` symbols whose FullName contains query
-// (case-insensitive). Matches on the leaf name — the method or function name,
-// the part after the last "." — rank above matches that only hit the receiver
-// type or package path, since a search is almost always for the method/function
-// itself. Ranking happens before the limit is applied, so a strong leaf match
-// is never dropped in favor of an alphabetically-earlier receiver match.
+// (case-insensitive).
+//
+// Two things order the hits, in this order:
+//
+//   - This repo's own code before dependency and stdlib code. Deps are indexed
+//     for resolution, not because anyone searches for them, and a name common
+//     enough to appear in a library ("Load", "Get", "New") would otherwise bury
+//     the project's own definition under code the reader can't change.
+//   - Within a tier, matches on the leaf name — the method or function name,
+//     the part after the last "." — above matches that only hit the receiver
+//     type or package path, since a search is almost always for the
+//     method/function itself.
+//
+// Ranking happens before the limit is applied, so a strong match is never
+// dropped in favor of an alphabetically-earlier weak one.
 func (i *Indexer) Search(query string, limit int) []SearchResult {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
@@ -2198,13 +2208,26 @@ func (i *Indexer) Search(query string, limit int) []SearchResult {
 				Label:    string(id),
 				File:     pos.Filename,
 				Line:     pos.Line,
+				External: !i.ownsCode(fi),
 			},
 			leaf: q == "" || strings.Contains(leafName(s), q),
 		})
 	}
 
-	// Stable so the alphabetical order within each tier is preserved.
-	sort.SliceStable(hits, func(a, b int) bool { return hits[a].leaf && !hits[b].leaf })
+	// Stable so the alphabetical order within each tier is preserved. Rank is
+	// computed rather than compared field-by-field so the two criteria stay in
+	// a stated priority: owning the code outranks matching better.
+	rank := func(h hit) int {
+		r := 0
+		if h.res.External {
+			r += 2
+		}
+		if !h.leaf {
+			r++
+		}
+		return r
+	}
+	sort.SliceStable(hits, func(a, b int) bool { return rank(hits[a]) < rank(hits[b]) })
 
 	out := make([]SearchResult, 0, limit)
 	for _, h := range hits {

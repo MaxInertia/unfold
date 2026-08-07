@@ -65,6 +65,9 @@ export interface SearchResult {
   label: string;
   file: string;
   line: number;
+  // A hit in stdlib or a dependency rather than a service's own code. Already
+  // ranked last by the server; the flag lets the picker say so.
+  external?: boolean;
 }
 
 // One place a target is referenced (mirrors model.Usage). callId + choice

@@ -162,6 +162,11 @@ type SearchResult struct {
 	Label    string   `json:"label"`
 	File     string   `json:"file"`
 	Line     int      `json:"line"`
+	// External marks a hit that lives outside the repo that produced it —
+	// stdlib or a dependency. Dependency code is loaded for resolution, so it
+	// is searchable and worth keeping, but it is never what someone typing a
+	// name is looking for first: it ranks below every service's own code.
+	External bool `json:"external,omitempty"`
 }
 
 // UsageKind classifies how a target is referenced at a usage site.
@@ -490,6 +495,15 @@ func HasWorkspace(e Engine) bool {
 // CrossRepoResolver is implemented by engines that federate repositories.
 type CrossRepoResolver interface {
 	Resolve(kind, key string) (*Resolution, error)
+}
+
+// ServiceSearcher is implemented by engines that can bias search toward one
+// service. Which service is "current" is a property of what's on screen, not
+// of the engine — you can zoom into any service in the workspace — so it
+// arrives per request rather than being fixed at load. An empty repo means
+// the primary one, which is what plain Search assumes.
+type ServiceSearcher interface {
+	SearchFrom(repo, query string, limit int) []SearchResult
 }
 
 // PlatformEngine is the optional half of Engine: engines that can describe

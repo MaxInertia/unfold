@@ -3,7 +3,6 @@ package workspace
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/MaxInertia/unfold/internal/model"
 )
@@ -12,6 +11,7 @@ var (
 	_ model.Engine          = (*Workspace)(nil)
 	_ model.PlatformEngine  = (*Workspace)(nil)
 	_ model.WorkspaceEngine = (*Workspace)(nil)
+	_ model.ServiceSearcher = (*Workspace)(nil)
 )
 
 // Ids crossing this boundary are rewritten in both directions: a sub-engine
@@ -111,11 +111,38 @@ func (w *Workspace) Usages(id model.TargetID) ([]model.Usage, error) {
 	return us, nil
 }
 
-// Search covers every repo that is already indexed. Loading the rest would
-// turn a keystroke into minutes of compilation, so a lazy workspace searches
-// what it has and says so via Repos().
+// Search covers every repo that is already indexed, ranked for the primary
+// service. See SearchFrom.
 func (w *Workspace) Search(query string, limit int) []model.SearchResult {
-	var out []model.SearchResult
+	return w.SearchFrom("", query, limit)
+}
+
+// SearchFrom is Search ranked for whichever service the reader is currently
+// in, which above the frame level need not be the repo unfold was launched
+// in. Loading the un-indexed repos would turn a keystroke into minutes of
+// compilation, so a lazy workspace searches what it has and says so via
+// Repos().
+//
+// Three tiers, and the middle one is the point: the current service's own
+// code, then every other indexed service's own code, then dependencies from
+// anywhere. A dep of the service you're reading is still someone else's
+// implementation — it belongs below a sibling service's real code, not above
+// it because it happens to share a repo with you.
+func (w *Workspace) SearchFrom(repo, query string, limit int) []model.SearchResult {
+	if repo == "" {
+		repo = w.primary
+	}
+	if _, ok := w.repos[repo]; !ok {
+		repo = w.primary
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	type hit struct {
+		res  model.SearchResult
+		tier int
+	}
+	var hits []hit
 	for _, alias := range w.order {
 		r := w.repos[alias]
 		r.mu.Lock()
@@ -129,16 +156,24 @@ func (w *Workspace) Search(query string, limit int) []model.SearchResult {
 			if alias != w.primary {
 				res.Label = r.name + " · " + res.Label
 			}
-			out = append(out, res)
+			tier := 1
+			switch {
+			case res.External:
+				tier = 2
+			case alias == repo:
+				tier = 0
+			}
+			hits = append(hits, hit{res: res, tier: tier})
 		}
 	}
-	// Primary-repo hits first: that's the service being read.
-	sort.SliceStable(out, func(a, b int) bool {
-		return !strings.Contains(string(out[a].TargetID), Sep) &&
-			strings.Contains(string(out[b].TargetID), Sep)
-	})
-	if len(out) > limit {
-		out = out[:limit]
+	// Stable, so each sub-engine's own ranking survives inside a tier.
+	sort.SliceStable(hits, func(a, b int) bool { return hits[a].tier < hits[b].tier })
+	out := make([]model.SearchResult, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, h.res)
+		if len(out) == limit {
+			break
+		}
 	}
 	return out
 }

@@ -221,6 +221,53 @@ func TestSearchSpansIndexedRepos(t *testing.T) {
 	}
 }
 
+// Which hits come first depends on which service is being read, and above the
+// frame level that need not be the repo unfold was launched in. Selecting
+// conversation at the platform level and then searching has to put
+// conversation's own code first, even though inbox is primary.
+func TestSearchRanksCurrentServiceFirst(t *testing.T) {
+	w := open(t, ModeEager)
+
+	repoOf := func(r model.SearchResult) string {
+		if alias, _ := split(string(r.TargetID)); alias != "" {
+			return alias
+		}
+		return w.primary
+	}
+	firstRepo := func(res []model.SearchResult) string {
+		if len(res) == 0 {
+			t.Fatal("expected results for 'GetConversation'")
+		}
+		return repoOf(res[0])
+	}
+
+	// Default: the repo unfold was launched in.
+	if got := firstRepo(w.Search("GetConversation", 25)); got != "inbox" {
+		t.Errorf("plain Search should rank the primary repo first, got %q", got)
+	}
+
+	res := w.SearchFrom("conversation", "GetConversation", 25)
+	if got := firstRepo(res); got != "conversation" {
+		t.Errorf("search from conversation should rank its own code first, got %q", got)
+	}
+	// Not a filter: the other services' hits are still there, just below.
+	var others int
+	for _, r := range res {
+		if repoOf(r) != "conversation" {
+			others++
+		}
+	}
+	if others == 0 {
+		t.Error("other indexed services' hits should still be returned, only ranked lower")
+	}
+
+	// An alias that isn't in this workspace falls back to the primary rather
+	// than to an empty result: a stale link should still search.
+	if got := firstRepo(w.SearchFrom("nosuchrepo", "GetConversation", 25)); got != "inbox" {
+		t.Errorf("an unknown repo should fall back to the primary, got %q", got)
+	}
+}
+
 func TestAutoModeEagerBelowLimit(t *testing.T) {
 	w := open(t, ModeAuto)
 	for _, r := range w.Repos() {

@@ -244,6 +244,15 @@ func TestEndpoints(t *testing.T) {
 		if len(resp.Results) == 0 {
 			t.Error("expected at least one result for q=Indexer")
 		}
+
+		// repo names the service to rank first. It's a hint: a single-repo
+		// session has no aliases at all, and a search that came back empty
+		// because of one would look like a broken index.
+		resp.Results = nil
+		getJSON(t, ts.URL+"/api/search?q=Indexer&limit=10&repo=nosuchrepo", http.StatusOK, &resp)
+		if len(resp.Results) == 0 {
+			t.Error("a repo hint must not filter results away")
+		}
 	})
 
 	// /api/open is the one side-effecting endpoint; verify its guards. We use

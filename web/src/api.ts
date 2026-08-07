@@ -43,9 +43,16 @@ export function fetchBodyByCall(id: CallID, choice = 0): Promise<Frame> {
   return getJSON<Frame>(`/api/body?${params.toString()}`);
 }
 
-export async function search(q: string, limit = 25): Promise<SearchResult[]> {
-  const url = `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`;
-  const res = await getJSON<{ results: SearchResult[] }>(url);
+// repo is the service the reader is currently in, which ranks first in the
+// results. Null (a plain repo, or nothing open yet) means the primary one.
+export async function search(
+  q: string,
+  limit = 25,
+  repo?: string | null,
+): Promise<SearchResult[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  if (repo) params.set("repo", repo);
+  const res = await getJSON<{ results: SearchResult[] }>(`/api/search?${params.toString()}`);
   return res.results ?? [];
 }
 

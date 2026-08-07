@@ -912,7 +912,11 @@ func (s *Server) handleBody(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET /api/search?q=<substr>&limit=<int>
+// GET /api/search?q=<substr>&limit=<int>&repo=<alias>
+//
+// repo names the service the reader is currently in, so its own code ranks
+// first. It's a hint, not a filter: an unknown or absent repo falls back to
+// the primary one rather than returning nothing.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	limit := 50
@@ -921,9 +925,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"results": s.engine.Search(q, limit),
-	})
+	var results []model.SearchResult
+	if ss, ok := s.engine.(model.ServiceSearcher); ok {
+		results = ss.SearchFrom(r.URL.Query().Get("repo"), q, limit)
+	} else {
+		results = s.engine.Search(q, limit)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

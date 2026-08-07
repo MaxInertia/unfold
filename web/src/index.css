@@ -256,6 +256,19 @@ body.resizing {
   color: var(--muted);
 }
 
+/* A dependency hit. It ranks below every service's own code, and says why —
+   otherwise a result sitting at the bottom just looks like a worse match. */
+.picker-dep {
+  color: var(--muted);
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  margin-right: 0.4rem;
+}
+
 /* Frame */
 .frame {
   background: var(--card-bg);

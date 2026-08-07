@@ -98,6 +98,18 @@ func (r *Reloadable) Search(query string, limit int) []model.SearchResult {
 	return r.cur.Search(query, limit)
 }
 
+// SearchFrom biases search toward one workspace service when the engine held
+// can do that, and is plain Search otherwise — a single repo has exactly one
+// service, so "rank mine first" is already what it does.
+func (r *Reloadable) SearchFrom(repo, query string, limit int) []model.SearchResult {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if ss, ok := r.cur.(model.ServiceSearcher); ok {
+		return ss.SearchFrom(repo, query, limit)
+	}
+	return r.cur.Search(query, limit)
+}
+
 func (r *Reloadable) Files() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

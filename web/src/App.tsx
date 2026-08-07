@@ -415,7 +415,7 @@ function AppShell() {
           />
         )}
         <div className="app-content">
-          <SymbolPicker onPick={(s) => store.setSymbol(s)} />
+          <SymbolPicker repo={serviceRepo} onPick={(s) => store.setSymbol(s)} />
           {platform && (
             <ZoomTrail
               level={zoom}
@@ -647,7 +647,16 @@ function highlightMatch(label: string, query: string): ReactNode {
   return parts;
 }
 
-function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
+// repo is the service being read, and it goes to the server with every query:
+// which hits matter most depends on where you are, and above the frame level
+// that need not be the repo unfold was launched in.
+function SymbolPicker({
+  repo,
+  onPick,
+}: {
+  repo: string | null;
+  onPick: (name: string) => void;
+}) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [busy, setBusy] = useState(false);
@@ -661,7 +670,7 @@ function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
     }
     setBusy(true);
     const handle = setTimeout(() => {
-      search(query, 25)
+      search(query, 25, repo)
         .then((r) => {
           if (!alive) return;
           setResults(r);
@@ -675,7 +684,7 @@ function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
       alive = false;
       clearTimeout(handle);
     };
-  }, [query]);
+  }, [query, repo]);
 
   return (
     <div className="picker">
@@ -704,7 +713,10 @@ function SymbolPicker({ onPick }: { onPick: (name: string) => void }) {
                 onClick={() => onPick(r.targetId)}
                 className="picker-pick"
               >
-                <span className="picker-label">{highlightMatch(r.label, query)}</span>
+                <span className="picker-label">
+                  {r.external && <span className="picker-dep">dep</span>}
+                  {highlightMatch(r.label, query)}
+                </span>
                 <span className="picker-loc">
                   {r.file.split("/").slice(-2).join("/")}:{r.line}
                 </span>
