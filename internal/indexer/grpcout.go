@@ -346,3 +346,34 @@ func (i *Indexer) forwardClosure(seeds map[TargetID]bool) map[TargetID]bool {
 	}
 	return reached
 }
+
+// filterReachable drops outbound bindings whose call site execution can't
+// arrive at, returning what survives and how many were excluded.
+//
+// This is applied to configured rules for the same reason it is applied to
+// gRPC: a repo can hold a call nothing ever invokes, and no amount of
+// classifying the call shape tells you whether the service uses it.
+// Reachability answers that directly. Inbound bindings are left alone — an
+// entrypoint is by definition where execution starts, so asking what reaches
+// it is the wrong question.
+func (i *Indexer) filterReachable(bs []model.Binding) ([]model.Binding, int) {
+	if len(bs) == 0 {
+		return nil, 0
+	}
+	reachable := i.entrypointReachable()
+	if reachable == nil {
+		// No recognized way in: filtering on an empty seed set would erase
+		// everything, so the check declines to run rather than lying.
+		return bs, 0
+	}
+	kept := make([]model.Binding, 0, len(bs))
+	excluded := 0
+	for _, b := range bs {
+		if b.Role == model.RoleOutbound && b.Site != "" && !reachable[b.Site] {
+			excluded++
+			continue
+		}
+		kept = append(kept, b)
+	}
+	return kept, excluded
+}

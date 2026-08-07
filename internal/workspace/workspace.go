@@ -28,6 +28,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/manifest"
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/protoapi"
+	"github.com/MaxInertia/unfold/internal/rules"
 )
 
 // Sep separates a repo alias from an engine-specific id. Go's FullName uses
@@ -73,11 +74,18 @@ type Workspace struct {
 	mode    Mode
 
 	protoRoot string
+	// rulePaths are the shared recognizer files, applied to every repo.
+	rulePaths []string
 
 	// servedBy maps a declared key ("<kind>\x00<key>") to the alias serving
 	// it. This is the cross-repo join, and it needs no Go index at all.
 	servedBy map[string]string
 }
+
+// RulePaths are the shared recognizer files every repo in a workspace loads.
+// Package-level to avoid threading it through Open's signature for what is a
+// process-wide setting, the same way the engine treats the proto root.
+var RulePaths []string
 
 // Discover finds the repos under root: root itself if it's a module, plus
 // every immediate subdirectory that is one. One level is deliberate — a
@@ -142,6 +150,7 @@ func Open(dirs []string, primaryDir, protoRoot string, mode Mode) (*Workspace, e
 		repos:     make(map[string]*repo, len(dirs)),
 		mode:      mode,
 		protoRoot: protoRoot,
+		rulePaths: RulePaths,
 		servedBy:  map[string]string{},
 	}
 	primaryAbs, _ := filepath.Abs(primaryDir)
@@ -288,6 +297,10 @@ func (w *Workspace) load(alias string) error {
 		return r.err // don't retry a repo that already failed to build
 	}
 	idx := indexer.New()
+	// Rules are a platform-wide fact — they describe libraries, not one
+	// service — so every repo in the workspace gets the same set, plus its own
+	// .unfold/recognizers.json for local reality.
+	idx.SetRules(rules.Load(append(append([]string{}, w.rulePaths...), rules.RepoPath(r.dir))...))
 	_ = idx.SetProtoRoot(w.protoRoot)
 	if err := idx.Load(r.dir, "./..."); err != nil {
 		r.err = fmt.Errorf("%s: %w", r.name, err)

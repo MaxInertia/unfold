@@ -29,7 +29,7 @@ type Evaluator struct {
 	calls map[model.TargetID][]platform.Call
 	// callee maps a call site to the function it calls, so phase 2 can ask
 	// what that function was classified as. Empty for unresolved calls.
-	callee map[callKey]model.TargetID
+	callee map[callKey][]model.TargetID
 
 	// marks[rule][fn] is the key that rule matched inside fn's body.
 	marks map[string]map[model.TargetID]string
@@ -55,7 +55,7 @@ func NewEvaluator(rs []Rule) *Evaluator {
 	e := &Evaluator{
 		byID:   map[string]Rule{},
 		calls:  map[model.TargetID][]platform.Call{},
-		callee: map[callKey]model.TargetID{},
+		callee: map[callKey][]model.TargetID{},
 		marks:  map[string]map[model.TargetID]string{},
 		Stats:  map[string]int{},
 	}
@@ -73,15 +73,26 @@ func NewEvaluator(rs []Rule) *Evaluator {
 	return e
 }
 
-// Observe records one call site, attributed to the function containing it.
-// Called once per call site during indexing, before Run.
-func (e *Evaluator) Observe(c platform.Call, target model.TargetID) {
+// Observe records one call site, attributed to the function containing it,
+// along with every function it might call.
+//
+// Plural, because an interface call has no single callee: a client obtained as
+// `NewReportingClient() ReportingClient` dispatches through the interface, and
+// insisting on a direct target would miss exactly the calls that go through
+// the abstraction a real SDK hands you.
+func (e *Evaluator) Observe(c platform.Call, targets ...model.TargetID) {
 	if len(e.rules) == 0 {
 		return
 	}
 	e.calls[c.Site] = append(e.calls[c.Site], c)
-	if target != "" {
-		e.callee[keyOf(c)] = target
+	var keep []model.TargetID
+	for _, t := range targets {
+		if t != "" {
+			keep = append(keep, t)
+		}
+	}
+	if len(keep) > 0 {
+		e.callee[keyOf(c)] = keep
 	}
 }
 
@@ -108,6 +119,9 @@ func (e *Evaluator) Run() []model.Binding {
 	for _, fn := range sites {
 		for _, c := range e.calls[fn] {
 			for _, r := range e.rules {
+				if r.Classifier {
+					continue // marks functions only; never an edge itself
+				}
 				if b, ok := e.apply(r, c); ok {
 					e.Stats[r.ID]++
 					out = append(out, b)
@@ -161,13 +175,14 @@ func (e *Evaluator) runPhase1() {
 					continue
 				}
 				for _, c := range calls {
-					t, ok := e.callee[keyOf(c)]
-					if !ok {
-						continue
+					for _, t := range e.callee[keyOf(c)] {
+						if key, marked := marks[t]; marked {
+							marks[fn] = key
+							added = true
+							break
+						}
 					}
-					if key, marked := marks[t]; marked {
-						marks[fn] = key
-						added = true
+					if _, has := marks[fn]; has {
 						break
 					}
 				}
@@ -189,15 +204,16 @@ func (e *Evaluator) apply(r Rule, c platform.Call) (model.Binding, bool) {
 
 	inner := ""
 	if n := r.Match.CalleeMatches; n != nil {
-		target, ok := e.callee[keyOf(c)]
-		if !ok {
-			return model.Binding{}, false // unresolved callee: nothing to inspect
+		found := false
+		for _, target := range e.callee[keyOf(c)] {
+			if key, marked := e.marks[n.Rule][target]; marked {
+				inner, found = key, true
+				break
+			}
 		}
-		key, marked := e.marks[n.Rule][target]
-		if !marked {
+		if !found {
 			return model.Binding{}, false
 		}
-		inner = key
 	}
 
 	key, ok := expandKey(r.Emit.Key, c, caps, inner)

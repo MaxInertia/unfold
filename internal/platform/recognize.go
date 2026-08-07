@@ -50,22 +50,40 @@ type Call struct {
 // A Recognizer returns the bindings a call site implies, or nil.
 type Recognizer func(Call) []model.Binding
 
-// Recognizers is the active rule set. Which rules *should* be active is
-// ultimately a per-project question (detected from go.mod / package.json —
-// there's no point running Kafka rules against a repo that doesn't import
-// it), but with a handful of stdlib-and-GCP rules the cost of running them
-// all is a few string comparisons per call site.
-var Recognizers = []Recognizer{
-	HTTPRoutes,
-	PubSub,
-	HTTPClientCalls,
+// Builtin is a recognizer written in Go, addressed by a stable id.
+//
+// The id is what lets a built-in be switched off from configuration the same
+// way a configured rule is: without one they were an anonymous slice, and
+// "turn off the net/http rule" had nowhere to point. The functions stay Go —
+// they are pinned by named tests and some of them encode rules that took real
+// effort to get right — they just stop being unaddressable.
+type Builtin struct {
+	ID   string
+	Doc  string
+	Fn   Recognizer
 }
 
-// Extract runs every recognizer over one call site.
-func Extract(c Call) []model.Binding {
+// Builtins is the rule set shipped with unfold. Which rules *should* be active
+// is ultimately a per-project question (there's no point running Kafka rules
+// against a repo that doesn't import it), but with a handful of stdlib-and-GCP
+// rules the cost of running them all is a few string comparisons per call site.
+var Builtins = []Builtin{
+	{ID: "builtin.http.routes", Doc: "net/http route registration (inbound)", Fn: HTTPRoutes},
+	{ID: "builtin.pubsub", Doc: "GCP Pub/Sub topics and subscriptions", Fn: PubSub},
+	{ID: "builtin.http.calls", Doc: "http.Get/Post with a statically known URL (outbound)", Fn: HTTPClientCalls},
+}
+
+// Extract runs every enabled built-in over one call site. A disabled built-in
+// contributes nothing, which is a user choice and reported as such elsewhere —
+// an empty surface because a rule was switched off must not look like one
+// nothing was found in.
+func Extract(c Call, disabled map[string]bool) []model.Binding {
 	var out []model.Binding
-	for _, r := range Recognizers {
-		out = append(out, r(c)...)
+	for _, b := range Builtins {
+		if disabled[b.ID] {
+			continue
+		}
+		out = append(out, b.Fn(c)...)
 	}
 	return out
 }

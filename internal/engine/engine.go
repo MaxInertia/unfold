@@ -10,6 +10,7 @@ import (
 
 	"github.com/MaxInertia/unfold/internal/indexer"
 	"github.com/MaxInertia/unfold/internal/model"
+	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/tsengine"
 	"github.com/MaxInertia/unfold/internal/workspace"
 )
@@ -77,6 +78,11 @@ var (
 // engine rebuilds watch mode performs, and it is what turns a single-repo
 // session into a workspace on the next load.
 var LinkedRepos []string
+
+// RecognizerFiles are the rule files to load, in precedence order — later
+// files win. Process-wide for the same reason ProtoRoot is: it must survive
+// the engine rebuilds watch mode performs.
+var RecognizerFiles []string
 
 // LinkRepo adds a repository to the set opened on the next load, reporting
 // whether it was new. Nothing is re-indexed here — the caller reloads the
@@ -183,9 +189,11 @@ func Load(lang Lang, dir, target string) (model.Engine, error) {
 	switch lang {
 	case LangGo:
 		if dirs := goDirs(dir); len(dirs) > 0 {
+			workspace.RulePaths = RecognizerFiles
 			return workspace.Open(dirs, projectDir(dir), ProtoRoot, IndexMode)
 		}
 		idx := indexer.New()
+		idx.SetRules(rules.Load(RecognizerFiles...))
 		_ = idx.SetProtoRoot(ProtoRoot)
 		if err := idx.Load(dir, target); err != nil {
 			return nil, err

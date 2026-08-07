@@ -19,6 +19,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/gitbase"
 	"github.com/MaxInertia/unfold/internal/notes"
 	"github.com/MaxInertia/unfold/internal/prefs"
+	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/server"
 	"github.com/MaxInertia/unfold/internal/workspace"
 )
@@ -44,6 +45,7 @@ func main() {
 		lang         = flag.String("lang", "", "force engine language: go|typescript (default: autodetect)")
 		watch        = flag.Bool("watch", true, "reindex automatically when source files change")
 		diffBase     = flag.String("diff-base", "", "git ref to diff against (e.g. main); frames show what this branch changes vs the merge-base. Go only.")
+		recognizers  = flag.String("recognizers", "", "JSON file of recognizer rules describing how your services communicate — in-house HTTP wrappers, custom pub/sub. Shared across a workspace; per-repo and personal files are layered on top.")
 		workspaceDir = flag.String("workspace", "", "directory of sibling repository checkouts to open together, so cross-service calls can be followed into the repo that implements them")
 		indexMode    = flag.String("index", "auto", "when to index each workspace repo's Go code: eager|lazy|auto (auto indexes up front for a small workspace, on demand for a large one)")
 		protoRoot    = flag.String("proto-root", "", "directory of the shared proto repository that microservice.yaml protoPaths are relative to; enables the declared gRPC surface in the service view")
@@ -68,6 +70,15 @@ func main() {
 	// what makes the link stick: without it, opening a workspace would be
 	// something you had to redo on every start.
 	engine.LinkedRepos = append([]string(nil), saved.LinkedRepos...)
+
+	// Rule files, in precedence order: a shared org file establishes what a
+	// library looks like, the repo overrides it for local reality, and a
+	// personal file is the last word for this one machine.
+	engine.RecognizerFiles = []string{
+		rules.UserPath(),
+		*recognizers,
+		rules.RepoPath(projectDir(*dir)),
+	}
 
 	target := flag.Arg(0)
 	if target == "" {

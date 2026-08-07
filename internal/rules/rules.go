@@ -43,6 +43,16 @@ type Rule struct {
 	Enabled *bool  `json:"enabled,omitempty"`
 	Match   *Match `json:"match,omitempty"`
 	Emit    *Emit  `json:"emit,omitempty"`
+	// Classifier marks a rule that exists only to be named by another rule's
+	// calleeMatches. It still computes a key — that's what {inner.key} reads —
+	// but produces no binding of its own.
+	//
+	// This is not a convenience. A generated client's body issuing a transport
+	// call is what *identifies* the client; it is not itself an edge the
+	// service makes. Without the distinction, every generated stub in the repo
+	// becomes an outbound edge, which is the exact failure the built-in pass
+	// avoids by treating a stub as capability rather than as a call.
+	Classifier bool `json:"classifier,omitempty"`
 }
 
 // Match is the predicate. Every field is optional and all present fields must

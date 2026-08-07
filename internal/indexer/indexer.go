@@ -26,6 +26,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/manifest"
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/platform"
+	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/protoapi"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/packages"
@@ -156,6 +157,12 @@ type Indexer struct {
 	// resolve against. Empty disables proto loading — the paths are relative
 	// to a repo unfold has no way to locate on its own.
 	protoRoot string
+	// ruleSet is the configured recognizers: user-written rules, plus which
+	// built-ins are switched off. Empty by default, so a project with no rules
+	// file behaves exactly as before.
+	ruleSet   rules.Set
+	ruleStats map[string]int
+
 	// outboundUnreachable counts outbound call sites excluded because
 	// execution can't reach them from any recognized entrypoint.
 	outboundUnreachable int
@@ -383,6 +390,11 @@ func (i *Indexer) Load(dir, pattern string) error {
 		}
 	})
 
+	// Configured rules run alongside the built-ins: `disabled` switches
+	// built-ins off, and the evaluator collects the facts its two phases need.
+	disabled := i.ruleSet.Disabled()
+	ev := rules.NewEvaluator(i.ruleSet.Rules)
+
 	// Pass 2: walk each function body, resolve call sites. Idents that name
 	// an indexed function but are not a call's name token are recorded as
 	// value references (the function passed around as a value).
@@ -416,12 +428,25 @@ func (i *Indexer) Load(dir, pattern string) error {
 				// invokePath follows chains without a depth limit, admitting
 				// dependency sites would bury the real edges under library
 				// plumbing.
+				ci := i.resolveCall(fi, node)
 				if i.ownsCode(fi) {
 					if facts, ok := i.callFacts(fi, node); ok {
-						i.bindings = append(i.bindings, platform.Extract(facts)...)
+						i.bindings = append(i.bindings, platform.Extract(facts, disabled)...)
+						// Rules need the callee as well as the call site:
+						// phase 1 asks what a function's own body does, which
+						// is a question about the target, not about here.
+						if ev != nil {
+							var targets []TargetID
+							if ci != nil {
+								targets = append(targets, ci.target)
+								for _, cand := range ci.candidates {
+									targets = append(targets, cand.TargetID)
+								}
+							}
+							ev.Observe(facts, targets...)
+						}
 					}
 				}
-				ci := i.resolveCall(fi, node)
 				if ci == nil {
 					return true
 				}
@@ -506,6 +531,17 @@ func (i *Indexer) Load(dir, pattern string) error {
 	grpcOut, unreachable := i.grpcOutbound()
 	i.bindings = append(i.bindings, grpcOut...)
 	i.outboundUnreachable = unreachable
+
+	// Configured rules produce bindings the same way built-ins do, and are
+	// filtered the same way afterwards. Reachability is a property of the
+	// evaluator rather than of any rule: a rule says what shape counts, and
+	// the engine decides whether execution can get there — so a configured
+	// outbound edge can't claim a call the service never makes, which is the
+	// filter the gRPC pass had to learn.
+	ruleOut, ruleUnreachable := i.filterReachable(ev.Run())
+	i.bindings = append(i.bindings, ruleOut...)
+	i.outboundUnreachable += ruleUnreachable
+	i.ruleStats = ev.Stats
 
 	i.sortBindings()
 	i.computeCrossings()
@@ -2195,4 +2231,47 @@ func (i *Indexer) readRange(filename string, start, end int) ([]byte, error) {
 		return nil, fmt.Errorf("range [%d,%d) out of bounds for %s (len %d)", start, end, filename, len(buf))
 	}
 	return buf[start:end], nil
+}
+
+// SetRules installs the configured recognizers. Like the proto root it's a
+// process-wide choice applied before Load, and it must survive the engine
+// rebuilds watch mode performs.
+func (i *Indexer) SetRules(s rules.Set) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.ruleSet = s
+}
+
+// RuleReport describes what the configured rules did, so a rule that has
+// quietly stopped matching says so instead of contributing nothing in silence.
+func (i *Indexer) RuleReport() model.RuleReport {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	rep := model.RuleReport{Problems: i.ruleSet.Problems}
+	for _, b := range platform.Builtins {
+		rep.Rules = append(rep.Rules, model.RuleInfo{
+			ID: b.ID, Doc: b.Doc, Builtin: true,
+			Enabled: !i.ruleSet.Disabled()[b.ID],
+		})
+	}
+	for _, r := range i.ruleSet.Rules {
+		if isBuiltinID(r.ID) {
+			continue // a settings-only entry toggling a built-in, already listed
+		}
+		rep.Rules = append(rep.Rules, model.RuleInfo{
+			ID: r.ID, Doc: r.Comment, Enabled: r.On(),
+			Source:  i.ruleSet.Sources[r.ID],
+			Matches: i.ruleStats[r.ID],
+		})
+	}
+	return rep
+}
+
+func isBuiltinID(id string) bool {
+	for _, b := range platform.Builtins {
+		if b.ID == id {
+			return true
+		}
+	}
+	return false
 }

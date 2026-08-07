@@ -528,3 +528,26 @@ type Engine interface {
 	// reach it, and value references. Sorted by file then line.
 	Usages(id TargetID) ([]Usage, error)
 }
+
+// RuleInfo describes one recognizer for display: what it is, whether it's on,
+// where it came from, and how much it actually matched.
+type RuleInfo struct {
+	ID      string `json:"id"`
+	Doc     string `json:"doc,omitempty"`
+	Builtin bool   `json:"builtin,omitempty"`
+	Enabled bool   `json:"enabled"`
+	// Source is the file a configured rule came from, so "why is this edge
+	// here" is answerable down to the file someone else committed.
+	Source string `json:"source,omitempty"`
+	// Matches is how many bindings it produced. Zero on a rule that is
+	// supposed to be doing something is the signal that a library moved.
+	Matches int `json:"matches"`
+}
+
+// RuleReport is the whole recognizer picture, including what went wrong
+// assembling it — a dropped rule that nobody is told about is exactly the
+// failure the rule system exists to avoid.
+type RuleReport struct {
+	Rules    []RuleInfo `json:"rules"`
+	Problems []string   `json:"problems,omitempty"`
+}
