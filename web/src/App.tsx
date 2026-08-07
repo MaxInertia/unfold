@@ -54,14 +54,23 @@ function AppShell() {
   const [treeCollapsed, setTreeCollapsed] = useState(
     () => localStorage.getItem(TREE_COLLAPSED_KEY) === "1",
   );
-  // The left panel is about what leads *to* this frame — its files, its
-  // callers, the entrypoints that reach it. The call tree is the opposite
-  // direction and lives on the right with the outbounds, beside the code it
-  // describes rather than across it.
-  const [sidebarTab, setSidebarTab] = useState<"files" | "callers" | "entrypoints" | "notes">(
-    "files",
-  );
-  const [rightTab, setRightTab] = useState<"calls" | "outbounds">("calls");
+  // The left panel is about what leads *to* this frame — its entrypoints, its
+  // callers, the files it lives among. The call tree is the opposite direction
+  // and lives on the right with the outbounds, beside the code it describes
+  // rather than across it.
+  //
+  // Both tabs start unpicked rather than at a fixed name, because the right
+  // default depends on something that isn't known at mount: whether this
+  // engine has a recognized surface. With one, each side opens on the
+  // platform-level answer — which entrypoints reach this code, and what it
+  // calls out to. Without one those tabs don't exist, so the fallback is the
+  // nearest thing that does: callers on the left, the call tree on the right.
+  // A pick is remembered as itself, so choosing a tab survives health
+  // resolving late and never gets overwritten by a default.
+  const [sidebarTab, setSidebarTab] = useState<
+    "files" | "callers" | "entrypoints" | "notes" | null
+  >(null);
+  const [rightTab, setRightTab] = useState<"calls" | "outbounds" | null>(null);
   const [reindexed, setReindexed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -100,16 +109,26 @@ function AppShell() {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
   });
-  // It used to start collapsed — it held one optional panel, so opening it was
-  // rightly a choice. Now that the call tree lives here it holds the mirror of
-  // what you expand, which has to be on screen to be that, so it starts open.
-  const [rightCollapsed, setRightCollapsed] = useState(
-    () => localStorage.getItem(RIGHT_COLLAPSED_KEY) === "1",
-  );
+  // Whether the right panel starts open follows the same question as its
+  // default tab: with a recognized surface it opens on outbounds, which is
+  // worth the horizontal space unprompted. Without one it is the call tree
+  // alone — useful, but a mirror of what you already did — so it stays a
+  // choice, as it was before the tree moved here. null means "never chosen";
+  // an explicit toggle is stored and outranks the default forever after.
+  const [rightCollapsed, setRightCollapsed] = useState<boolean | null>(() => {
+    const v = localStorage.getItem(RIGHT_COLLAPSED_KEY);
+    return v === null ? null : v === "1";
+  });
   const [rightWidth, setRightWidth] = useState(() => {
     const v = Number(localStorage.getItem(RIGHT_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
   });
+
+  // What each panel actually shows: a pick if there is one, the
+  // platform-dependent default otherwise.
+  const leftTab = sidebarTab ?? (platform ? "entrypoints" : "callers");
+  const rightPanelTab = rightTab ?? (platform ? "outbounds" : "calls");
+  const rightIsCollapsed = rightCollapsed ?? !platform;
 
   // Which service the views are about. Zooming out follows the code you were
   // reading — the frame's own repo — rather than snapping back to the one
@@ -133,7 +152,11 @@ function AppShell() {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
   }, [sidebarWidth]);
 
+  // Only a real toggle is written. Persisting the derived value would freeze
+  // whatever this session happened to open as, so a repo opened once without a
+  // platform surface would keep the panel shut in every repo after it.
   useEffect(() => {
+    if (rightCollapsed === null) return;
     localStorage.setItem(RIGHT_COLLAPSED_KEY, rightCollapsed ? "1" : "0");
   }, [rightCollapsed]);
 
@@ -317,29 +340,20 @@ function AppShell() {
                 <div className="tree-header tree-tabs">
                   {zoom === "frame" ? (
                     <>
-                      <button
-                        type="button"
-                        className={`tree-tab${sidebarTab === "files" ? " tree-tab--active" : ""}`}
-                        onClick={() => setSidebarTab("files")}
-                      >
-                        files
-                      </button>
-                      <button
-                        type="button"
-                        className={`tree-tab${sidebarTab === "callers" ? " tree-tab--active" : ""}`}
-                        onClick={() => setSidebarTab("callers")}
-                        title="who calls the focused function — expand to walk toward entry points"
-                      >
-                        callers
-                      </button>
-                      {/* Only offered in platform mode, because without a
-                          recognized surface the tab would have nothing to
-                          show and no honest way to say why. */}
+                      {/* Ordered by how far each answer is from the code:
+                          entrypoints is the whole reason this function runs,
+                          callers is the hop below it, and files is where the
+                          text happens to sit. That also puts the default
+                          first and its fallback second.
+
+                          Entrypoints is only offered in platform mode, because
+                          without a recognized surface the tab would have
+                          nothing to show and no honest way to say why. */}
                       {platform && (
                         <button
                           type="button"
                           className={`tree-tab${
-                            sidebarTab === "entrypoints" ? " tree-tab--active" : ""
+                            leftTab === "entrypoints" ? " tree-tab--active" : ""
                           }`}
                           onClick={() => setSidebarTab("entrypoints")}
                           title="the routes, RPCs and subscriptions that reach this frame — why this code runs at all"
@@ -352,7 +366,22 @@ function AppShell() {
                       )}
                       <button
                         type="button"
-                        className={`tree-tab${sidebarTab === "notes" ? " tree-tab--active" : ""}`}
+                        className={`tree-tab${leftTab === "callers" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("callers")}
+                        title="who calls the focused function — expand to walk toward entry points"
+                      >
+                        callers
+                      </button>
+                      <button
+                        type="button"
+                        className={`tree-tab${leftTab === "files" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("files")}
+                      >
+                        files
+                      </button>
+                      <button
+                        type="button"
+                        className={`tree-tab${leftTab === "notes" ? " tree-tab--active" : ""}`}
                         onClick={() => setSidebarTab("notes")}
                         title="all notes in this project"
                       >
@@ -383,11 +412,11 @@ function AppShell() {
                       filters={serviceFilters}
                       onChange={setServiceFilters}
                     />
-                  ) : sidebarTab === "files" ? (
+                  ) : leftTab === "files" ? (
                     <FileTree onOpen={(id) => store.setSymbol(id)} />
-                  ) : sidebarTab === "notes" ? (
+                  ) : leftTab === "notes" ? (
                     <NotesList />
-                  ) : sidebarTab === "entrypoints" ? (
+                  ) : platform && leftTab === "entrypoints" ? (
                     <EntrypointsPanel view={serviceView} onOpen={(id) => store.setSymbol(id)} />
                   ) : !rootFrame ? (
                     <p className="tree-placeholder">Pick a function to see its callers.</p>
@@ -484,7 +513,7 @@ function AppShell() {
             way to say why. */}
         {zoom === "frame" && (
           <>
-            {!rightCollapsed && (
+            {!rightIsCollapsed && (
               <div
                 className="resize-handle"
                 onPointerDown={(e) => onResizeStart(e, "right")}
@@ -494,10 +523,10 @@ function AppShell() {
               />
             )}
             <aside
-              className={`right-panel${rightCollapsed ? " right-panel--collapsed" : ""}`}
-              style={rightCollapsed ? undefined : { flex: `0 0 ${rightWidth}px` }}
+              className={`right-panel${rightIsCollapsed ? " right-panel--collapsed" : ""}`}
+              style={rightIsCollapsed ? undefined : { flex: `0 0 ${rightWidth}px` }}
             >
-              {rightCollapsed ? (
+              {rightIsCollapsed ? (
                 <button
                   type="button"
                   className="tree-expand"
@@ -507,24 +536,20 @@ function AppShell() {
                 >
                   <span className="tree-expand-icon">‹</span>
                   <span className="tree-expand-label">
-                    calls{platform && outboundCount ? ` · out ${outboundCount}` : ""}
+                    {platform ? `outbounds${outboundCount ? ` · ${outboundCount}` : ""}` : "calls"}
                   </span>
                 </button>
               ) : (
                 <div className="tree-inner">
+                  {/* Outbounds first: it's the platform-level answer, and the
+                      default when there is one. */}
                   <div className="tree-header tree-tabs">
-                    <button
-                      type="button"
-                      className={`tree-tab${rightTab === "calls" ? " tree-tab--active" : ""}`}
-                      onClick={() => setRightTab("calls")}
-                      title="what this frame expands into — click a node to unfold it here and in the code"
-                    >
-                      calls
-                    </button>
                     {platform && (
                       <button
                         type="button"
-                        className={`tree-tab${rightTab === "outbounds" ? " tree-tab--active" : ""}`}
+                        className={`tree-tab${
+                          rightPanelTab === "outbounds" ? " tree-tab--active" : ""
+                        }`}
                         onClick={() => setRightTab("outbounds")}
                         title="the calls this frame's code path makes out of the service"
                       >
@@ -536,6 +561,14 @@ function AppShell() {
                     )}
                     <button
                       type="button"
+                      className={`tree-tab${rightPanelTab === "calls" ? " tree-tab--active" : ""}`}
+                      onClick={() => setRightTab("calls")}
+                      title="what this frame expands into — click a node to unfold it here and in the code"
+                    >
+                      calls
+                    </button>
+                    <button
+                      type="button"
                       className="tree-collapse"
                       onClick={() => setRightCollapsed(true)}
                       title="collapse panel"
@@ -545,7 +578,7 @@ function AppShell() {
                     </button>
                   </div>
                   <div className="tree-body">
-                    {platform && rightTab === "outbounds" ? (
+                    {platform && rightPanelTab === "outbounds" ? (
                       <OutboundsPanel view={serviceView} onOpen={(id) => store.setSymbol(id)} />
                     ) : rootFrame ? (
                       <CallTree rootFrame={rootFrame} />

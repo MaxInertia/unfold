@@ -155,6 +155,11 @@ zooming away. So the two anchor walks also render beside the frame:
 - **outbounds** — a right panel tab, beside the call tree, listing the outbound
   calls the anchor reaches.
 
+Each side opens on its own, since with a recognized surface these are the
+platform-level answers: entrypoints on the left, outbounds on the right.
+Without one — a TypeScript project today — the left falls back to **callers**
+and the right holds only the call tree, so it starts collapsed behind its rail.
+
 Neither fetches anything new. They're the same `/api/service` response the
 service level renders in columns, filtered by the reachability flags already
 on it, so the three views can't disagree. An empty panel says which kind of
@@ -477,7 +482,7 @@ destination doesn't.
 ### The sidebar follows the level
 
 Above the frame there is nothing frame-shaped to show, so the left sidebar
-stops being files/callers/entrypoints/notes and becomes the **filter panel** —
+stops being entrypoints/callers/files/notes and becomes the **filter panel** —
 text, reach (public/platform/internal) and "only entrypoints reaching the
 anchor" at the service level, a service filter at the platform level. Filtering
 is one mechanism across both upper levels rather than two bolted onto each
