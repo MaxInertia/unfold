@@ -12,7 +12,7 @@ Unfolding follows execution *downward*; the usages feature is the reverse
 direction. **▲ callers** in any frame header lists where that function is
 referenced; picking one re-roots the view so the caller reads as spliced
 above (the frame you clicked from keeps its expansion state, nested at the
-picked call site). The **callers** sidebar tab is the same data as an
+picked call site). The **callers** tab in the left sidebar is the same data as an
 inverted tree: expand to walk toward entry points, click a node to load the
 whole chain as one pre-unfolded view.
 
@@ -150,10 +150,10 @@ you're currently on is marked.
 You usually want to know what reaches a function *while reading it*, not after
 zooming away. So the two anchor walks also render beside the frame:
 
-- **entrypoints** — a sidebar tab at the frame level, listing the inbound
+- **entrypoints** — a left sidebar tab at the frame level, listing the inbound
   bindings that reach the anchor.
-- **outbounds** — a panel on the right, listing the outbound calls the anchor
-  reaches. Collapsed by default; the rail on the right edge opens it.
+- **outbounds** — a right panel tab, beside the call tree, listing the outbound
+  calls the anchor reaches.
 
 Neither fetches anything new. They're the same `/api/service` response the
 service level renders in columns, filtered by the reachability flags already
@@ -476,11 +476,13 @@ destination doesn't.
 
 ### The sidebar follows the level
 
-Above the frame there is no call tree to show, so the sidebar stops being
-files/calls/callers/entrypoints/notes and becomes the **filter panel** — text,
-reach (public/platform/internal) and "only entrypoints reaching the anchor" at
-the service level, a service filter at the platform level. Filtering is one
-mechanism across both upper levels rather than two bolted onto each view.
+Above the frame there is nothing frame-shaped to show, so the left sidebar
+stops being files/callers/entrypoints/notes and becomes the **filter panel** —
+text, reach (public/platform/internal) and "only entrypoints reaching the
+anchor" at the service level, a service filter at the platform level. Filtering
+is one mechanism across both upper levels rather than two bolted onto each
+view. The right panel is frame-only for the same reason: the service columns
+already show both directions up there.
 
 ### The URL carries the level, and history carries the moves
 

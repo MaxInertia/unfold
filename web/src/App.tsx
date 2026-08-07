@@ -54,9 +54,14 @@ function AppShell() {
   const [treeCollapsed, setTreeCollapsed] = useState(
     () => localStorage.getItem(TREE_COLLAPSED_KEY) === "1",
   );
-  const [sidebarTab, setSidebarTab] = useState<
-    "files" | "calls" | "callers" | "entrypoints" | "notes"
-  >("calls");
+  // The left panel is about what leads *to* this frame — its files, its
+  // callers, the entrypoints that reach it. The call tree is the opposite
+  // direction and lives on the right with the outbounds, beside the code it
+  // describes rather than across it.
+  const [sidebarTab, setSidebarTab] = useState<"files" | "callers" | "entrypoints" | "notes">(
+    "files",
+  );
+  const [rightTab, setRightTab] = useState<"calls" | "outbounds">("calls");
   const [reindexed, setReindexed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -95,11 +100,11 @@ function AppShell() {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
   });
-  // The right panel starts collapsed: it's a second thing competing with the
-  // code for horizontal space, and unlike the left one it has a single tab.
-  // Opening it should be a choice, not something you have to undo on first run.
+  // It used to start collapsed — it held one optional panel, so opening it was
+  // rightly a choice. Now that the call tree lives here it holds the mirror of
+  // what you expand, which has to be on screen to be that, so it starts open.
   const [rightCollapsed, setRightCollapsed] = useState(
-    () => localStorage.getItem(RIGHT_COLLAPSED_KEY) !== "0",
+    () => localStorage.getItem(RIGHT_COLLAPSED_KEY) === "1",
   );
   const [rightWidth, setRightWidth] = useState(() => {
     const v = Number(localStorage.getItem(RIGHT_WIDTH_KEY));
@@ -321,13 +326,6 @@ function AppShell() {
                       </button>
                       <button
                         type="button"
-                        className={`tree-tab${sidebarTab === "calls" ? " tree-tab--active" : ""}`}
-                        onClick={() => setSidebarTab("calls")}
-                      >
-                        calls
-                      </button>
-                      <button
-                        type="button"
                         className={`tree-tab${sidebarTab === "callers" ? " tree-tab--active" : ""}`}
                         onClick={() => setSidebarTab("callers")}
                         title="who calls the focused function — expand to walk toward entry points"
@@ -392,13 +390,9 @@ function AppShell() {
                   ) : sidebarTab === "entrypoints" ? (
                     <EntrypointsPanel view={serviceView} onOpen={(id) => store.setSymbol(id)} />
                   ) : !rootFrame ? (
-                    <p className="tree-placeholder">
-                      Pick a function to see its {sidebarTab === "callers" ? "callers" : "call tree"}.
-                    </p>
-                  ) : sidebarTab === "callers" ? (
-                    <CallersTree key={rootFrame.id} rootFrame={rootFrame} />
+                    <p className="tree-placeholder">Pick a function to see its callers.</p>
                   ) : (
-                    <CallTree rootFrame={rootFrame} />
+                    <CallersTree key={rootFrame.id} rootFrame={rootFrame} />
                   )}
                 </div>
               </div>
@@ -466,22 +460,29 @@ function AppShell() {
               Search for a function above and select one to start. Click any
               underlined call site to expand its body inline; interface calls
               surface a dropdown to pick which implementation to view. The
-              call tree on the left mirrors what you expand — click a node to
+              call tree on the right mirrors what you expand — click a node to
               unfold it here and there at once. "▲ callers" in a frame header
               lists where that function is used; pick one to splice the caller
-              above (the callers sidebar tab walks whole chains toward entry
-              points). Click a line number to start a selection, shift-click
-              another to extend, then "fold" to collapse the range. URL hash
-              carries your view — reload preserves it, and the link is
-              shareable.
+              above (the callers tab on the left walks whole chains toward
+              entry points). Click a line number to start a selection,
+              shift-click another to extend, then "fold" to collapse the
+              range. URL hash carries your view — reload preserves it, and the
+              link is shareable.
             </p>
           )}
         </div>
-        {/* The outbound half of the anchor, mirrored across the code: what
-            reaches this frame sits on the left, what this frame reaches sits
-            on the right. Frame level only — above it the service columns
-            already show both sides, so a third copy would just be stale. */}
-        {platform && zoom === "frame" && (
+        {/* Everything this frame reaches, on the side it reaches it from:
+            the call tree it expands into, and the platform edges that leave
+            the service. What leads *to* the frame — its callers, the
+            entrypoints, the files it lives among — stays on the left, so the
+            two directions never share a panel.
+
+            Frame level only. Above it the service columns already show both
+            sides, so a third copy would just be stale, and there is no call
+            tree to mirror. The outbounds tab additionally needs a recognized
+            surface; without one it would have nothing to show and no honest
+            way to say why. */}
+        {zoom === "frame" && (
           <>
             {!rightCollapsed && (
               <div
@@ -493,7 +494,7 @@ function AppShell() {
               />
             )}
             <aside
-              className={`out-panel${rightCollapsed ? " out-panel--collapsed" : ""}`}
+              className={`right-panel${rightCollapsed ? " right-panel--collapsed" : ""}`}
               style={rightCollapsed ? undefined : { flex: `0 0 ${rightWidth}px` }}
             >
               {rightCollapsed ? (
@@ -501,35 +502,56 @@ function AppShell() {
                   type="button"
                   className="tree-expand"
                   onClick={() => setRightCollapsed(false)}
-                  title="show what this frame calls out to"
-                  aria-label="show outbounds panel"
+                  title="show the call tree and what this frame calls out to"
+                  aria-label="show calls panel"
                 >
                   <span className="tree-expand-icon">‹</span>
                   <span className="tree-expand-label">
-                    outbounds{outboundCount ? ` · ${outboundCount}` : ""}
+                    calls{platform && outboundCount ? ` · out ${outboundCount}` : ""}
                   </span>
                 </button>
               ) : (
                 <div className="tree-inner">
                   <div className="tree-header tree-tabs">
-                    <span className="tree-tab tree-tab--active tree-tab--static">
-                      outbounds
-                      {outboundCount !== null && outboundCount > 0 && (
-                        <span className="tree-tab-count">{outboundCount}</span>
-                      )}
-                    </span>
+                    <button
+                      type="button"
+                      className={`tree-tab${rightTab === "calls" ? " tree-tab--active" : ""}`}
+                      onClick={() => setRightTab("calls")}
+                      title="what this frame expands into — click a node to unfold it here and in the code"
+                    >
+                      calls
+                    </button>
+                    {platform && (
+                      <button
+                        type="button"
+                        className={`tree-tab${rightTab === "outbounds" ? " tree-tab--active" : ""}`}
+                        onClick={() => setRightTab("outbounds")}
+                        title="the calls this frame's code path makes out of the service"
+                      >
+                        outbounds
+                        {outboundCount !== null && outboundCount > 0 && (
+                          <span className="tree-tab-count">{outboundCount}</span>
+                        )}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="tree-collapse"
                       onClick={() => setRightCollapsed(true)}
                       title="collapse panel"
-                      aria-label="collapse outbounds panel"
+                      aria-label="collapse calls panel"
                     >
                       ›
                     </button>
                   </div>
                   <div className="tree-body">
-                    <OutboundsPanel view={serviceView} onOpen={(id) => store.setSymbol(id)} />
+                    {platform && rightTab === "outbounds" ? (
+                      <OutboundsPanel view={serviceView} onOpen={(id) => store.setSymbol(id)} />
+                    ) : rootFrame ? (
+                      <CallTree rootFrame={rootFrame} />
+                    ) : (
+                      <p className="tree-placeholder">Pick a function to see its call tree.</p>
+                    )}
                   </div>
                 </div>
               )}

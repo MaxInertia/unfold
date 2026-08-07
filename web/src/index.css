@@ -759,10 +759,11 @@ body.resizing {
   flex-basis: 2rem;
 }
 
-/* The outbounds panel. Same shape as the left sidebar — it's the mirror of
-   it, so it shares .tree-inner/.tree-header/.tree-body rather than growing a
-   parallel set of rules that would drift. */
-.out-panel {
+/* The right panel: the call tree, and the outbound edges beside it. Same
+   shape as the left sidebar — it's the mirror of it, so it shares
+   .tree-inner/.tree-header/.tree-body rather than growing a parallel set of
+   rules that would drift. */
+.right-panel {
   flex: 0 0 280px;
   position: sticky;
   top: 1rem;
@@ -773,7 +774,7 @@ body.resizing {
   min-width: 0;
 }
 
-.out-panel--collapsed {
+.right-panel--collapsed {
   flex-basis: 2rem;
 }
 
