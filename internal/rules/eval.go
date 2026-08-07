@@ -38,6 +38,12 @@ type Evaluator struct {
 	// matching after a library upgrade can say so instead of contributing
 	// nothing in silence.
 	Stats map[string]int
+	// matched is Stats at the resolution the reader needs: which rules claimed
+	// *this* call site, keyed by file:line. A count answers "is this rule
+	// alive"; standing on a call and asking "what already recognizes this" is
+	// a different question, and the one that stops you writing a rule you
+	// already have.
+	matched map[string][]string
 }
 
 type callKey struct {
@@ -57,9 +63,10 @@ func NewEvaluator(rs []Rule) *Evaluator {
 		byID:   map[string]Rule{},
 		calls:  map[model.TargetID][]platform.Call{},
 		callee: map[callKey][]model.TargetID{},
-		marks:  map[string]map[model.TargetID]string{},
-		leaves: map[string]LeafDecision{},
-		Stats:  map[string]int{},
+		marks:   map[string]map[model.TargetID]string{},
+		leaves:  map[string]LeafDecision{},
+		Stats:   map[string]int{},
+		matched: map[string][]string{},
 	}
 	for _, r := range rs {
 		if !r.On() || r.Match == nil || (r.Emit == nil && r.Leaf == nil) {
@@ -113,6 +120,10 @@ type LeafDecision struct {
 // call site's file:line. Populated by Run.
 func (e *Evaluator) Leaves() map[string]LeafDecision { return e.leaves }
 
+// Matched returns the rules that claimed each call site, keyed by file:line
+// like Leaves. Populated by Run.
+func (e *Evaluator) Matched() map[string][]string { return e.matched }
+
 // Run evaluates every rule and returns the bindings they imply.
 //
 // Attribution, reachability filtering and dedup are deliberately *not* done
@@ -149,11 +160,17 @@ func (e *Evaluator) Run() []model.Binding {
 						Label: r.Leaf.Label, CrossRepo: r.Leaf.CrossRepo, Key: b.Key,
 					}
 				}
+				// Recorded for every match, including the leaf-only rules that
+				// emit nothing: "this call is a boundary because of rule X" is
+				// exactly the kind of claim you want to see before writing
+				// another rule over the same call.
+				e.matched[siteLine(c)] = append(e.matched[siteLine(c)], r.ID)
 				if r.Emit == nil {
 					e.Stats[r.ID]++
 					continue // leaf-only rule: classified, but not an edge
 				}
 				e.Stats[r.ID]++
+				b.Rule = r.ID
 				out = append(out, b)
 			}
 		}

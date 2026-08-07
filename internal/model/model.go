@@ -5,7 +5,10 @@
 // to know which language a frame came from.
 package model
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+)
 
 // TargetID uniquely identifies a function/method within one loaded
 // project. Its internal format is engine-specific and opaque to the
@@ -154,6 +157,12 @@ type TypeInfo struct {
 	// methods, or a named alias's underlying type. Multi-line, rendered
 	// preformatted by the frontend. Empty when Type already says it all.
 	Definition string `json:"definition,omitempty"`
+	// Rules are the recognizers already matching the call site under the
+	// pointer, built-in and configured alike. The hover card offers to author
+	// a rule from this call; without knowing what already claims it, that
+	// offer reads as "nothing recognizes this" even when three things do, and
+	// the rule you write duplicates one you have.
+	Rules []string `json:"rules,omitempty"`
 }
 
 // SearchResult is one hit returned from an engine's Search.
@@ -276,6 +285,13 @@ type Binding struct {
 	// Detail is human-readable provenance ("mux.HandleFunc"), shown so a
 	// surprising binding can be traced back to the call that produced it.
 	Detail string `json:"detail,omitempty"`
+	// Rule is the recognizer that produced this binding, built-in or
+	// configured. Detail says what the call looked like; this says what
+	// decided it *was* one — the difference between "surprising edge" and
+	// "surprising edge, and here is the rule to switch off". Empty for
+	// bindings no rule claims: the declared proto surface, which comes from a
+	// manifest rather than from code.
+	Rule string `json:"rule,omitempty"`
 
 	// Target is the function the binding hands off to — an inbound route's
 	// handler. Empty when the far end isn't in this index (every outbound
@@ -580,6 +596,12 @@ type RuleInfo struct {
 	// Matches is how many bindings it produced. Zero on a rule that is
 	// supposed to be doing something is the signal that a library moved.
 	Matches int `json:"matches"`
+	// Spec is the rule as written, so it can be read and edited where it is
+	// seen. A list of ids and counts can tell you a rule stopped matching; it
+	// can't tell you what it was looking for, which is the next thing anyone
+	// asks. Empty for built-ins — their body is Go, and the only thing about
+	// them that is editable is Enabled.
+	Spec json.RawMessage `json:"spec,omitempty"`
 }
 
 // RuleReport is the whole recognizer picture, including what went wrong

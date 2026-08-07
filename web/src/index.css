@@ -3226,6 +3226,7 @@ body.resizing {
 }
 
 .rule-delete,
+.rule-edit,
 .type-card-recognize {
   background: none;
   border: 0;
@@ -3238,6 +3239,7 @@ body.resizing {
 }
 
 .rule-delete:hover,
+.rule-edit:hover,
 .type-card-recognize:hover {
   color: var(--fg);
 }
@@ -3245,6 +3247,63 @@ body.resizing {
 .type-card-recognize {
   display: block;
   margin-top: 0.35rem;
+}
+
+/* What already claims the call under the pointer. Sits directly above the
+   offer to write another rule, because that's the claim it qualifies. */
+.type-card-rules {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--card-border);
+}
+
+.type-card-rules-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.type-card-rule {
+  background: var(--call-bg);
+  border: 1px solid var(--call-border);
+  border-radius: 999px;
+  color: inherit;
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0 0.4rem;
+  cursor: pointer;
+}
+
+.type-card-rule:hover {
+  background: var(--call-bg-hover);
+}
+
+/* The rule body, editable in place. Monospace because it is JSON and reads as
+   the file it came from. */
+.rule-editor {
+  margin: 0.35rem 0 0 1.4rem;
+}
+
+.rule-spec {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.35rem 0.45rem;
+  resize: vertical;
+}
+
+.rule--open {
+  background: var(--call-bg);
+  border-radius: 4px;
 }
 
 .rule-doc,

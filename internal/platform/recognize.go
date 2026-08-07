@@ -83,7 +83,13 @@ func Extract(c Call, disabled map[string]bool) []model.Binding {
 		if disabled[b.ID] {
 			continue
 		}
-		out = append(out, b.Fn(c)...)
+		// Stamped here rather than in each recognizer: a rule that has to
+		// remember to name itself is a rule that eventually forgets, and the
+		// caller is the only place that knows which one is running.
+		for _, bind := range b.Fn(c) {
+			bind.Rule = b.ID
+			out = append(out, bind)
+		}
 	}
 	return out
 }

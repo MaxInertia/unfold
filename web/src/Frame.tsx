@@ -28,6 +28,7 @@ import { depthColor } from "./StickyHeaders";
 import { useSettings } from "./settings";
 import { matches } from "./keybindings";
 import { useNotes } from "./notes";
+import { openRules } from "./rules";
 import { NoteCard, NoteComposer } from "./NotesUI";
 
 export interface FoldRange {
@@ -1063,6 +1064,30 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               {shortDefined(typeCard.info.definedAt)}
             </button>
           )}
+          {/* What already claims this call. Offering to recognize a call that
+              three rules match, without saying so, invites a fourth rule that
+              duplicates one you have — and leaves "why is there an edge here"
+              unanswerable at the one place you're looking. Clicking a rule
+              opens it in the recognizers panel. */}
+          {typeCard.info.rules && typeCard.info.rules.length > 0 && (
+            <div className="type-card-rules">
+              <span className="type-card-rules-label">recognized by</span>
+              {typeCard.info.rules.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className="type-card-rule"
+                  onClick={() => {
+                    closeTypeCard();
+                    openRules(id);
+                  }}
+                  title={`show ${id} in the recognizers panel`}
+                >
+                  {id}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Author a recognizer from the call you're looking at. The package
               and receiver are already resolved to render this card, so the
               match writes itself — only which argument holds the key has to
@@ -1081,7 +1106,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               onClick={() => setRecognizing(true)}
               title="teach unfold that this call shape is a platform edge"
             >
-              recognize as…
+              {typeCard.info.rules?.length ? "recognize as something else…" : "recognize as…"}
             </button>
           )}
         </div>

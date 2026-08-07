@@ -26,6 +26,7 @@ import type { Frame as FrameT, SearchResult, ServiceView as ServiceViewT } from 
 import { ViewStoreProvider, useViewStore } from "./viewState";
 import { ReloadProvider, useReloadRevision } from "./reload";
 import { setBookmarkProject, useBookmarks } from "./bookmarks";
+import { closeRules, toggleRules, useRulesPanel } from "./rules";
 
 const TREE_COLLAPSED_KEY = "unfold.tree.collapsed";
 const SIDEBAR_WIDTH_KEY = "unfold.sidebar.width";
@@ -73,7 +74,10 @@ function AppShell() {
   const [rightTab, setRightTab] = useState<"calls" | "outbounds" | null>(null);
   const [reindexed, setReindexed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [rulesOpen, setRulesOpen] = useState(false);
+  // The recognizers panel is opened from two places — this button, and a
+  // "recognized by" chip on a hover card deep inside a frame — so its open
+  // state lives in a store rather than here.
+  const { open: rulesOpen } = useRulesPanel();
   const settings = useSettings();
   // Zoom is a level, not a tab: the frame tree stays mounted in the view
   // store either way, so switching levels never costs expansion state. It
@@ -289,7 +293,7 @@ function AppShell() {
           <button
             type="button"
             className={`app-settings${rulesOpen ? " app-settings--open" : ""}`}
-            onClick={() => setRulesOpen((v) => !v)}
+            onClick={toggleRules}
             title="recognizers — what unfold treats as a platform edge, and how much each rule matched"
             aria-label="toggle recognizers"
           >
@@ -307,7 +311,7 @@ function AppShell() {
         </button>
       </header>
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
-      {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} />}
+      {rulesOpen && <RulesPanel onClose={closeRules} />}
       {reindexed && <div className="app-toast">reindexed · view refreshed</div>}
       <div className="app-main">
         <aside

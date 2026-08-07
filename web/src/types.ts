@@ -229,6 +229,10 @@ export interface TypeInfo {
   doc?: string;
   targetId?: TargetID; // present when the symbol is a function we can open
   definition?: string; // expanded type shape (fields/methods), multi-line
+  // Recognizers already matching this call site, built-in and configured.
+  // The card offers to author a rule from the call; without these, that offer
+  // reads as "nothing recognizes this" even when something does.
+  rules?: string[];
 }
 
 // A note anchored to a source location (mirrors internal/notes). Anchors
@@ -259,6 +263,9 @@ export interface RuleInfo {
   enabled: boolean;
   source?: string;
   matches: number;
+  // The rule as written. Absent for built-ins — their body is Go, and the
+  // only editable thing about them is `enabled`.
+  spec?: RuleSpec;
 }
 
 export interface RuleReport {

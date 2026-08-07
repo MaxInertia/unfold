@@ -314,7 +314,26 @@ Recognizers currently cover `net/http` route registration (including Go 1.22
 `net/http` client calls. A URL assembled at runtime is skipped rather than
 guessed. Adding a router or broker means adding a rule in
 `internal/platform` — recognizers see a neutral `Call` (package, receiver,
-function, constant-folded args), never an AST.
+function, constant-folded args), never an AST — or writing one as
+configuration, below.
+
+### Seeing which rules are in force
+
+The **⌥ recognizers** panel lists every rule, built-in and configured: whether
+it's on, how much it matched, where it came from, and — for the ones you wrote
+— the rule body, editable in place. Toggling a built-in off writes a
+settings-only entry (an id and `enabled: false`), which is why a built-in needs
+no body to switch off.
+
+The match count is the point of the list. A rule that quietly stopped matching
+after a library upgrade contributes nothing, and an empty surface looks exactly
+like one nothing was found in.
+
+Per call site, the hover card names the rules **already** matching it. Offering
+to recognize a call that three rules match, without saying so, invites a fourth
+that duplicates one you have — and it makes "why is there an edge here"
+answerable where you're looking rather than by reading rule files. Clicking one
+opens it in the panel.
 
 ### Limitations
 

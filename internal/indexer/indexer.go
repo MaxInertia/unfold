@@ -9,6 +9,7 @@
 package indexer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -17,6 +18,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -162,6 +164,12 @@ type Indexer struct {
 	// file behaves exactly as before.
 	ruleSet   rules.Set
 	ruleStats map[string]int
+	// ruleSites is which recognizers claimed each call site, keyed file:line.
+	// Built-ins and configured rules land in the same map: from where a reader
+	// stands, "what already recognizes this call" is one question, and an
+	// answer that silently omitted the built-ins would be worse than none —
+	// they are the majority of matches in most repos.
+	ruleSites map[string][]string
 	// leaves is the reading-time classification rules made for call sites,
 	// keyed file:line.
 	leaves map[string]rules.LeafDecision
@@ -546,11 +554,55 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.outboundUnreachable += ruleUnreachable
 	i.ruleStats = ev.Stats
 	i.leaves = ev.Leaves()
+	i.indexRuleSites(ev.Matched())
 
 	i.sortBindings()
 	i.computeCrossings()
 
 	return nil
+}
+
+// indexRuleSites records which recognizer claimed each call site, and folds
+// the built-ins' matches into the same per-rule counts the configured rules
+// report.
+//
+// Built-ins had no counts at all: the report exists so a rule that quietly
+// stopped matching says so, and the three rules most likely to break on a
+// library upgrade were the ones exempt from it. They're countable now for the
+// same reason they're attributable — Extract stamps each binding with the rule
+// that produced it.
+func (i *Indexer) indexRuleSites(matched map[string][]string) {
+	sites := make(map[string][]string, len(matched))
+	for site, ids := range matched {
+		sites[site] = append([]string(nil), ids...)
+	}
+	for _, b := range i.bindings {
+		if b.Rule == "" || b.File == "" {
+			continue // the declared surface: a manifest, not a rule
+		}
+		site := b.File + ":" + strconv.Itoa(b.Line)
+		if !slices.Contains(sites[site], b.Rule) {
+			sites[site] = append(sites[site], b.Rule)
+		}
+		// Only the built-ins: a configured rule's matches are already counted
+		// by the evaluator, and counting them here as well would double every
+		// one that emitted a binding.
+		if isBuiltinID(b.Rule) {
+			i.ruleStats[b.Rule]++
+		}
+	}
+	for site := range sites {
+		sort.Strings(sites[site])
+	}
+	i.ruleSites = sites
+}
+
+// RulesAt names the recognizers matching a call site, for "what already claims
+// this" at the point of authoring another one.
+func (i *Indexer) RulesAt(file string, line int) []string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.ruleSites[file+":"+strconv.Itoa(line)]
 }
 
 // SetProtoRoot points the indexer at the shared proto repository that a
@@ -1850,6 +1902,11 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 			}
 		}
 		i.mu.RUnlock()
+		// What already claims this call site. Keyed by line, which is how the
+		// evaluator records a match, so two calls on one line share an answer
+		// — the same resolution the leaf classification has always used.
+		p := i.fset.Position(ident.Pos())
+		ti.Rules = i.RulesAt(p.Filename, p.Line)
 	}
 	return ti, nil
 }
@@ -2289,16 +2346,22 @@ func (i *Indexer) RuleReport() model.RuleReport {
 		rep.Rules = append(rep.Rules, model.RuleInfo{
 			ID: b.ID, Doc: b.Doc, Builtin: true,
 			Enabled: !i.ruleSet.Disabled()[b.ID],
+			Matches: i.ruleStats[b.ID],
 		})
 	}
 	for _, r := range i.ruleSet.Rules {
 		if isBuiltinID(r.ID) {
 			continue // a settings-only entry toggling a built-in, already listed
 		}
+		spec, err := json.Marshal(r)
+		if err != nil {
+			spec = nil // unshowable, not unusable: the rest of the row stands
+		}
 		rep.Rules = append(rep.Rules, model.RuleInfo{
 			ID: r.ID, Doc: r.Comment, Enabled: r.On(),
 			Source:  i.ruleSet.Sources[r.ID],
 			Matches: i.ruleStats[r.ID],
+			Spec:    spec,
 		})
 	}
 	return rep
