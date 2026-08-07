@@ -30,6 +30,10 @@ func open(t *testing.T, mode Mode) *Workspace {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	// Open no longer waits for the repos behind the primary — startup would
+	// otherwise cost the whole workspace. A test asserting on all of them has
+	// to join that work rather than race it.
+	w.WaitIndexed()
 	return w
 }
 
@@ -274,6 +278,38 @@ func TestAutoModeEagerBelowLimit(t *testing.T) {
 		if !r.Indexed {
 			t.Errorf("a %d-repo workspace should index eagerly under auto; %s is not indexed",
 				len(w.order), r.Alias)
+		}
+	}
+}
+
+// Eager means "without being asked", not "before anything can be seen". Open
+// returns once the repo you're standing in is ready; the rest arrive behind
+// it. Waiting for the whole workspace made startup the sum of every repo in
+// it, paid before the server could even listen.
+//
+// Asserted through Repos() rather than by timing, so it states the property
+// instead of measuring the machine.
+func TestOpenDoesNotWaitForSecondaryRepos(t *testing.T) {
+	dirs, err := Discover(abs(t, "testdata/ws"))
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	w, err := Open(dirs, abs(t, "testdata/ws/inbox"), abs(t, "testdata/protoroot"), ModeEager)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, r := range w.Repos() {
+		if r.Primary && !r.Indexed {
+			t.Error("the primary repo must be indexed when Open returns — nothing can be shown without it")
+		}
+	}
+
+	// And they do all arrive: eager still means the whole workspace, just not
+	// on the startup path.
+	w.WaitIndexed()
+	for _, r := range w.Repos() {
+		if !r.Indexed {
+			t.Errorf("%s should have been indexed in the background", r.Alias)
 		}
 	}
 }

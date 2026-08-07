@@ -14,6 +14,11 @@
 // So the declaration layer is always built for the whole workspace, and the
 // code layer is built per repo — eagerly for a small workspace, on demand for
 // a large one.
+//
+// Only the primary repo's code layer is on the startup path. Everything else
+// is indexed behind it, because startup would otherwise cost the sum of every
+// repo in the workspace and none of it is needed to show the one you're
+// standing in.
 package workspace
 
 import (
@@ -23,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/MaxInertia/unfold/internal/indexer"
 	"github.com/MaxInertia/unfold/internal/manifest"
@@ -60,6 +66,15 @@ type repo struct {
 	methods []protoapi.Method
 
 	// Code layer, possibly deferred.
+	//
+	// Two locks, because they are held for wildly different lengths of time.
+	// loadMu serializes the indexing itself, so two callers who want the same
+	// repo don't each pay for it; mu guards the three fields below and is held
+	// for nanoseconds. Using one lock for both meant every reader — Repos(),
+	// the platform view, a search — blocked for the *whole* multi-second load
+	// of any repo being indexed in the background, which is precisely the wait
+	// that moving it off the startup path was meant to remove.
+	loadMu sync.Mutex
 	mu     sync.Mutex
 	idx    *indexer.Indexer
 	loaded bool
@@ -80,6 +95,9 @@ type Workspace struct {
 	// servedBy maps a declared key ("<kind>\x00<key>") to the alias serving
 	// it. This is the cross-repo join, and it needs no Go index at all.
 	servedBy map[string]string
+
+	// bg tracks the background eager load, so WaitIndexed can join it.
+	bg sync.WaitGroup
 }
 
 // RulePaths are the shared recognizer files every repo in a workspace loads.
@@ -191,17 +209,64 @@ func Open(dirs []string, primaryDir, protoRoot string, mode Mode) (*Workspace, e
 	}
 	sort.Strings(w.order)
 	w.readDeclarations()
-	if w.eager() {
-		for _, alias := range w.order {
-			_ = w.load(alias)
-		}
-	} else if err := w.load(w.primary); err != nil {
-		// The repo the user actually opened must index, or there's nothing
-		// to show; the rest may fail quietly until visited.
+	// The repo the user actually opened must index, or there's nothing to
+	// show; the rest may fail quietly until visited. Eager mode used to
+	// swallow this one too, which meant a primary that didn't compile came up
+	// as an empty workspace rather than as an error.
+	if err := w.load(w.primary); err != nil {
 		return nil, err
+	}
+	// Eager means "without being asked", not "before anything can be seen".
+	// Indexing the rest inline made startup the *sum* of every repo in the
+	// workspace, paid before the HTTP listener even opened — four large repos
+	// is minutes of staring at a browser that hasn't been told to open yet.
+	// None of it is needed to render the repo you're standing in.
+	if w.eager() {
+		w.loadRest()
 	}
 	return w, nil
 }
+
+// BackgroundLoaders is how many repos are indexed at once behind the primary.
+// Deliberately not the core count: each go/packages load is already parallel
+// internally and holds a whole type-checked module in memory — hundreds of
+// megabytes for a large repo — so this trades wall-clock against a memory
+// spike, and a workspace is opened on the same machine that has to run it.
+const BackgroundLoaders = 2
+
+// loadRest indexes every repo except the primary, off the startup path.
+//
+// Failures are not fatal here and not retried: load records the error on the
+// repo, Repos() reports it, and the platform view already has a place to say a
+// service isn't indexed. Being told that in a UI you can see beats being told
+// it on a terminal you've stopped watching.
+func (w *Workspace) loadRest() {
+	w.bg.Add(1)
+	go func() {
+		defer w.bg.Done()
+		sem := make(chan struct{}, BackgroundLoaders)
+		var wg sync.WaitGroup
+		for _, alias := range w.order {
+			if alias == w.primary {
+				continue
+			}
+			wg.Add(1)
+			go func(a string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				_ = w.load(a)
+			}(alias)
+		}
+		wg.Wait()
+	}()
+}
+
+// WaitIndexed blocks until the background eager load has finished. Nothing in
+// the serving path needs it — every read loads what it touches — but a test
+// that asserts on the whole workspace does, and so would any future caller
+// that wants the finished article rather than whatever is ready.
+func (w *Workspace) WaitIndexed() { w.bg.Wait() }
 
 func (w *Workspace) eager() bool {
 	switch w.mode {
@@ -282,19 +347,24 @@ func (w *Workspace) Repos() []model.RepoInfo {
 }
 
 // load indexes a repo's Go code, once. Concurrent callers for the same repo
-// serialize on its lock rather than each paying the cost.
+// serialize on loadMu rather than each paying the cost — but the state lock is
+// taken only to read the flags and to publish the result, so a reader is never
+// held up by an index in progress.
 func (w *Workspace) load(alias string) error {
 	r, ok := w.repos[alias]
 	if !ok {
 		return fmt.Errorf("unknown repository %q", alias)
 	}
+	r.loadMu.Lock()
+	defer r.loadMu.Unlock()
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.loaded {
+	loaded, prevErr := r.loaded, r.err
+	r.mu.Unlock()
+	if loaded {
 		return nil
 	}
-	if r.err != nil {
-		return r.err // don't retry a repo that already failed to build
+	if prevErr != nil {
+		return prevErr // don't retry a repo that already failed to build
 	}
 	idx := indexer.New()
 	// Rules are a platform-wide fact — they describe libraries, not one
@@ -302,19 +372,28 @@ func (w *Workspace) load(alias string) error {
 	// .unfold/recognizers.json for local reality.
 	idx.SetRules(rules.Load(append(append([]string{}, w.rulePaths...), rules.RepoPath(r.dir))...))
 	_ = idx.SetProtoRoot(w.protoRoot)
+	started := time.Now()
 	if err := idx.Load(r.dir, "./..."); err != nil {
-		r.err = fmt.Errorf("%s: %w", r.name, err)
-		return r.err
+		wrapped := fmt.Errorf("%s: %w", r.name, err)
+		r.mu.Lock()
+		r.err = wrapped
+		r.mu.Unlock()
+		return wrapped
 	}
+	took := time.Since(started)
+	r.mu.Lock()
 	r.idx = idx
 	r.loaded = true
+	r.mu.Unlock()
 
 	// A one-line summary per repo, because "0 outbound" is otherwise
 	// indistinguishable from "recognized nothing" and there's no way to tell
-	// from the UI which one you're looking at.
+	// from the UI which one you're looking at. The duration is there because
+	// "why is this slow" is a question about one repo, not about the
+	// workspace, and nothing else in the process can answer it.
 	if sv, err := idx.ServiceView(""); err == nil {
-		fmt.Fprintf(os.Stderr, "unfold: indexed %s — %d inbound, %d outbound (%d declared rpc)\n",
-			r.name, len(sv.Inbound), len(sv.Outbound), len(r.methods))
+		fmt.Fprintf(os.Stderr, "unfold: indexed %s in %s — %d inbound, %d outbound (%d declared rpc)\n",
+			r.name, took.Round(time.Millisecond), len(sv.Inbound), len(sv.Outbound), len(r.methods))
 	}
 	return nil
 }
