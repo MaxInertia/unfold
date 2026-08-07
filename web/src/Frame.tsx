@@ -1,4 +1,12 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { Root as HastRoot } from "hast";
 import { fetchBodyByCall, fetchTypeInfo, openInEditor } from "./api";
 import { highlightToHast } from "./highlight";
@@ -63,7 +71,10 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const depth = path.length;
   const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
   const [recognizing, setRecognizing] = useState(false);
-  const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0 });
+  // gen stamps hover lookups so a reply that arrives after the pointer has
+  // moved on can be discarded instead of overwriting what's on screen.
+  const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0, gen: 0 });
+  const typeCardRef = useRef<HTMLDivElement>(null);
   const allNotes = useNotes();
   const [composing, setComposing] = useState<NoteAnchor | null>(null);
   const isFileFrame = frame.id.startsWith("file:");
@@ -177,37 +188,76 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     return (lineStarts[lineIdx] ?? 0) + measure.toString().length;
   }
 
+  // Every pending hover effect goes through these three, and they always clear
+  // *both* timers before arming one. Assigning a fresh id over an armed one
+  // leaks it: the handle is gone, so nothing can cancel it, and it fires later
+  // into a UI that has moved on. That is how the card kept vanishing under the
+  // pointer — a blank-area move armed a hide, the very next event (leaving the
+  // source for the card) overwrote the handle with its own, and clearing that
+  // one on entry left the first still counting down.
+  function cancelHover() {
+    window.clearTimeout(hoverRef.current.showTimer);
+    window.clearTimeout(hoverRef.current.hideTimer);
+    hoverRef.current.offset = -1;
+    // Also abandon a lookup already in flight: clearTimeout can't reach a
+    // fetch that has left, and its reply would otherwise land on a card the
+    // pointer is now inside.
+    hoverRef.current.gen++;
+  }
+
+  function scheduleHide() {
+    cancelHover();
+    hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+  }
+
+  // Dismissing the card also drops the authoring form. Without this the flag
+  // outlives the card that owned it, and the *next* symbol you hover opens
+  // straight into a half-filled rule for something else.
+  function closeTypeCard() {
+    cancelHover();
+    setRecognizing(false);
+    setTypeCard(null);
+  }
+
   function onSourceMouseMove(e: React.MouseEvent) {
     if (selection) return; // don't fight a line selection
+    // Once the form is open the card is no longer a hover affordance: it's
+    // something being filled in, and code passing under the pointer must not
+    // replace or dismiss it.
+    if (recognizing) return;
     const off = offsetAtPoint(e.clientX, e.clientY);
     if (off == null) {
       // Not over text (blank area beside/below a line): cancel any pending
       // lookup and fade the card, same as leaving the source entirely.
-      window.clearTimeout(hoverRef.current.showTimer);
-      hoverRef.current.offset = -1;
-      hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+      scheduleHide();
       return;
     }
     if (off === hoverRef.current.offset) return;
+    window.clearTimeout(hoverRef.current.showTimer);
+    window.clearTimeout(hoverRef.current.hideTimer);
     hoverRef.current.offset = off;
     const x = e.clientX;
     const y = e.clientY;
-    window.clearTimeout(hoverRef.current.showTimer);
+    const gen = ++hoverRef.current.gen;
     hoverRef.current.showTimer = window.setTimeout(() => {
       fetchTypeInfo(frame.id, off)
-        .then((info) => setTypeCard(info ? { x, y, info } : null))
-        .catch(() => setTypeCard(null));
+        .then((info) => {
+          if (hoverRef.current.gen !== gen) return;
+          setTypeCard(info ? { x, y, info } : null);
+        })
+        .catch(() => {
+          if (hoverRef.current.gen === gen) setTypeCard(null);
+        });
     }, 250);
   }
 
   function onSourceMouseLeave() {
-    window.clearTimeout(hoverRef.current.showTimer);
-    hoverRef.current.offset = -1;
-    hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+    if (recognizing) return;
+    scheduleHide();
   }
 
   function openDefinition(info: TypeInfo) {
-    setTypeCard(null);
+    closeTypeCard();
     if (info.targetId) {
       store.setSymbol(info.targetId);
       return;
@@ -365,6 +415,38 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selection]);
+
+  // The card hangs below-right of the pointer, which is fine for a few lines
+  // of type info and not fine once the authoring form roughly doubles its
+  // height: hover anything in the lower half of the window and the save and
+  // cancel buttons land past the bottom edge. It's `position: fixed`, so
+  // there is nothing to scroll to reach them — the form is simply unusable
+  // down there.
+  //
+  // Clamped after layout rather than guessed before it: the height depends on
+  // the doc string, the warning, and whether the form is open. Written
+  // straight to the node instead of through state — this runs after every
+  // render that could change the height, and feeding a measurement back into
+  // the state it measures is how a layout loop starts.
+  useLayoutEffect(() => {
+    const el = typeCardRef.current;
+    if (!el || !typeCard) return;
+    el.style.top = `${typeCard.y + 16}px`;
+    const h = el.getBoundingClientRect().height;
+    const top = Math.max(8, Math.min(typeCard.y + 16, window.innerHeight - h - 8));
+    el.style.top = `${top}px`;
+  }, [typeCard, recognizing]);
+
+  // Esc closes the authoring form. Now that moving the mouse away no longer
+  // dismisses it, it needs a way out that isn't hunting for the cancel button.
+  useEffect(() => {
+    if (!recognizing) return;
+    function onKey(e: KeyboardEvent) {
+      if (matches("ui.dismiss", e)) setRecognizing(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [recognizing]);
 
   // The recursion chain for calls inside this frame: every frame above
   // plus this one. A call resolving back into it is marked ↻.
@@ -947,10 +1029,20 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       )}
       {typeCard && (
         <div
+          ref={typeCardRef}
           className="type-card"
           style={{ left: typeCard.x + 12, top: typeCard.y + 16 }}
-          onMouseEnter={() => window.clearTimeout(hoverRef.current.hideTimer)}
-          onMouseLeave={() => setTypeCard(null)}
+          // Reaching the card means crossing a strip of code, and everything
+          // crossed on the way armed something. Arriving cancels all of it.
+          onMouseEnter={cancelHover}
+          // Leaving gets the same grace period as leaving the source, so
+          // clipping a corner on the way to a button doesn't cost the card.
+          // While the form is open, nothing here closes it: it holds typed
+          // input, and mouse position is not consent to discard that.
+          onMouseLeave={() => {
+            if (recognizing) return;
+            scheduleHide();
+          }}
         >
           <div className="type-card-head">
             <span className="type-card-kind">{typeCard.info.kind}</span>
@@ -979,10 +1071,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             <RecognizeCall
               info={typeCard.info}
               displayName={typeCard.info.name}
-              onDone={() => {
-                setRecognizing(false);
-                setTypeCard(null);
-              }}
+              onDone={closeTypeCard}
               onCancel={() => setRecognizing(false)}
             />
           ) : (
