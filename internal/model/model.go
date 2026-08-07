@@ -91,11 +91,35 @@ type CallSite struct {
 	// buried under library bodies.
 	External bool `json:"external,omitempty"`
 
+	// Leaf, when set, is a rule's answer to "is expanding into this worth
+	// doing" — replacing a single stdlib/dependency heuristic that couldn't
+	// distinguish an in-house SDK you always want to expand from a logging
+	// call you never do. It also makes "why can't I expand this?" answerable,
+	// which the boolean never was.
+	Leaf *LeafInfo `json:"leaf,omitempty"`
+
 	// Receivers lists the targets a fan-out call reaches (all of them run,
 	// unlike Candidates where one is chosen). Set only for kind="fanout".
 	// FrameForCall(id, choice) selects Receivers[choice].
 	Receivers  []Receiver `json:"receivers,omitempty"`
 	FanoutKind string     `json:"fanoutKind,omitempty"` // e.g. "subscribers"
+}
+
+// LeafInfo marks a call site a rule classified as a boundary worth stopping
+// at, and names what lies on the other side.
+type LeafInfo struct {
+	// Rule is the id that decided this, so "why is this a leaf" has an answer.
+	Rule string `json:"rule"`
+	// Label stands in for the callee's name — "→ orders" rather than the
+	// generated method it happens to call.
+	Label string `json:"label,omitempty"`
+	// Key is the platform key the same rule emitted, which is what the far
+	// end resolves against.
+	Key  string `json:"key,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// CrossRepo offers the implementation in another repository: navigate to
+	// it, or splice it in the way an ordinary call expands.
+	CrossRepo bool `json:"crossRepo,omitempty"`
 }
 
 // Receiver is one target reached by a fan-out call (e.g. a subscriber of an

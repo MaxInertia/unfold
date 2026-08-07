@@ -53,6 +53,31 @@ type Rule struct {
 	// becomes an outbound edge, which is the exact failure the built-in pass
 	// avoids by treating a stub as capability rather than as a call.
 	Classifier bool `json:"classifier,omitempty"`
+	// Leaf classifies a matching call site rather than emitting an edge:
+	// whether expanding into it is worth doing.
+	//
+	// The decision it replaces is one hardcoded boolean — a call is a leaf iff
+	// its target is stdlib or a dependency — which cannot give three answers
+	// it needs to. An in-house SDK *is* a dependency and is exactly what you
+	// want to expand; a logging library is expandable and never worth
+	// expanding; a client fronting another service shouldn't expand into
+	// transport plumbing at all, it should offer the handler in the other repo.
+	Leaf *Leaf `json:"leaf,omitempty"`
+}
+
+// Leaf says how a matching call site should be treated when reading code.
+type Leaf struct {
+	// Expand overrides the built-in stdlib/dependency heuristic in either
+	// direction: false makes a call a leaf that isn't one by default, true
+	// rescues an in-house SDK from being skipped by bulk expansion.
+	Expand *bool `json:"expand,omitempty"`
+	// Label is shown on the leaf instead of the callee's name — "→ orders"
+	// reads better than the generated method it actually calls. Supports the
+	// same template vocabulary as a key, so a capture can name the service.
+	Label string `json:"label,omitempty"`
+	// CrossRepo offers the far end: navigate to, or inline, the
+	// implementation the emitted key resolves to in another repository.
+	CrossRepo bool `json:"crossRepo,omitempty"`
 }
 
 // Match is the predicate. Every field is optional and all present fields must
@@ -144,7 +169,14 @@ func (r Rule) validate(seen map[string]bool) error {
 		return fmt.Errorf("rule %q: duplicate id", r.ID)
 	}
 	// A settings-only entry (id + enabled) is how a built-in is switched off.
-	if r.Match == nil && r.Emit == nil {
+	if r.Match == nil && r.Emit == nil && r.Leaf == nil {
+		return nil
+	}
+	// A leaf-only rule classifies call sites without producing an edge.
+	if r.Match != nil && r.Emit == nil && r.Leaf != nil {
+		if r.Match.isEmpty() {
+			return fmt.Errorf("rule %q: match is empty, which would match every call site", r.ID)
+		}
 		return nil
 	}
 	if r.Match == nil || r.Emit == nil {

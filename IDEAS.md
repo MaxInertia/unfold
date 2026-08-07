@@ -269,6 +269,8 @@ Services communicate in many ways — a dozen in-house HTTP wrappers, a custom p
 
 Full design record in the vault: `docs/2026-08-07-unfold-user-defined-recognizers.md`.
 
+**Status — being built.** The engine (`internal/rules`), the authoring UI, and the leaf action are on `feat/user-defined-recognizers`. Decisions taken: JSON with a `"//"` comment field; rules toggleable including built-ins, which gained stable ids for it; composition depth per-rule. Known gap, pinned by the acceptance test: phase 1 only sees owned code, so a transport call several hops inside a *dependency* is invisible to a rule while the built-in still finds it — the fix is to let phase 1 see dependency bodies while attribution still stops at the owned caller.
+
 **The seam already exists.** `platform.Recognizer` is `func(Call) []model.Binding` over a syntax-free `Call` (package path, receiver, func name, constant-folded args, func-value targets). No AST, so a data-driven rule is a Recognizer built from config rather than written in Go — no matching engine to design, and the TS engine could feed the same facts. The package doc already anticipates this: which rules are active "is ultimately a per-project question".
 
 **The join needs no work.** `servedBy` already joins matching keys across repos, the crossing relation connects each end to its entrypoints, and `KindFanout` already renders one site → many receivers. Getting the keys right is the whole feature.

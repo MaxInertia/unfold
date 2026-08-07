@@ -3277,3 +3277,63 @@ body.resizing {
   font-size: 0.68rem;
   color: var(--muted);
 }
+
+/* ===== Leaf boundaries ===== */
+.leaf-card {
+  margin: 0.25rem 0 0.4rem;
+}
+
+.leaf-bar {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px dashed var(--call-border);
+  border-radius: 6px;
+  background: var(--call-bg);
+  font-size: 0.72rem;
+}
+
+.leaf-label {
+  font-weight: 600;
+}
+
+.leaf-key,
+.leaf-rule {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.leaf-rule {
+  margin-left: auto;
+}
+
+.leaf-action {
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.68rem;
+  padding: 0 0.3rem;
+  cursor: pointer;
+}
+
+.leaf-action:hover {
+  color: var(--fg);
+  border-color: var(--call-border);
+}
+
+/* Even inlined, the hop stays named: execution left the process, and a
+   continuous-looking body would say otherwise. */
+.leaf-hop {
+  font-size: 0.66rem;
+  color: var(--muted);
+  padding: 0.15rem 0.45rem;
+  border-left: 2px dashed var(--goroutine-border, var(--card-border));
+}
+
+.leaf-inlined {
+  margin-top: 0.2rem;
+}

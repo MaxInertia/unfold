@@ -14,8 +14,20 @@ export interface CallSite {
   candidates?: Candidate[]; // present for interface calls with known impls
   goroutine?: boolean; // call is launched with the `go` keyword
   external?: boolean; // target is stdlib/dependency; bulk expansion skips it
+  // A rule's answer to "is expanding into this worth doing", replacing a
+  // single stdlib/dependency heuristic that couldn't tell an in-house SDK you
+  // always want to expand from a logging call you never do.
+  leaf?: LeafInfo;
   receivers?: Receiver[]; // present for fan-out calls (all of them run)
   fanoutKind?: string; // e.g. "subscribers"
+}
+
+export interface LeafInfo {
+  rule: string; // which rule decided, so "why is this a leaf" has an answer
+  label?: string;
+  key?: string;
+  kind?: string;
+  crossRepo?: boolean;
 }
 
 export interface Candidate {

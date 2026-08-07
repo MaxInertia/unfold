@@ -14,6 +14,7 @@ import {
 } from "./viewState";
 import { useBookmarks } from "./bookmarks";
 import { RecognizeCall } from "./RecognizeCall";
+import { LeafCard } from "./LeafCard";
 import { CallersPanel } from "./Callers";
 import { depthColor } from "./StickyHeaders";
 import { useSettings } from "./settings";
@@ -619,6 +620,24 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     const extras: ReactNode[] = [];
     const calls = lineCallsCache.get(lineIdx) ?? [];
     for (const call of calls) {
+      // A rule-marked boundary renders instead of an expansion: the point is
+      // that expanding into the transport is not what you wanted.
+      if (call.leaf) {
+        extras.push(
+          <LeafCard
+            key={`leaf:${call.id}`}
+            leaf={call.leaf}
+            onOpen={(id) => store.setSymbol(id)}
+            renderFrame={(f) => (
+              <Frame
+                frame={f}
+                path={[...path, { callId: call.id, choice: 0 }]}
+                ancestors={[...ancestors, frame.id]}
+              />
+            )}
+          />,
+        );
+      }
       if (call.kind === "fanout") {
         if (isFanoutOpen(slice, call.id)) {
           extras.push(renderFanout(call));

@@ -162,6 +162,9 @@ type Indexer struct {
 	// file behaves exactly as before.
 	ruleSet   rules.Set
 	ruleStats map[string]int
+	// leaves is the reading-time classification rules made for call sites,
+	// keyed file:line.
+	leaves map[string]rules.LeafDecision
 
 	// outboundUnreachable counts outbound call sites excluded because
 	// execution can't reach them from any recognized entrypoint.
@@ -542,6 +545,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.bindings = append(i.bindings, ruleOut...)
 	i.outboundUnreachable += ruleUnreachable
 	i.ruleStats = ev.Stats
+	i.leaves = ev.Leaves()
 
 	i.sortBindings()
 	i.computeCrossings()
@@ -1601,7 +1605,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 	for _, c := range fi.calls {
 		byteStart := i.fset.Position(c.pos).Offset - base
 		byteEnd := i.fset.Position(c.end).Offset - base
-		calls = append(calls, CallSite{
+		cs := CallSite{
 			ID:          c.id,
 			SpanStart:   utf16Offset(src, byteStart),
 			SpanEnd:     utf16Offset(src, byteEnd),
@@ -1611,7 +1615,17 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 			Candidates:  c.candidates,
 			Goroutine:   c.goroutine,
 			External:    c.kind == KindDirect && i.isExternal(c.target),
-		})
+		}
+		if d, ok := i.leaves[i.siteLineOf(c)]; ok {
+			cs.Leaf = &model.LeafInfo{Rule: d.RuleID, Label: d.Label, Key: d.Key, CrossRepo: d.CrossRepo}
+			if d.Expand != nil {
+				// A rule overrides the stdlib/dependency heuristic in either
+				// direction: rescuing an in-house SDK from being skipped, or
+				// marking an expandable-but-pointless call as a boundary.
+				cs.External = !*d.Expand
+			}
+		}
+		calls = append(calls, cs)
 	}
 
 	return &Frame{
@@ -2274,4 +2288,10 @@ func isBuiltinID(id string) bool {
 		}
 	}
 	return false
+}
+
+// siteLineOf identifies a call the way the rule evaluator recorded it.
+func (i *Indexer) siteLineOf(c *callInfo) string {
+	p := i.fset.Position(c.pos)
+	return p.Filename + ":" + strconv.Itoa(p.Line)
 }

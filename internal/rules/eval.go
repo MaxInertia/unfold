@@ -33,6 +33,7 @@ type Evaluator struct {
 
 	// marks[rule][fn] is the key that rule matched inside fn's body.
 	marks map[string]map[model.TargetID]string
+	leaves map[string]LeafDecision
 	// Stats counts what each rule matched, so a rule that has quietly stopped
 	// matching after a library upgrade can say so instead of contributing
 	// nothing in silence.
@@ -57,10 +58,11 @@ func NewEvaluator(rs []Rule) *Evaluator {
 		calls:  map[model.TargetID][]platform.Call{},
 		callee: map[callKey][]model.TargetID{},
 		marks:  map[string]map[model.TargetID]string{},
+		leaves: map[string]LeafDecision{},
 		Stats:  map[string]int{},
 	}
 	for _, r := range rs {
-		if !r.On() || r.Match == nil || r.Emit == nil {
+		if !r.On() || r.Match == nil || (r.Emit == nil && r.Leaf == nil) {
 			continue
 		}
 		e.rules = append(e.rules, r)
@@ -96,6 +98,21 @@ func (e *Evaluator) Observe(c platform.Call, targets ...model.TargetID) {
 	}
 }
 
+// LeafDecision is how a rule wants one call site treated when reading.
+type LeafDecision struct {
+	RuleID    string
+	Expand    *bool
+	Label     string
+	CrossRepo bool
+	// Key is the emitted key when the same rule also produced a binding, so
+	// the leaf can offer the far end of that edge rather than just naming it.
+	Key string
+}
+
+// Leaves returns the reading-time classification for call sites, keyed by the
+// call site's file:line. Populated by Run.
+func (e *Evaluator) Leaves() map[string]LeafDecision { return e.leaves }
+
 // Run evaluates every rule and returns the bindings they imply.
 //
 // Attribution, reachability filtering and dedup are deliberately *not* done
@@ -122,10 +139,22 @@ func (e *Evaluator) Run() []model.Binding {
 				if r.Classifier {
 					continue // marks functions only; never an edge itself
 				}
-				if b, ok := e.apply(r, c); ok {
-					e.Stats[r.ID]++
-					out = append(out, b)
+				b, ok := e.apply(r, c)
+				if !ok {
+					continue
 				}
+				if r.Leaf != nil {
+					e.leaves[siteLine(c)] = LeafDecision{
+						RuleID: r.ID, Expand: r.Leaf.Expand,
+						Label: r.Leaf.Label, CrossRepo: r.Leaf.CrossRepo, Key: b.Key,
+					}
+				}
+				if r.Emit == nil {
+					e.Stats[r.ID]++
+					continue // leaf-only rule: classified, but not an edge
+				}
+				e.Stats[r.ID]++
+				out = append(out, b)
 			}
 		}
 	}
@@ -216,6 +245,12 @@ func (e *Evaluator) apply(r Rule, c platform.Call) (model.Binding, bool) {
 		}
 	}
 
+	if r.Emit == nil {
+		// Leaf-only: the match is the whole answer. A label may still want
+		// the captures, so it's expanded here.
+		label, _ := expandKey(r.Leaf.Label, c, caps, inner)
+		return model.Binding{Key: label, Site: c.Site, File: c.File, Line: c.Line}, true
+	}
 	key, ok := expandKey(r.Emit.Key, c, caps, inner)
 	if !ok || key == "" {
 		// A key that can't be resolved is skipped rather than guessed at —
@@ -275,4 +310,24 @@ func Validate(rs []Rule) []error {
 		}
 	}
 	return problems
+}
+
+// siteLine identifies a call site the way a Frame's call sites can be matched
+// back to it — file and line, which is what the indexer knows at render time.
+func siteLine(c platform.Call) string {
+	return c.File + ":" + itoa(c.Line)
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
 }
