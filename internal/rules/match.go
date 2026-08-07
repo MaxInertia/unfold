@@ -113,7 +113,41 @@ func (m *Match) Matches(c platform.Call, caps Captures) bool {
 	if m.MinArgs > 0 && len(c.Args) < m.MinArgs {
 		return false
 	}
+	for _, a := range m.Args {
+		// An argument that isn't there can't have the type you asked for. This
+		// is a rejection, not a skip: a rule constrained to "argument 2 is an
+		// Event" must not fire on a two-argument call that never mentions one.
+		if a.Index < 0 || a.Index >= len(c.Args) {
+			return false
+		}
+		got := c.Args[a.Index]
+		if a.Type != "" && !matchType(a.Type, got.Type) {
+			return false
+		}
+		if a.ParamType != "" && !matchType(a.ParamType, got.ParamType) {
+			return false
+		}
+	}
 	return true
+}
+
+// matchType compares a type pattern to a rendered type.
+//
+// Segment-wise on "/" like an import path, because that is what most of the
+// string is: "*github.com/acme/**/pb.Event" should behave the way the same
+// pattern does against a package path. The leading "*" of a pointer type is
+// part of the first segment and matches literally, so a rule that means the
+// pointer says so — a rule accidentally written against the value type
+// wouldn't fire, which is visible, where silently accepting both would put
+// edges in the surface nobody asked for.
+func matchType(pattern, got string) bool {
+	if pattern == "" {
+		return true
+	}
+	if got == "" {
+		return false // nothing known about this argument; don't guess
+	}
+	return matchPattern(pattern, got, nil)
 }
 
 // Key expands a key template against a call site.

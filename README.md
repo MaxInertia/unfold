@@ -317,6 +317,36 @@ guessed. Adding a router or broker means adding a rule in
 function, constant-folded args), never an AST — or writing one as
 configuration, below.
 
+### Writing a rule that means one library
+
+A method name is rarely the thing you mean. `Emit`, `Publish` and `Send` name
+half the messaging libraries ever written, and the usual narrowing doesn't
+always reach: a call through an *interface* carries the package that declared
+the interface, and nothing stops a repo from declaring its own with the same
+method. What doesn't move is the types crossing the call, so a match can pin
+them:
+
+```json
+{ "id": "events.emit",
+  "match": {
+    "func": "Emit",
+    "args": [{"index": 2, "type": "*github.com/acme/events/pb.Event"}]
+  },
+  "emit": {"role": "outbound", "kind": "pubsub.topic", "key": "{arg1}"} }
+```
+
+`type` is what the caller passed; `paramType` is what the callee's signature
+declares at that position (its element type, for a variadic parameter). They
+differ exactly when one of them is useless — a parameter typed `any` says
+nothing about what arrives, and a locally-defined implementation of an SDK
+interface says nothing about what the callee accepts. Both take `*` and `**`
+wildcards, and both are written fully qualified, because short type names
+collide across modules. The pointer is part of the pattern.
+
+The **recognize as…** form on a hover card offers these as checkboxes over the
+call's own resolved types, so the usual path is picking which facts to insist
+on rather than writing any of this by hand.
+
 ### Seeing which rules are in force
 
 The **⌥ recognizers** panel lists every rule, built-in and configured: whether

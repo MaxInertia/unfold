@@ -99,6 +99,7 @@ type (
 	Candidate    = model.Candidate
 	SearchResult = model.SearchResult
 	TypeInfo     = model.TypeInfo
+	CallFacts    = model.CallFacts
 )
 
 const (
@@ -1018,7 +1019,19 @@ func isDouble(recv string) bool {
 // immediately-invoked literal, or a call in a package that failed to type
 // check.
 func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool) {
-	info := fi.pkg.TypesInfo
+	return i.callFactsIn(fi.pkg, fi.id, ce)
+}
+
+// callFactsIn is callFacts without a funcInfo, for callers that have the
+// package and position but no enclosing indexed function — the hover card on a
+// whole-file frame, notably. Keeping one extraction matters more than the
+// argument list: what the authoring form offers has to be what the evaluator
+// will actually match.
+func (i *Indexer) callFactsIn(pkg *packages.Package, site TargetID, ce *ast.CallExpr) (platform.Call, bool) {
+	if pkg == nil {
+		return platform.Call{}, false
+	}
+	info := pkg.TypesInfo
 	if info == nil {
 		return platform.Call{}, false
 	}
@@ -1041,17 +1054,64 @@ func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool
 	c := platform.Call{
 		PkgPath: obj.Pkg().Path(),
 		Func:    obj.Name(),
-		Site:    fi.id,
+		Site:    site,
 		File:    pos.Filename,
 		Line:    pos.Line,
 	}
-	if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil {
+	sig, _ := obj.Type().(*types.Signature)
+	if sig != nil && sig.Recv() != nil {
 		c.Recv, c.RecvPkg = namedTypeParts(sig.Recv().Type())
 	}
-	for _, a := range ce.Args {
-		c.Args = append(c.Args, argFacts(info, a))
+	for n, a := range ce.Args {
+		arg := argFacts(info, a)
+		arg.ParamType = paramTypeAt(sig, n)
+		c.Args = append(c.Args, arg)
 	}
 	return c, true
+}
+
+// paramTypeAt renders the callee's declared parameter type at position n.
+//
+// The declared type is a different fact from the type of the value passed, and
+// a rule may need either: a parameter declared `any` says nothing about what
+// arrives, and a value that is a locally-defined implementation of an SDK
+// interface says nothing about what the callee accepts. Recording both is what
+// lets a rule pick the one that discriminates for a given library.
+func paramTypeAt(sig *types.Signature, n int) string {
+	if sig == nil {
+		return ""
+	}
+	params := sig.Params()
+	if params == nil || params.Len() == 0 {
+		return ""
+	}
+	last := params.Len() - 1
+	switch {
+	case n < last, n == last && !sig.Variadic():
+		if n > last {
+			return ""
+		}
+		return qualifiedType(params.At(n).Type())
+	case sig.Variadic():
+		// Every argument in the variadic tail is an element, not the slice —
+		// matching on "[]T" would never fire for the call that was written.
+		if slice, ok := params.At(last).Type().(*types.Slice); ok {
+			return qualifiedType(slice.Elem())
+		}
+		return qualifiedType(params.At(last).Type())
+	}
+	return ""
+}
+
+// qualifiedType renders a type with full package paths, so a rule names
+// "github.com/acme/events/pb.Event" rather than "pb.Event" — the same
+// discipline as matching on a package path rather than a package name, and
+// for the same reason: short names collide across modules.
+func qualifiedType(t types.Type) string {
+	if t == nil {
+		return ""
+	}
+	return types.TypeString(t, func(p *types.Package) string { return p.Path() })
 }
 
 // namedTypeParts unwraps a receiver type to its bare name and package, so a
@@ -1077,9 +1137,12 @@ func namedTypeParts(t types.Type) (name, pkgPath string) {
 // *ast.BasicLit) means `"POST " + routePrefix` resolves like a literal.
 func argFacts(info *types.Info, e ast.Expr) platform.Arg {
 	var a platform.Arg
-	if tv, ok := info.Types[e]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
-		a.Value = constant.StringVal(tv.Value)
-		a.Known = true
+	if tv, ok := info.Types[e]; ok {
+		if tv.Value != nil && tv.Value.Kind() == constant.String {
+			a.Value = constant.StringVal(tv.Value)
+			a.Known = true
+		}
+		a.Type = qualifiedType(tv.Type)
 	}
 	switch v := e.(type) {
 	case *ast.Ident:
@@ -1098,7 +1161,14 @@ func argFacts(info *types.Info, e ast.Expr) platform.Arg {
 		// A conversion wrapping the real argument, e.g.
 		// http.Handle("/x", http.HandlerFunc(h)) — look through it.
 		if tv, ok := info.Types[v.Fun]; ok && tv.IsType() && len(v.Args) == 1 {
-			return argFacts(info, v.Args[0])
+			inner := argFacts(info, v.Args[0])
+			// ...but not for the type. The conversion is what the call site
+			// says the value *is*, and it's the more specific of the two —
+			// http.HandlerFunc, not the bare func type it wraps.
+			if a.Type != "" {
+				inner.Type = a.Type
+			}
+			return inner
 		}
 	}
 	return a
@@ -1907,8 +1977,52 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 		// — the same resolution the leaf classification has always used.
 		p := i.fset.Position(ident.Pos())
 		ti.Rules = i.RulesAt(p.Filename, p.Line)
+		// And what a new rule could match on. Only when the hovered identifier
+		// is the *called* function: hovering an argument describes that
+		// argument, and offering to write a rule keyed off it would be
+		// describing a different call site than the one on screen.
+		if ce := calleeCallExpr(enclosing, ident); ce != nil {
+			if c, ok := i.callFactsIn(pkg, "", ce); ok {
+				ti.Call = &CallFacts{
+					Package: c.PkgPath,
+					Recv:    c.Recv,
+					RecvPkg: c.RecvPkg,
+					Func:    c.Func,
+				}
+				for _, a := range c.Args {
+					ti.Call.Args = append(ti.Call.Args, model.ArgFacts{
+						Type: a.Type, ParamType: a.ParamType, Value: a.Value,
+					})
+				}
+			}
+		}
 	}
 	return ti, nil
+}
+
+// calleeCallExpr returns the call whose *callee* is ident, or nil. The
+// enclosing path runs innermost-out, so the first CallExpr encountered is the
+// nearest one; it counts only if ident is what names the function, not if
+// ident merely appears among the arguments.
+func calleeCallExpr(enclosing []ast.Node, ident *ast.Ident) *ast.CallExpr {
+	for _, n := range enclosing {
+		ce, ok := n.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		switch fn := ce.Fun.(type) {
+		case *ast.Ident:
+			if fn == ident {
+				return ce
+			}
+		case *ast.SelectorExpr:
+			if fn.Sel == ident {
+				return ce
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 // typeDefinition expands a type's shape when the name alone isn't telling:

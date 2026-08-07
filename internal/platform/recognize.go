@@ -18,15 +18,28 @@ import (
 	"github.com/MaxInertia/unfold/internal/model"
 )
 
-// Arg is one argument at a call site, reduced to the two things a recognizer
-// can use: its constant string value (Go folds `"POST " + routeConst` for us,
-// so this covers more than bare literals) and, when the argument is a
-// function value, the target it names — that's how a route registration finds
-// its handler.
+// Arg is one argument at a call site, reduced to what a recognizer can use:
+// its constant string value (Go folds `"POST " + routeConst` for us, so this
+// covers more than bare literals); the target it names when the argument is a
+// function value — that's how a route registration finds its handler; and its
+// types.
+//
+// Two types, because they answer different questions and a call can make them
+// differ. Type is what the caller passed; ParamType is what the callee's
+// signature declares at that position. When a parameter is `any` or an
+// interface, only the first is informative; when the value is nil or a
+// locally-defined implementation of an SDK interface, only the second is.
 type Arg struct {
 	Value  string
 	Known  bool
 	Target model.TargetID
+	// Type is the static type of the argument expression, fully qualified
+	// ("*github.com/acme/events/pb.Event").
+	Type string
+	// ParamType is the callee's declared parameter type at this position,
+	// same rendering. For a variadic parameter it is the element type, since
+	// that's what each argument in that position actually is.
+	ParamType string
 }
 
 // Call is one call site, stripped of syntax.

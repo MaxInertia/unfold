@@ -163,6 +163,41 @@ type TypeInfo struct {
 	// offer reads as "nothing recognizes this" even when three things do, and
 	// the rule you write duplicates one you have.
 	Rules []string `json:"rules,omitempty"`
+	// Call describes the call site when the hovered symbol is the function
+	// being called: the facts a rule can match on, as the evaluator will see
+	// them.
+	//
+	// The authoring form used to derive the package from TargetID, which is
+	// only set for functions this index holds — so a call through an
+	// interface declared in a dependency yielded nothing, and the form fell
+	// back to matching on the name alone. That is the case most in need of a
+	// precise rule, since "Emit" or "Publish" names half the methods in the
+	// ecosystem.
+	Call *CallFacts `json:"call,omitempty"`
+}
+
+// CallFacts is what a rule can match on at one call site. It mirrors
+// platform.Call, and is produced by the same extraction the evaluator uses —
+// so a form built from it offers exactly the constraints that will hold.
+type CallFacts struct {
+	Package string     `json:"package,omitempty"`
+	Recv    string     `json:"recv,omitempty"`
+	RecvPkg string     `json:"recvPkg,omitempty"`
+	Func    string     `json:"func,omitempty"`
+	Args    []ArgFacts `json:"args,omitempty"`
+}
+
+// ArgFacts is one argument's matchable facts.
+type ArgFacts struct {
+	// Type is the static type of the value passed; ParamType the callee's
+	// declared parameter type. They differ when a parameter is an interface
+	// or `any`, which is exactly when one of them is the useful one.
+	Type      string `json:"type,omitempty"`
+	ParamType string `json:"paramType,omitempty"`
+	// Value is the constant-folded string, when the argument has one. It's
+	// what {argN} would expand to, so the form can show the key it's about to
+	// produce rather than describing it.
+	Value string `json:"value,omitempty"`
 }
 
 // SearchResult is one hit returned from an engine's Search.

@@ -99,12 +99,49 @@ type Match struct {
 	Func string `json:"func,omitempty"`
 	// MinArgs rejects an overload with too few arguments to carry the key.
 	MinArgs int `json:"minArgs,omitempty"`
+	// Args constrains individual arguments by type. This is what makes a rule
+	// about a *library* rather than about a verb: "Emit" names half the
+	// event-publishing methods ever written, while an argument of type
+	// github.com/acme/events/pb.Event names exactly one library's.
+	//
+	// It matters most where the other discriminators can't reach. A call
+	// through an interface carries the interface's package as the receiver —
+	// and nothing stops a repo from declaring its own interface with the same
+	// method, so RecvPkg identifies the declaration site rather than the
+	// library. The types crossing the call don't move.
+	Args []ArgMatch `json:"args,omitempty"`
 
 	// CalleeMatches is the second phase: this call site counts only if the
 	// function being called itself contains a call matching another rule.
 	// That is what recognizes a wrapper — an SDK method is interesting
 	// because of what it does inside, not because of its name.
 	CalleeMatches *Nested `json:"calleeMatches,omitempty"`
+}
+
+// ArgMatch constrains one argument position.
+//
+// Two type fields rather than one, because a call can make them differ and
+// which one discriminates depends on the library:
+//
+//   - Type is what the caller passed. Use it when the parameter is `any` or an
+//     interface, where the declaration says nothing.
+//   - ParamType is what the callee's signature declares. Use it when the value
+//     passed is a local implementation of the library's interface, or nil,
+//     where the call site says nothing.
+//
+// Both accept "*" wildcards and are written fully qualified
+// ("*github.com/acme/events/pb.Event"), for the same reason package paths are:
+// short type names collide across modules. Giving both means both must hold.
+type ArgMatch struct {
+	// Index is the argument position, zero-based. Required — an unanchored
+	// "some argument is an Event" would match a call that merely mentions the
+	// type somewhere, which is not what anyone means by it.
+	Index int `json:"index"`
+	// Type is the static type of the value passed.
+	Type string `json:"type,omitempty"`
+	// ParamType is the callee's declared parameter type at this position; for
+	// a variadic parameter, its element type.
+	ParamType string `json:"paramType,omitempty"`
 }
 
 // Nested is a reference to another rule, evaluated against a callee's body.
@@ -172,6 +209,19 @@ func (r Rule) validate(seen map[string]bool) error {
 	if r.Match == nil && r.Emit == nil && r.Leaf == nil {
 		return nil
 	}
+	if r.Match != nil {
+		for _, a := range r.Match.Args {
+			if a.Index < 0 {
+				return fmt.Errorf("rule %q: argument index %d is negative", r.ID, a.Index)
+			}
+			// An index alone constrains nothing, and a rule whose author
+			// believed otherwise is one that matches far more than intended —
+			// exactly the mistake that is cheapest to catch here.
+			if a.Type == "" && a.ParamType == "" {
+				return fmt.Errorf("rule %q: argument %d has no type or paramType, so it narrows nothing", r.ID, a.Index)
+			}
+		}
+	}
 	// A leaf-only rule classifies call sites without producing an edge.
 	if r.Match != nil && r.Emit == nil && r.Leaf != nil {
 		if r.Match.isEmpty() {
@@ -219,7 +269,21 @@ func (r Rule) validate(seen map[string]bool) error {
 
 func (m *Match) isEmpty() bool {
 	return m.Package == "" && m.Recv == "" && m.RecvPkg == "" && m.Func == "" &&
-		m.MinArgs == 0 && m.CalleeMatches == nil
+		m.MinArgs == 0 && m.CalleeMatches == nil && len(m.constrainedArgs()) == 0
+}
+
+// constrainedArgs are the argument matchers that actually constrain something.
+// An entry with an index and no types narrows nothing, so it must not be what
+// rescues a rule from being empty — that would turn "match everything" into a
+// rule the door lets through.
+func (m *Match) constrainedArgs() []ArgMatch {
+	var out []ArgMatch
+	for _, a := range m.Args {
+		if a.Type != "" || a.ParamType != "" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // errf is fmt.Errorf without importing fmt at every call site in this package.

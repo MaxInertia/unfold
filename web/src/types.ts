@@ -233,6 +233,30 @@ export interface TypeInfo {
   // The card offers to author a rule from the call; without these, that offer
   // reads as "nothing recognizes this" even when something does.
   rules?: string[];
+  // The call under the pointer, as the rule evaluator sees it. Present when
+  // the hovered symbol is the function being called.
+  call?: CallFacts;
+}
+
+// What a rule can match on at one call site (mirrors model.CallFacts).
+// Resolved by the type checker, so it's available for a callee this index
+// doesn't hold — an interface method from a dependency, which is exactly the
+// case the old "derive it from targetId" approach came up empty on.
+export interface CallFacts {
+  package?: string;
+  recv?: string;
+  recvPkg?: string;
+  func?: string;
+  args?: ArgFacts[];
+}
+
+export interface ArgFacts {
+  // What the caller passed, and what the callee declares. They differ when a
+  // parameter is an interface or `any` — which is when one of them is the
+  // only useful one.
+  type?: string;
+  paramType?: string;
+  value?: string; // constant-folded, when the argument has one
 }
 
 // A note anchored to a source location (mirrors internal/notes). Anchors
@@ -282,6 +306,7 @@ export interface RuleSpec {
   enabled?: boolean;
   classifier?: boolean;
   match?: {
+    args?: { index: number; type?: string; paramType?: string }[];
     package?: string;
     recv?: string;
     recvPkg?: string;
