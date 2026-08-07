@@ -234,3 +234,45 @@ export interface Note {
   createdAt?: string;
   updatedAt?: string;
 }
+
+// One recognizer, built-in or configured — what it is, whether it's on, where
+// it came from, and how much it actually matched.
+export interface RuleInfo {
+  id: string;
+  doc?: string;
+  builtin?: boolean;
+  enabled: boolean;
+  source?: string;
+  matches: number;
+}
+
+export interface RuleReport {
+  rules: RuleInfo[];
+  // Rules that were dropped or can never fire. Surfaced rather than swallowed:
+  // a rule nobody is told about is exactly the failure the system avoids.
+  problems?: string[];
+}
+
+// A configured rule, as saved. Mirrors internal/rules.Rule.
+export interface RuleSpec {
+  id: string;
+  "//"?: string;
+  enabled?: boolean;
+  classifier?: boolean;
+  match?: {
+    package?: string;
+    recv?: string;
+    recvPkg?: string;
+    recvOnly?: boolean;
+    func?: string;
+    minArgs?: number;
+    calleeMatches?: { rule: string; depth?: number };
+  };
+  emit?: {
+    role: "inbound" | "outbound";
+    kind: string;
+    key: string;
+    handler?: string;
+    confidence?: "declared" | "inferred";
+  };
+}

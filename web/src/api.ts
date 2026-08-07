@@ -5,6 +5,8 @@ import type {
   Frame,
   Note,
   RepoInfo,
+  RuleReport,
+  RuleSpec,
   SearchResult,
   ServiceView,
   TargetID,
@@ -200,6 +202,34 @@ export async function linkRepo(path: string, unlink = false): Promise<{ repos: R
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `link failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export function fetchRules(): Promise<RuleReport> {
+  return getJSON<RuleReport>("/api/rules");
+}
+
+// Saving a rule rebuilds the index — what a rule matched is only knowable by
+// running it, which is also why the match count comes back after saving rather
+// than as a preview.
+export async function saveRule(rule: RuleSpec): Promise<RuleReport> {
+  return postRules({ rule });
+}
+
+export async function deleteRule(id: string): Promise<RuleReport> {
+  return postRules({ delete: id });
+}
+
+async function postRules(body: unknown): Promise<RuleReport> {
+  const res = await fetch("/api/rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `rules failed: ${res.status}`);
   }
   return res.json();
 }

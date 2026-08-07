@@ -204,6 +204,17 @@ func (r *Reloadable) Repos() []model.RepoInfo {
 	return lister.Repos()
 }
 
+// RuleReport forwards the recognizer picture for whatever engine is held.
+func (r *Reloadable) RuleReport() model.RuleReport {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rep, ok := r.cur.(interface{ RuleReport() model.RuleReport })
+	if !ok {
+		return model.RuleReport{}
+	}
+	return rep.RuleReport()
+}
+
 // PlatformAvailable reports whether the engine currently held can serve a
 // service view, so /api/health advertises the zoom-out affordance honestly
 // even though the wrapper's own method set can't.

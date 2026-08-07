@@ -555,3 +555,20 @@ func (w *Workspace) keysReachingAnchor(anchor model.TargetID) (string, map[strin
 // IndexRepo loads one service's code on demand, so the platform view can be
 // filled in a service at a time instead of paying for the whole workspace.
 func (w *Workspace) IndexRepo(alias string) error { return w.load(alias) }
+
+// RuleReport describes the recognizers in force, taken from the primary repo.
+// Rules are shared across the workspace, so one repo's view of them is the
+// workspace's — except for match counts, which are that repo's own.
+func (w *Workspace) RuleReport() model.RuleReport {
+	r, ok := w.repos[w.primary]
+	if !ok {
+		return model.RuleReport{}
+	}
+	r.mu.Lock()
+	idx := r.idx
+	r.mu.Unlock()
+	if idx == nil {
+		return model.RuleReport{}
+	}
+	return idx.RuleReport()
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/notes"
 	"github.com/MaxInertia/unfold/internal/prefs"
+	"github.com/MaxInertia/unfold/internal/rules"
 )
 
 //go:embed all:static/dist
@@ -93,6 +94,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/service", s.handleService)
 	mux.HandleFunc("/api/proto-root", s.handleProtoRoot)
 	mux.HandleFunc("/api/repos", s.handleRepos)
+	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/dirs", s.handleDirs)
 	mux.HandleFunc("/api/resolve", s.handleResolve)
 	mux.HandleFunc("/api/platform", s.handlePlatform)
@@ -243,6 +245,130 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// GET  /api/rules — every recognizer, built-in and configured, with whether
+// it's on, where it came from, and how many bindings it actually produced.
+// POST /api/rules {"rule": {...}} — save a rule to the project's own file and
+// rebuild; {"id": "...", "enabled": false} switches one off, built-ins
+// included.
+//
+// A rule changes what the index contains, so applying one is a rebuild — the
+// same path linking a repo takes, and the same reason: what a rule matched is
+// only knowable by running it. That's also why the match count comes back
+// *after* saving rather than as a preview; a dry run would cost a full reindex
+// to answer the same question.
+func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
+	reporter, canReport := s.engine.(interface{ RuleReport() model.RuleReport })
+
+	if r.Method == http.MethodGet {
+		if !canReport {
+			writeJSON(w, http.StatusOK, model.RuleReport{Rules: []model.RuleInfo{}})
+			return
+		}
+		writeJSON(w, http.StatusOK, reporter.RuleReport())
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST only")
+		return
+	}
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if s.reload == nil || s.projectDir == "" {
+		writeError(w, http.StatusNotImplemented, "this session can't save rules")
+		return
+	}
+
+	var body struct {
+		Rule   json.RawMessage `json:"rule"`
+		Delete string          `json:"delete,omitempty"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<18)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+
+	path := rules.RepoPath(s.projectDir)
+	existing := readRuleFile(path)
+
+	if body.Delete != "" {
+		kept := existing.Rules[:0]
+		for _, r := range existing.Rules {
+			if r.ID != body.Delete {
+				kept = append(kept, r)
+			}
+		}
+		existing.Rules = kept
+	} else {
+		var incoming rules.Rule
+		if err := json.Unmarshal(body.Rule, &incoming); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid rule: "+err.Error())
+			return
+		}
+		// Validate before writing. A rule that can never fire, or one that
+		// would match every call site, is refused here rather than saved and
+		// then quietly doing nothing — silence is the failure mode this whole
+		// system exists to avoid.
+		if _, problems, err := rules.Parse(mustJSON(rules.File{Rules: []rules.Rule{incoming}})); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		} else if len(problems) > 0 {
+			writeError(w, http.StatusUnprocessableEntity, problems[0].Error())
+			return
+		}
+		replaced := false
+		for i := range existing.Rules {
+			if existing.Rules[i].ID == incoming.ID {
+				existing.Rules[i] = incoming
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			existing.Rules = append(existing.Rules, incoming)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := os.WriteFile(path, mustJSON(existing), 0o644); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.reload(); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "rules saved but the index failed to rebuild: "+err.Error())
+		return
+	}
+	s.NotifyReload()
+	if reporter, ok := s.engine.(interface{ RuleReport() model.RuleReport }); ok {
+		writeJSON(w, http.StatusOK, reporter.RuleReport())
+		return
+	}
+	writeJSON(w, http.StatusOK, model.RuleReport{})
+}
+
+func readRuleFile(path string) rules.File {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return rules.File{}
+	}
+	var f rules.File
+	_ = json.Unmarshal(data, &f)
+	return f
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return []byte("{}")
+	}
+	return append(b, '\n')
 }
 
 // POST /api/repos {"path": "<abs dir>"[, "unlink": true]} — open another

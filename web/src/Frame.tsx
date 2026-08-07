@@ -13,6 +13,7 @@ import {
   type FramePath,
 } from "./viewState";
 import { useBookmarks } from "./bookmarks";
+import { RecognizeCall } from "./RecognizeCall";
 import { CallersPanel } from "./Callers";
 import { depthColor } from "./StickyHeaders";
 import { useSettings } from "./settings";
@@ -60,6 +61,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const settings = useSettings();
   const depth = path.length;
   const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
+  const [recognizing, setRecognizing] = useState(false);
   const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0 });
   const allNotes = useNotes();
   const [composing, setComposing] = useState<NoteAnchor | null>(null);
@@ -948,6 +950,30 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               title={typeCard.info.targetId ? "open as root frame" : "open in editor"}
             >
               {shortDefined(typeCard.info.definedAt)}
+            </button>
+          )}
+          {/* Author a recognizer from the call you're looking at. The package
+              and receiver are already resolved to render this card, so the
+              match writes itself — only which argument holds the key has to
+              be asked, because that's the part nobody else knows. */}
+          {recognizing ? (
+            <RecognizeCall
+              info={typeCard.info}
+              displayName={typeCard.info.name}
+              onDone={() => {
+                setRecognizing(false);
+                setTypeCard(null);
+              }}
+              onCancel={() => setRecognizing(false)}
+            />
+          ) : (
+            <button
+              type="button"
+              className="type-card-recognize"
+              onClick={() => setRecognizing(true)}
+              title="teach unfold that this call shape is a platform edge"
+            >
+              recognize as…
             </button>
           )}
         </div>

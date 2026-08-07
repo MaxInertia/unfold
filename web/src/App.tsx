@@ -5,6 +5,7 @@ import { CallersTree } from "./CallersTree";
 import { FileTree } from "./FileTree";
 import { StickyHeaders } from "./StickyHeaders";
 import { SettingsPanel } from "./SettingsPanel";
+import { RulesPanel } from "./RulesPanel";
 import { useSettings } from "./settings";
 import { NotesList } from "./NotesUI";
 import { loadNotes } from "./notes";
@@ -58,6 +59,7 @@ function AppShell() {
   >("calls");
   const [reindexed, setReindexed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const settings = useSettings();
   // Zoom is a level, not a tab: the frame tree stays mounted in the view
   // store either way, so switching levels never costs expansion state. It
@@ -255,6 +257,17 @@ function AppShell() {
       <header className="app-header">
         <h1>unfold</h1>
         {target && <span className="app-target">target: <code>{target}</code></span>}
+        {platform && (
+          <button
+            type="button"
+            className={`app-settings${rulesOpen ? " app-settings--open" : ""}`}
+            onClick={() => setRulesOpen((v) => !v)}
+            title="recognizers — what unfold treats as a platform edge, and how much each rule matched"
+            aria-label="toggle recognizers"
+          >
+            ⌥
+          </button>
+        )}
         <button
           type="button"
           className={`app-settings${settingsOpen ? " app-settings--open" : ""}`}
@@ -266,6 +279,7 @@ function AppShell() {
         </button>
       </header>
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} />}
       {reindexed && <div className="app-toast">reindexed · view refreshed</div>}
       <div className="app-main">
         <aside
