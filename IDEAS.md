@@ -260,3 +260,21 @@ Settled while building: `protoPaths` is a list of entries with `path` and `exclu
 - L1.5 termination: an entrypoint search that finds nothing (a helper reachable only from other helpers, or through a `ref` edge that breaks the chain — see the usages limitations in the README) needs an honest empty state, not a blank panel.
 - **The sidebar doesn't follow the zoom level.** At L1 it still shows the frame-scoped files/calls/callers/notes tabs, so the "one continuous surface" claim is only half true — the main panel zooms and the sidebar doesn't. Noted as acceptable for now (2026-08-05). The promising fill is that at L1 the sidebar becomes the *filter* surface (by kind, by confidence, reaching-anchor only), which would make this and the L0-filtering question the same question. Whatever it becomes, tabs that don't apply at a level should disable rather than display stale frame-scoped content.
 - Does `pushState` on every zoom make browser back tediously granular? May need rapid zoom transitions coalesced into one history entry.
+
+---
+
+## User-defined recognizers (2026-08-07)
+
+Services communicate in many ways — a dozen in-house HTTP wrappers, a custom pub/sub library — and hardcoding a Go recognizer per library doesn't scale. Describe the pattern *in the app* instead ("here's a call through this wrapper"; "here's a subscriber using our library, and here's where it publishes"), and let unfold find everything matching. Emitters of a topic then become the inbound callers of its subscribers automatically.
+
+Full design record in the vault: `docs/2026-08-07-unfold-user-defined-recognizers.md`.
+
+**The seam already exists.** `platform.Recognizer` is `func(Call) []model.Binding` over a syntax-free `Call` (package path, receiver, func name, constant-folded args, func-value targets). No AST, so a data-driven rule is a Recognizer built from config rather than written in Go — no matching engine to design, and the TS engine could feed the same facts. The package doc already anticipates this: which rules are active "is ultimately a per-project question".
+
+**The join needs no work.** `servedBy` already joins matching keys across repos, the crossing relation connects each end to its entrypoints, and `KindFanout` already renders one site → many receivers. Getting the keys right is the whole feature.
+
+**Options**, in the vault doc: declarative YAML rules (A) authored by example in the UI (B); a query language (C, overkill); plugin code (D, "share a rule" becomes "run someone's code"); or **deriving instead of configuring** (E) — the call-graph walk that replaced literal-scanning for gRPC generalizes to HTTP wrappers, and may cover most of them with no rules at all. Recommendation: E first, then A authored by B.
+
+**The constraint:** `Call` is positional and constant-folded, so a rule can say "arg 0 is the topic" but not "the topic is a field on the receiver". Read the real wrappers before fixing a rule shape.
+
+**Second use — deciding what counts as a leaf.** A rule has a *match* half and an *action* half; today the action is always "emit a binding". Adding `leaf: true/false` / `render: resource` reuses the entire matching half. Today that decision is one hardcoded heuristic (`CallSite.External`, true for stdlib/deps), which is crude: an in-house SDK is a dependency you always want to expand, a logging library is expandable but never worth expanding, and a client fronting another service should show a junction card rather than transport plumbing. It would also make "why can't I expand this?" answerable, which it currently isn't.
