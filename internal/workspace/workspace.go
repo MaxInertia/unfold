@@ -105,6 +105,17 @@ type Workspace struct {
 // process-wide setting, the same way the engine treats the proto root.
 var RulePaths []string
 
+// Preload names repositories to index in the background whatever the mode
+// says. Adding a repo by hand is a statement that you intend to go there —
+// usually within seconds, by clicking the cross-repo jump that motivated
+// linking it — so waiting for the index at that click is a wait the user
+// already told us was coming.
+//
+// It matters most in the case that produced it: a lazy workspace, which is
+// what an eager one becomes the moment linking pushes it past EagerLimit. One
+// added repo would otherwise make the other four lazy as well.
+var Preload []string
+
 // Discover finds the repos under root: root itself if it's a module, plus
 // every immediate subdirectory that is one. One level is deliberate — a
 // workspace is a directory of checkouts, and walking deeper would index
@@ -221,10 +232,30 @@ func Open(dirs []string, primaryDir, protoRoot string, mode Mode) (*Workspace, e
 	// workspace, paid before the HTTP listener even opened — four large repos
 	// is minutes of staring at a browser that hasn't been told to open yet.
 	// None of it is needed to render the repo you're standing in.
-	if w.eager() {
-		w.loadRest()
-	}
+	w.loadBehind(w.wanted())
 	return w, nil
+}
+
+// wanted is which repos are indexed without being asked: all of them when the
+// workspace is eager, and otherwise the ones explicitly linked.
+func (w *Workspace) wanted() []string {
+	var out []string
+	eager := w.eager()
+	preload := map[string]bool{}
+	for _, d := range Preload {
+		if abs, err := filepath.Abs(d); err == nil {
+			preload[abs] = true
+		}
+	}
+	for _, alias := range w.order {
+		if alias == w.primary {
+			continue // already indexed, synchronously
+		}
+		if eager || preload[w.repos[alias].dir] {
+			out = append(out, alias)
+		}
+	}
+	return out
 }
 
 // BackgroundLoaders is how many repos are indexed at once behind the primary.
@@ -234,22 +265,22 @@ func Open(dirs []string, primaryDir, protoRoot string, mode Mode) (*Workspace, e
 // spike, and a workspace is opened on the same machine that has to run it.
 const BackgroundLoaders = 2
 
-// loadRest indexes every repo except the primary, off the startup path.
+// loadBehind indexes the named repos off the startup path.
 //
 // Failures are not fatal here and not retried: load records the error on the
 // repo, Repos() reports it, and the platform view already has a place to say a
 // service isn't indexed. Being told that in a UI you can see beats being told
 // it on a terminal you've stopped watching.
-func (w *Workspace) loadRest() {
+func (w *Workspace) loadBehind(aliases []string) {
+	if len(aliases) == 0 {
+		return
+	}
 	w.bg.Add(1)
 	go func() {
 		defer w.bg.Done()
 		sem := make(chan struct{}, BackgroundLoaders)
 		var wg sync.WaitGroup
-		for _, alias := range w.order {
-			if alias == w.primary {
-				continue
-			}
+		for _, alias := range aliases {
 			wg.Add(1)
 			go func(a string) {
 				defer wg.Done()

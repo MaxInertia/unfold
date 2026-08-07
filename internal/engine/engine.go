@@ -190,6 +190,11 @@ func Load(lang Lang, dir, target string) (model.Engine, error) {
 	case LangGo:
 		if dirs := goDirs(dir); len(dirs) > 0 {
 			workspace.RulePaths = RecognizerFiles
+			// A repo you linked by hand is one you mean to walk into, so it is
+			// indexed behind the primary even when the workspace is too large
+			// to be eager — which is the state linking one more repo can
+			// itself produce.
+			workspace.Preload = append([]string(nil), LinkedRepos...)
 			return workspace.Open(dirs, projectDir(dir), ProtoRoot, IndexMode)
 		}
 		idx := indexer.New()

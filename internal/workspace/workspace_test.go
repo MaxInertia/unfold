@@ -314,6 +314,36 @@ func TestOpenDoesNotWaitForSecondaryRepos(t *testing.T) {
 	}
 }
 
+// A lazy workspace still indexes what you explicitly linked, because linking a
+// repo is how you say you're about to go there. Without this, adding one repo
+// to a four-repo workspace made every repo in it lazy — so the cross-repo jump
+// that motivated the link was the slowest it had ever been.
+func TestLinkedReposIndexBehindALazyWorkspace(t *testing.T) {
+	dirs, err := Discover(abs(t, "testdata/ws"))
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	Preload = []string{abs(t, "testdata/ws/conversation")}
+	t.Cleanup(func() { Preload = nil })
+
+	w, err := Open(dirs, abs(t, "testdata/ws/inbox"), abs(t, "testdata/protoroot"), ModeLazy)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	w.WaitIndexed()
+
+	indexed := map[string]bool{}
+	for _, r := range w.Repos() {
+		indexed[r.Alias] = r.Indexed
+	}
+	if !indexed["conversation"] {
+		t.Error("a linked repo should be indexed behind the primary even in lazy mode")
+	}
+	if indexed["gateway"] {
+		t.Error("lazy still means lazy for repos nobody linked or opened")
+	}
+}
+
 // The platform view lists every service from declarations, but can only draw
 // outgoing edges for services whose code has been read. A lazy workspace must
 // therefore say which services are unindexed rather than presenting them as
