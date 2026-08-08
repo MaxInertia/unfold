@@ -158,18 +158,27 @@ func matchType(pattern, got string) bool {
 // with a hole in it — a key built from a runtime value is exactly the case
 // unfold declines to guess at.
 func expandKey(tmpl string, c platform.Call, caps Captures, inner string) (string, bool) {
+	s, ok, _ := expandKeyDetail(tmpl, c, caps, inner)
+	return s, ok
+}
+
+// expandKeyDetail also reports whether any value it consumed was inferred —
+// read out of a variable's initializer rather than folded from a constant — so
+// the binding can be badged for what it actually is.
+func expandKeyDetail(tmpl string, c platform.Call, caps Captures, inner string) (string, bool, bool) {
+	var inferred bool
 	var b strings.Builder
 	rest := tmpl
 	for {
 		i := strings.IndexByte(rest, '{')
 		if i < 0 {
 			b.WriteString(rest)
-			return b.String(), true
+			return b.String(), true, inferred
 		}
 		j := strings.IndexByte(rest[i:], '}')
 		if j < 0 {
 			b.WriteString(rest)
-			return b.String(), true
+			return b.String(), true, inferred
 		}
 		b.WriteString(rest[:i])
 		ref := rest[i+1 : i+j]
@@ -178,19 +187,20 @@ func expandKey(tmpl string, c platform.Call, caps Captures, inner string) (strin
 		switch {
 		case ref == "inner.key":
 			if inner == "" {
-				return "", false
+				return "", false, false
 			}
 			b.WriteString(inner)
 		case strings.HasPrefix(ref, "arg"):
 			n, ok := argIndex(ref)
 			if !ok || n >= len(c.Args) || !c.Args[n].Known {
-				return "", false
+				return "", false, false
 			}
 			b.WriteString(c.Args[n].Value)
+			inferred = inferred || c.Args[n].Inferred
 		default:
 			v, ok := caps[ref]
 			if !ok {
-				return "", false
+				return "", false, false
 			}
 			b.WriteString(v)
 		}

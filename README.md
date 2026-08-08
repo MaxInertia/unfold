@@ -347,6 +347,33 @@ The **recognize as…** form on a hover card offers these as checkboxes over the
 call's own resolved types, so the usual path is picking which facts to insist
 on rather than writing any of this by hand.
 
+### Where a key can come from
+
+The key is a string, and it is usually not written at the call site. Four
+shapes resolve:
+
+| the call says | resolved from | confidence |
+| --- | --- | --- |
+| `Emit(ctx, "orders.created")` | the literal | exact |
+| `Emit(ctx, topics.OrderCreated)` | a constant, in any package | exact |
+| `Emit(ctx, "acme."+topics.Order)` | constant folding | exact |
+| `Emit(ctx, topics.PaymentTaken)` | a package-level `var`'s initializer | **inferred** |
+| `Emit(ctx, topics.Topics.Shipped)` | a field of a package-level struct var | **inferred** |
+
+The first three are what the program *is*; the last two are what it *starts
+with*. Nothing in the index sees an assignment made later, so those are badged
+`inferred` rather than `exact` — including when a built-in recognizer keys off
+one, e.g. a route registered with a pattern held in a var.
+
+Both ends of an edge resolve the same way, so a publisher and a subscriber that
+share a constant — or share the events package that declares the var — join on
+the same key without either side writing the string.
+
+What still doesn't resolve is a value with a flow rather than a definition: a
+local variable, a struct field assigned after construction, a map lookup, a
+value returned from a function. Those are skipped rather than guessed, and the
+call site shows no binding.
+
 ### Seeing which rules are in force
 
 The **⌥ recognizers** panel lists every rule, built-in and configured: whether

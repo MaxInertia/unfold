@@ -189,7 +189,7 @@ func (i *Indexer) directInvokeKey(target TargetID) (string, bool) {
 			return true
 		}
 		for _, a := range ce.Args {
-			if v := argFacts(info, a); v.Known && platform.IsMethodPath(v.Value) {
+			if v := i.argFacts(info, a); v.Known && platform.IsMethodPath(v.Value) {
 				found = appendUnique(found, v.Value)
 			}
 		}

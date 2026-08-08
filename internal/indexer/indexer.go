@@ -165,6 +165,11 @@ type Indexer struct {
 	// file behaves exactly as before.
 	ruleSet   rules.Set
 	ruleStats map[string]int
+	// varStrings is the string a package-level variable is initialized with;
+	// varFields the same for the fields of a struct variable. Both are what a
+	// key argument resolves against when it isn't a constant.
+	varStrings map[types.Object]string
+	varFields  map[types.Object]map[string]string
 	// ruleSites is which recognizers claimed each call site, keyed file:line.
 	// Built-ins and configured rules land in the same map: from where a reader
 	// stands, "what already recognizes this call" is one question, and an
@@ -401,6 +406,9 @@ func (i *Indexer) Load(dir, pattern string) error {
 			}
 		}
 	})
+
+	// Pass 1c: the string a variable starts out holding.
+	i.indexVarStrings(pkgs)
 
 	// Configured rules run alongside the built-ins: `disabled` switches
 	// built-ins off, and the evaluator collects the facts its two phases need.
@@ -1063,11 +1071,186 @@ func (i *Indexer) callFactsIn(pkg *packages.Package, site TargetID, ce *ast.Call
 		c.Recv, c.RecvPkg = namedTypeParts(sig.Recv().Type())
 	}
 	for n, a := range ce.Args {
-		arg := argFacts(info, a)
+		arg := i.argFacts(info, a)
 		arg.ParamType = paramTypeAt(sig, n)
 		c.Args = append(c.Args, arg)
 	}
 	return c, true
+}
+
+// varString resolves an expression that names a variable, or a field of one,
+// to the string it was initialized with.
+//
+// Two shapes, both by lookup rather than by walking: `Topic` (an identifier
+// bound to a var) and `Topics.Shipped` (a field selector on one). A selector
+// through a package qualifier — `topics.Topic` — is an identifier as far as
+// the type checker is concerned, so it needs no separate case; what
+// distinguishes it from a field selector is only whether the base resolves to
+// a package or to a variable.
+func (i *Indexer) varString(info *types.Info, e ast.Expr) (string, bool) {
+	switch v := e.(type) {
+	case *ast.Ident:
+		if obj := info.Uses[v]; obj != nil {
+			s, ok := i.varStrings[obj]
+			return s, ok
+		}
+	case *ast.SelectorExpr:
+		// `pkg.Name` — the selector itself resolves to the variable.
+		if obj := info.Uses[v.Sel]; obj != nil {
+			if s, ok := i.varStrings[obj]; ok {
+				return s, true
+			}
+		}
+		// `Registry.Field` or `pkg.Registry.Field` — the base is the variable
+		// and the selector names one of its fields.
+		if base := i.baseVar(info, v.X); base != nil {
+			if fields, ok := i.varFields[base]; ok {
+				s, ok := fields[v.Sel.Name]
+				return s, ok
+			}
+		}
+	}
+	return "", false
+}
+
+// baseVar resolves the variable an expression denotes, looking through a
+// package qualifier. Nil when the expression is anything else — a call, an
+// index, a field of a field: all of them have an answer, and none of them has
+// one this cheap, so they're left to say "unknown" rather than be guessed at.
+func (i *Indexer) baseVar(info *types.Info, e ast.Expr) types.Object {
+	switch v := e.(type) {
+	case *ast.Ident:
+		if obj, ok := info.Uses[v].(*types.Var); ok {
+			return obj
+		}
+	case *ast.SelectorExpr:
+		if obj, ok := info.Uses[v.Sel].(*types.Var); ok {
+			return obj
+		}
+	}
+	return nil
+}
+
+// indexVarStrings records the string a package-level variable is initialized
+// with, and the strings the fields of a struct variable are initialized with.
+//
+// Keys are frequently not literals at the call site. A constant already
+// resolves — the type checker folds it, across packages and through
+// concatenation — but the two shapes it can't reach are the ones a shared
+// events package usually uses:
+//
+//	var PaymentTaken = "acme.payments.taken"
+//	var Topics = Registry{Shipped: "acme.orders.shipped"}
+//
+// Both are a value the program *starts* with, which is a weaker claim than a
+// constant: nothing here can see an assignment made later. That's what the
+// confidence badge is for, so the value is recorded and marked inferred rather
+// than being declined — declining it leaves the edge missing entirely, and a
+// missing edge is the failure this whole surface exists to avoid.
+//
+// Only strings, and only package scope: a local variable is a different
+// question (it has a flow, and answering it properly means dataflow rather
+// than a lookup), and every other type is irrelevant to a join key.
+func (i *Indexer) indexVarStrings(pkgs []*packages.Package) {
+	i.varStrings = map[types.Object]string{}
+	i.varFields = map[types.Object]map[string]string{}
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		info := pkg.TypesInfo
+		if info == nil {
+			return
+		}
+		for _, file := range pkg.Syntax {
+			for _, d := range file.Decls {
+				gd, ok := d.(*ast.GenDecl)
+				if !ok || gd.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for n, name := range vs.Names {
+						if n >= len(vs.Values) {
+							continue // `var a, b = f()` — nothing per-name to read
+						}
+						obj, _ := info.Defs[name].(*types.Var)
+						if obj == nil {
+							continue
+						}
+						i.recordVarValue(info, obj, vs.Values[n])
+					}
+				}
+			}
+		}
+	})
+}
+
+func (i *Indexer) recordVarValue(info *types.Info, obj types.Object, val ast.Expr) {
+	if s, ok := constStringOf(info, val); ok {
+		i.varStrings[obj] = s
+		return
+	}
+	// `&T{…}` is as common as `T{…}` for a registry, and the pointer makes no
+	// difference to what the fields hold.
+	if u, ok := val.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		val = u.X
+	}
+	cl, ok := val.(*ast.CompositeLit)
+	if !ok {
+		return
+	}
+	fields := map[string]string{}
+	for n, elt := range cl.Elts {
+		switch e := elt.(type) {
+		case *ast.KeyValueExpr:
+			key, ok := e.Key.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			if s, ok := constStringOf(info, e.Value); ok {
+				fields[key.Name] = s
+			}
+		default:
+			// Positional: the field is identified by its index in the struct
+			// type, which is the only place that order is recorded.
+			if name := structFieldName(info.TypeOf(cl), n); name != "" {
+				if s, ok := constStringOf(info, e); ok {
+					fields[name] = s
+				}
+			}
+		}
+	}
+	if len(fields) > 0 {
+		i.varFields[obj] = fields
+	}
+}
+
+// structFieldName is the name of field n of a (possibly pointer, possibly
+// named) struct type.
+func structFieldName(t types.Type, n int) string {
+	if t == nil {
+		return ""
+	}
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	st, ok := t.Underlying().(*types.Struct)
+	if !ok || n >= st.NumFields() {
+		return ""
+	}
+	return st.Field(n).Name()
+}
+
+// constStringOf is the type checker's answer for a constant string
+// expression, which covers named constants in any package and concatenations
+// of them.
+func constStringOf(info *types.Info, e ast.Expr) (string, bool) {
+	tv, ok := info.Types[e]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(tv.Value), true
 }
 
 // paramTypeAt renders the callee's declared parameter type at position n.
@@ -1135,7 +1318,7 @@ func namedTypeParts(t types.Type) (name, pkgPath string) {
 // constant string value, and the function it names when it's a function
 // value. Using the type checker's constant folding (rather than looking for
 // *ast.BasicLit) means `"POST " + routePrefix` resolves like a literal.
-func argFacts(info *types.Info, e ast.Expr) platform.Arg {
+func (i *Indexer) argFacts(info *types.Info, e ast.Expr) platform.Arg {
 	var a platform.Arg
 	if tv, ok := info.Types[e]; ok {
 		if tv.Value != nil && tv.Value.Kind() == constant.String {
@@ -1143,6 +1326,14 @@ func argFacts(info *types.Info, e ast.Expr) platform.Arg {
 			a.Known = true
 		}
 		a.Type = qualifiedType(tv.Type)
+	}
+	if !a.Known {
+		// Not a constant, but possibly a variable whose starting value is
+		// known — a shared events package names its topics one of these two
+		// ways about as often as it uses a const.
+		if s, ok := i.varString(info, e); ok {
+			a.Value, a.Known, a.Inferred = s, true, true
+		}
 	}
 	switch v := e.(type) {
 	case *ast.Ident:
@@ -1161,7 +1352,7 @@ func argFacts(info *types.Info, e ast.Expr) platform.Arg {
 		// A conversion wrapping the real argument, e.g.
 		// http.Handle("/x", http.HandlerFunc(h)) — look through it.
 		if tv, ok := info.Types[v.Fun]; ok && tv.IsType() && len(v.Args) == 1 {
-			inner := argFacts(info, v.Args[0])
+			inner := i.argFacts(info, v.Args[0])
 			// ...but not for the type. The conversion is what the call site
 			// says the value *is*, and it's the more specific of the two —
 			// http.HandlerFunc, not the bare func type it wraps.

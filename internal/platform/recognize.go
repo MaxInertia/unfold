@@ -40,6 +40,14 @@ type Arg struct {
 	// same rendering. For a variadic parameter it is the element type, since
 	// that's what each argument in that position actually is.
 	ParamType string
+	// Inferred marks a Value that came from a variable's initializer rather
+	// than from constant folding: `var Topic = "orders-v1"`, or a field of a
+	// package-level struct. The string is what the program starts with, and
+	// nothing in this index can see a later assignment — so a binding keyed
+	// off it is `inferred`, not `exact`. The distinction is the whole point of
+	// the confidence badge, and the one case where losing it would matter is
+	// a key that gets reassigned, which is exactly when the answer is wrong.
+	Inferred bool
 }
 
 // Call is one call site, stripped of syntax.
@@ -136,7 +144,7 @@ func HTTPRoutes(c Call) []model.Binding {
 		Site:       c.Site,
 		File:       c.File,
 		Line:       c.Line,
-		Confidence: model.ConfExact,
+		Confidence: keyConfidence(c.Args[0]),
 	}
 	// The handler is the second argument. Naming it is what makes a route
 	// clickable straight into its implementation.
@@ -189,7 +197,7 @@ func PubSub(c Call) []model.Binding {
 		Site:       c.Site,
 		File:       c.File,
 		Line:       c.Line,
-		Confidence: confidence,
+		Confidence: weakest(confidence, keyConfidence(c.Args[argIdx])),
 	}}
 }
 
@@ -230,8 +238,32 @@ func HTTPClientCalls(c Call) []model.Binding {
 		Site:       c.Site,
 		File:       c.File,
 		Line:       c.Line,
-		Confidence: model.ConfExact,
+		Confidence: keyConfidence(c.Args[0]),
 	}}
+}
+
+// keyConfidence is what a binding may claim, given where its key came from.
+// A constant is the literal itself; a variable's initializer is only what the
+// program started with, and an assignment made anywhere else is invisible from
+// here. Each recognizer names the argument it keyed off rather than this being
+// applied to whole calls, because a call can carry both kinds and only the one
+// that became the key affects what the key is worth.
+func keyConfidence(a Arg) model.BindingConfidence {
+	if a.Inferred {
+		return model.ConfInferred
+	}
+	return model.ConfExact
+}
+
+// weakest keeps the more cautious of two claims.
+func weakest(a, b model.BindingConfidence) model.BindingConfidence {
+	if a == model.ConfInferred || b == model.ConfInferred {
+		return model.ConfInferred
+	}
+	if a == model.ConfDeclared || b == model.ConfDeclared {
+		return model.ConfDeclared
+	}
+	return model.ConfExact
 }
 
 // IsMethodPath matches "/package.Service/Method" (and "/Service/Method" for

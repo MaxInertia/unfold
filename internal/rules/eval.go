@@ -268,7 +268,7 @@ func (e *Evaluator) apply(r Rule, c platform.Call) (model.Binding, bool) {
 		label, _ := expandKey(r.Leaf.Label, c, caps, inner)
 		return model.Binding{Key: label, Site: c.Site, File: c.File, Line: c.Line}, true
 	}
-	key, ok := expandKey(r.Emit.Key, c, caps, inner)
+	key, ok, inferredKey := expandKeyDetail(r.Emit.Key, c, caps, inner)
 	if !ok || key == "" {
 		// A key that can't be resolved is skipped rather than guessed at —
 		// the same discipline as an outbound call whose URL is built at
@@ -279,6 +279,13 @@ func (e *Evaluator) apply(r Rule, c platform.Call) (model.Binding, bool) {
 	conf := model.BindingConfidence(r.Emit.Confidence)
 	if conf == "" {
 		conf = model.ConfDeclared
+	}
+	// A key read out of a variable's initializer is what the program starts
+	// with, not what it necessarily uses. The rule's own confidence can't
+	// override that: it describes the shape the author asserted, and this is
+	// about the value, which they never saw.
+	if inferredKey {
+		conf = model.ConfInferred
 	}
 	b := model.Binding{
 		Role:       model.BindingRole(r.Emit.Role),
