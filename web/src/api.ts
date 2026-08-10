@@ -111,8 +111,16 @@ export async function indexRepo(alias: string): Promise<void> {
 // Open the implementation of an outbound edge in whichever workspace repo
 // serves it. Separate from the service view because this is where a lazily
 // indexed repo's Go code actually gets built — it can take seconds.
-export function resolveBinding(kind: string, key: string): Promise<Resolution> {
+// role is the side the *caller* is on, because the far end is a direction
+// rather than a place: an emit resolves to the subscribers, a subscription to
+// the publishers.
+export function resolveBinding(
+  kind: string,
+  key: string,
+  role?: string,
+): Promise<Resolution> {
   const qs = new URLSearchParams({ kind, key });
+  if (role) qs.set("role", role);
   return getJSON<Resolution>(`/api/resolve?${qs.toString()}`);
 }
 

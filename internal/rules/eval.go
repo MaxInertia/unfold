@@ -120,6 +120,11 @@ type LeafDecision struct {
 	// the wrong thing. Without it every leaf was assumed to be gRPC, which is
 	// true of the first one that existed and of nothing else.
 	Kind string
+	// Role is which side of the channel this site is on, and so which way the
+	// boundary leads: an emit to the subscribers, a subscription to the
+	// publishers. Direction was assumed before this, and the assumption held
+	// only because the first leaf was a gRPC call.
+	Role model.BindingRole
 }
 
 // Leaves returns the reading-time classification for call sites, keyed by the
@@ -164,7 +169,7 @@ func (e *Evaluator) Run() []model.Binding {
 					e.leaves[siteLine(c)] = LeafDecision{
 						RuleID: r.ID, Expand: r.Leaf.Expand,
 						Label: r.Leaf.Label, CrossRepo: r.Leaf.CrossRepo,
-						Key: b.Key, Kind: b.Kind,
+						Key: b.Key, Kind: b.Kind, Role: b.Role,
 					}
 				}
 				// Recorded for every match, including the leaf-only rules that

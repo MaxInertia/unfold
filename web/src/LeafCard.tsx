@@ -1,14 +1,20 @@
 import { useEffect, useState } from "react";
 import { fetchBodyByTarget, resolveBinding } from "./api";
-import type { Frame as FrameT, LeafInfo, TargetID } from "./types";
+import type { Endpoint, Frame as FrameT, LeafInfo, TargetID } from "./types";
 
 // The boundary a rule marked, rendered where the call site is.
 //
 // A client fronting another service shouldn't expand into transport plumbing —
 // that's a body about marshalling, not about what happens next. What you
-// actually want is the handler on the other side, so the leaf offers it two
-// ways: open it as a new root, or splice it in where the call is, the way an
+// actually want is the code on the other side, so the leaf offers it two ways:
+// open it as a new root, or splice it in where the call is, the way an
 // ordinary call expands.
+//
+// "The other side" is a direction, not a place. An emit leads to the services
+// that subscribe; a subscription leads to the services that publish. And there
+// can be several of either — a topic with three subscribers has three far
+// ends, and picking one to show would be saying the other two don't receive
+// it. So the card lists what it finds rather than resolving to a winner.
 //
 // Inlining across a network hop makes the trace read as one continuous body
 // when execution actually left the process, so the boundary stays visible even
@@ -36,28 +42,56 @@ export function LeafCard({
   renderFrame: (frame: FrameT) => React.ReactNode;
 }) {
   const [inlined, setInlined] = useState<FrameT | null>(null);
-  const [busy, setBusy] = useState<"open" | "inline" | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [ends, setEnds] = useState<Endpoint[] | null>(null);
 
-  // What the boundary leads to. The path is there when the far service is
-  // already indexed; naming the service alone is the honest fallback, because
-  // finding the function would mean indexing that repo just to draw this bar.
+  // What the far side is called, from this side. The label is the rule
+  // author's, so it already says it; this is for the list beneath.
+  const several = (leaf.ends ?? 0) > 1;
+  // Where the boundary leads when there is exactly one end — the server fills
+  // this in only then, and only when that service is already indexed.
   const destination = leaf.targetPath || leaf.service || "";
 
-  async function far(): Promise<TargetID | null> {
-    const res = await resolveBinding(leaf.kind ?? "grpc.method", leaf.key ?? "");
-    if (res.target) return res.target;
-    if (res.candidates?.length) return res.candidates[0].targetId;
+  async function far(): Promise<Endpoint[]> {
+    const res = await resolveBinding(leaf.kind ?? "grpc.method", leaf.key ?? "", leaf.role);
+    if (res.ends?.length) return res.ends;
+    // An engine that predates Ends still answers with the single-end fields.
+    if (res.target) {
+      return [
+        {
+          repo: res.repo,
+          service: res.service,
+          role: leaf.role === "inbound" ? "outbound" : "inbound",
+          target: res.target,
+          title: res.title,
+          indexed: true,
+        },
+      ];
+    }
+    if (res.candidates?.length) {
+      return [
+        {
+          repo: res.repo,
+          service: res.service,
+          role: leaf.role === "inbound" ? "outbound" : "inbound",
+          target: res.candidates[0].targetId,
+          title: res.candidates[0].label,
+          indexed: true,
+        },
+      ];
+    }
     setError(res.note ?? `${res.service ?? "the other service"} has no linkable implementation`);
-    return null;
+    return [];
   }
 
-  async function openAsRoot() {
-    setBusy("open");
+  async function withEnds<T>(what: string, run: (ends: Endpoint[]) => Promise<T>) {
+    setBusy(what);
     setError(null);
     try {
-      const t = await far();
-      if (t) onOpen(t);
+      const found = ends ?? (await far());
+      setEnds(found);
+      if (found.length) await run(found);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -65,15 +99,17 @@ export function LeafCard({
     }
   }
 
-  async function inline() {
-    setBusy("inline");
+  function openEnd(end: Endpoint) {
+    if (end.target) onOpen(end.target);
+  }
+
+  async function inlineEnd(end: Endpoint) {
+    if (!end.target) return;
+    setBusy(`inline:${end.repo}`);
     setError(null);
     try {
-      const t = await far();
-      if (t) {
-        setInlined(await fetchBodyByTarget(t));
-        onInline();
-      }
+      setInlined(await fetchBodyByTarget(end.target));
+      onInline();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -95,9 +131,9 @@ export function LeafCard({
     let alive = true;
     void (async () => {
       try {
-        const t = await far();
-        if (!t || !alive) return;
-        const body = await fetchBodyByTarget(t);
+        const found = await far();
+        if (!alive || !found.length || !found[0].target) return;
+        const body = await fetchBodyByTarget(found[0].target);
         if (alive) setInlined(body);
       } catch (e) {
         if (alive) setError((e as Error).message);
@@ -114,9 +150,14 @@ export function LeafCard({
     <div className="leaf-card">
       <div className="leaf-bar">
         <span className="leaf-label">{leaf.label || leaf.key || "boundary"}</span>
-        {leaf.crossRepo && (
+        {leaf.crossRepo && !several && (
           <>
-            <button type="button" className="leaf-action" disabled={!!busy} onClick={() => void openAsRoot()}>
+            <button
+              type="button"
+              className="leaf-action"
+              disabled={!!busy}
+              onClick={() => void withEnds("open", async (e) => openEnd(e[0]))}
+            >
               {busy === "open" ? "…" : "open"}
             </button>
             {open ? (
@@ -128,18 +169,29 @@ export function LeafCard({
                 type="button"
                 className="leaf-action"
                 disabled={!!busy}
-                onClick={() => void inline()}
+                onClick={() => void withEnds("inline", (e) => inlineEnd(e[0]))}
               >
-                {busy === "inline" ? "indexing…" : "inline"}
+                {busy ? "indexing…" : "inline"}
               </button>
             )}
           </>
         )}
+        {/* With several ends the buttons move onto the rows: there is no "the"
+            far side to act on, and a card that acted on one of them would be
+            answering a question nobody asked. */}
+        {leaf.crossRepo && several && !ends && (
+          <button
+            type="button"
+            className="leaf-action"
+            disabled={!!busy}
+            onClick={() => void withEnds("list", async () => {})}
+          >
+            {busy ? "indexing…" : `${leaf.ends} services`}
+          </button>
+        )}
         {/* One thing at the end: where this lands. The key isn't repeated —
-            it's in the code the bar is sitting under, and a bar that wrapped to
-            two lines cost more than it explained. Everything else it used to
-            say is a tooltip away. */}
-        {destination && (
+            it's in the code the bar is sitting under. */}
+        {!several && destination && (
           <span
             className="leaf-dest"
             title={[
@@ -155,6 +207,32 @@ export function LeafCard({
         )}
       </div>
       {error && <div className="call-error">{error}</div>}
+      {ends && ends.length > 1 && (
+        <ul className="leaf-ends">
+          {ends.map((end) => (
+            <li key={end.repo} className="leaf-end">
+              <span className="leaf-end-service">{end.service}</span>
+              <span className="leaf-end-title">{end.title || "(not linkable)"}</span>
+              {end.target && (
+                <>
+                  <button type="button" className="leaf-action" onClick={() => openEnd(end)}>
+                    open
+                  </button>
+                  <button
+                    type="button"
+                    className="leaf-action"
+                    disabled={!!busy}
+                    onClick={() => void inlineEnd(end)}
+                  >
+                    {busy === `inline:${end.repo}` ? "…" : "inline"}
+                  </button>
+                </>
+              )}
+              {end.path && <span className="leaf-dest">{end.path}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
       {open && inlined && (
         // inline-child as well, so the spliced body is laid out like every
         // other inline expansion — classic indent mode offsets that class, and

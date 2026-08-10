@@ -558,7 +558,15 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing required query params: kind, key")
 		return
 	}
-	res, err := cr.Resolve(kind, key)
+	// role is which side the caller is on, so the hop knows which way to
+	// look: an emit asks for subscribers, a subscription asks for publishers.
+	// Absent means inbound, which is what every link made before this
+	// parameter existed meant.
+	role := model.BindingRole(q.Get("role"))
+	if role != model.RoleInbound && role != model.RoleOutbound {
+		role = ""
+	}
+	res, err := cr.Resolve(kind, key, role)
 	if err != nil {
 		if errors.Is(err, model.ErrNoWorkspace) {
 			writeError(w, http.StatusNotImplemented, err.Error())

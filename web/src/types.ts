@@ -38,6 +38,13 @@ export interface LeafInfo {
   service?: string;
   targetTitle?: string;
   targetPath?: string; // "<service>/<path within it>:<line>"
+  // Which side of the channel this site is on — an emit leads to subscribers,
+  // a subscribe leads to publishers. Empty means the inbound side is wanted.
+  role?: "inbound" | "outbound";
+  // How many services are on the far side. The fields above describe the only
+  // one when there is exactly one; with several, the card asks for the list
+  // rather than being handed a winner.
+  ends?: number;
 }
 
 export interface Candidate {
@@ -192,6 +199,21 @@ export interface Resolution {
   stale?: boolean;
   note?: string;
   candidates?: Candidate[];
+  // Every service on the far side. The fields above describe ends[0] and stay
+  // for the callers that only ever wanted one — a gRPC method has a single
+  // implementer, which is what made "the far end" look singular.
+  ends?: Endpoint[];
+}
+
+// One end of a platform edge: a service, and the code in it that answers.
+export interface Endpoint {
+  repo: string;
+  service: string;
+  role: BindingRole;
+  target?: TargetID; // the handler, or the function making the call
+  title?: string;
+  path?: string; // "<service>/<path within it>:<line>"
+  indexed: boolean; // false: known to be an end, code not read yet
 }
 
 // The L0 view. Services come from declarations so all are listed; edges need

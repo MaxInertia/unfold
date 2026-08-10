@@ -50,25 +50,26 @@ func TestPubsubEdgeJoinsOnceBothServicesAreIndexed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ServiceView: %v", err)
 	}
-	var found bool
+	served := map[string]string{}
 	for _, b := range sv.Outbound {
-		if b.Kind != "sdk.event" {
-			continue
-		}
-		found = true
-		if b.Key != "foo-happened" {
-			t.Errorf("emit key: got %q, want foo-happened (the ID field of the definition)", b.Key)
-		}
-		if b.ServedByRepo != "subscriber" {
-			t.Errorf("emit is served by %q, want subscriber", b.ServedByRepo)
+		if b.Kind == "sdk.event" {
+			served[b.Key] = b.ServedByRepo
 		}
 	}
-	if !found {
-		t.Fatalf("no sdk.event outbound binding in the publisher (%d outbound)", len(sv.Outbound))
+	// Both events this service publishes, keyed off the ID field of the
+	// definition it passes whole.
+	for _, key := range []string{"foo-happened", "bar-happened"} {
+		if _, ok := served[key]; !ok {
+			t.Errorf("no outbound binding for %s; got %v", key, served)
+			continue
+		}
+		if served[key] != "subscriber" {
+			t.Errorf("%s is served by %q, want subscriber", key, served[key])
+		}
 	}
 
 	// And the hop itself opens the handler in the other repo.
-	res, err := w.Resolve("sdk.event", "foo-happened")
+	res, err := w.Resolve("sdk.event", "foo-happened", model.RoleOutbound)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -127,13 +128,16 @@ func TestEmitLeafOffersTheSubscribersHandler(t *testing.T) {
 	}
 	w.WaitIndexed()
 
-	id, err := w.LookupSymbol("publish")
+	// publishBar, because bar-happened has exactly one subscriber: this test
+	// is about the shape of a boundary with a single far end, and naming one
+	// of several would be the bug the multi-end tests below pin.
+	id, err := w.LookupSymbol("publishBar")
 	if err != nil {
-		t.Fatalf("LookupSymbol(publish): %v", err)
+		t.Fatalf("LookupSymbol(publishBar): %v", err)
 	}
 	fr, err := w.Frame(id)
 	if err != nil {
-		t.Fatalf("Frame(publish): %v", err)
+		t.Fatalf("Frame(publishBar): %v", err)
 	}
 
 	var leaf *model.LeafInfo
@@ -148,8 +152,11 @@ func TestEmitLeafOffersTheSubscribersHandler(t *testing.T) {
 	if !leaf.CrossRepo {
 		t.Error("leaf should offer the far end")
 	}
-	if leaf.Key != "foo-happened" || leaf.Kind != "sdk.event" {
-		t.Fatalf("leaf identifies the far end as %s/%s, want sdk.event/foo-happened", leaf.Kind, leaf.Key)
+	if leaf.Key != "bar-happened" || leaf.Kind != "sdk.event" {
+		t.Fatalf("leaf identifies the far end as %s/%s, want sdk.event/bar-happened", leaf.Kind, leaf.Key)
+	}
+	if leaf.Ends != 1 {
+		t.Errorf("leaf counts %d ends, want 1", leaf.Ends)
 	}
 
 	// A boundary should say where it goes before anyone clicks it, and say it
@@ -157,11 +164,11 @@ func TestEmitLeafOffersTheSubscribersHandler(t *testing.T) {
 	if leaf.Service != "subscriber" {
 		t.Errorf("leaf names service %q, want subscriber", leaf.Service)
 	}
-	if leaf.TargetTitle != "handleFoo" {
-		t.Errorf("leaf names target %q, want handleFoo", leaf.TargetTitle)
+	if leaf.TargetTitle != "handleBar" {
+		t.Errorf("leaf names target %q, want handleBar", leaf.TargetTitle)
 	}
-	if leaf.TargetPath != "subscriber/main.go:11" {
-		t.Errorf("leaf target path %q, want subscriber/main.go:11 — the handler, service-qualified", leaf.TargetPath)
+	if leaf.TargetPath != "subscriber/main.go:10" {
+		t.Errorf("leaf target path %q, want subscriber/main.go:10 — the handler, service-qualified", leaf.TargetPath)
 	}
 	// The frame carries the same, for its own header.
 	if fr.RelPath != "publisher/main.go" {
@@ -170,12 +177,15 @@ func TestEmitLeafOffersTheSubscribersHandler(t *testing.T) {
 
 	// Which is what the UI hands to resolve, and it has to land on the method
 	// the other repo passed to Subscribe.
-	res, err := w.Resolve(leaf.Kind, leaf.Key)
+	res, err := w.Resolve(leaf.Kind, leaf.Key, leaf.Role)
 	if err != nil {
 		t.Fatalf("Resolve(%s, %s): %v", leaf.Kind, leaf.Key, err)
 	}
-	if res.Title != "handleFoo" {
-		t.Errorf("the hop lands on %q, want handleFoo", res.Title)
+	if res.Title != "handleBar" {
+		t.Errorf("the hop lands on %q, want handleBar", res.Title)
+	}
+	if len(res.Ends) != 1 || res.Ends[0].Role != model.RoleInbound {
+		t.Errorf("ends: %+v; want one inbound end", res.Ends)
 	}
 	if _, err := w.Frame(res.Target); err != nil {
 		t.Errorf("the resolved target must render inline: %v", err)
@@ -203,21 +213,23 @@ func TestSubscribeHandlerIsExpandableInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Frame(consume): %v", err)
 	}
-	var ref *model.CallSite
-	for n, c := range fr.Calls {
-		if c.Kind == model.KindRef {
-			ref = &fr.Calls[n]
+	opened := map[string]bool{}
+	for _, c := range fr.Calls {
+		if c.Kind != model.KindRef {
+			continue
 		}
+		body, err := w.FrameForCall(c.ID, 0)
+		if err != nil {
+			t.Errorf("FrameForCall(%s): %v", c.DisplayName, err)
+			continue
+		}
+		opened[body.Title] = true
 	}
-	if ref == nil {
-		t.Fatalf("handleFoo isn't a site in consume (%+v)", fr.Calls)
-	}
-	body, err := w.FrameForCall(ref.ID, 0)
-	if err != nil {
-		t.Fatalf("FrameForCall(handler ref): %v", err)
-	}
-	if body.Title != "handleFoo" {
-		t.Errorf("expanded %q, want handleFoo", body.Title)
+	// Every handler this service registers, each expandable where it is named.
+	for _, want := range []string{"handleFoo", "handleBar"} {
+		if !opened[want] {
+			t.Errorf("%s is not expandable from its Subscribe site; opened %v", want, opened)
+		}
 	}
 }
 
@@ -256,7 +268,7 @@ func TestPubsubJoinsAcrossTopicAndSubscriptionKinds(t *testing.T) {
 
 	// The hop the leaf's "inline" button makes, with the publishing side's
 	// kind — which is the only kind that side knows.
-	res, err := w.Resolve("pubsub.topic", "foo-happened")
+	res, err := w.Resolve("pubsub.topic", "foo-happened", model.RoleOutbound)
 	if err != nil {
 		t.Fatalf("Resolve(pubsub.topic): %v", err)
 	}
@@ -301,7 +313,7 @@ func TestUnservedKeyErrorAdmitsIndexing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	_, err = w.Resolve("sdk.event", "never-emitted")
+	_, err = w.Resolve("sdk.event", "never-emitted", model.RoleOutbound)
 	if err == nil {
 		t.Fatal("expected an error for a key nothing serves")
 	}

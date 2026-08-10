@@ -159,14 +159,14 @@ func (r *Reloadable) SetProtoRoot(dir string) error {
 
 // Resolve forwards the cross-repo hop to the current engine when it
 // federates repositories.
-func (r *Reloadable) Resolve(kind, key string) (*model.Resolution, error) {
+func (r *Reloadable) Resolve(kind, key string, role model.BindingRole) (*model.Resolution, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	cr, ok := r.cur.(model.CrossRepoResolver)
 	if !ok {
 		return nil, model.ErrNoWorkspace
 	}
-	return cr.Resolve(kind, key)
+	return cr.Resolve(kind, key, role)
 }
 
 // PlatformView forwards the workspace-level view when one is open.

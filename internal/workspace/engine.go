@@ -251,21 +251,31 @@ func (w *Workspace) repoRelative(file string) string {
 	return ""
 }
 
-// describeFarEnd fills in what a cross-repo leaf points at, so the boundary can
-// say where it goes before anyone clicks it.
+// describeFarEnd fills in what a cross-repo leaf points at, so the boundary
+// can say where it goes before anyone clicks it.
 //
-// The service is free: it comes from the same join the hop itself uses. The
+// Direction comes from the leaf's own role: an emit leads to the subscribers,
+// a subscription to the publishers. Ends counts them, because a topic can have
+// several of either — with more than one the card asks for the list rather
+// than being handed a winner, and the single-end fields stay empty rather than
+// naming one of several as though it were the answer.
+//
+// The services are free: they come from the same join the hop itself uses. The
 // function is not — it lives in the other repo's index — so it is filled only
-// if that repo is already indexed. Indexing it here would mean opening a frame
+// if that repo is already indexed. Indexing it here would mean drawing a frame
 // silently paying for a whole other repository.
 func (w *Workspace) describeFarEnd(leaf *model.LeafInfo) {
 	if leaf == nil || !leaf.CrossRepo || leaf.Key == "" {
 		return
 	}
-	alias, ok := w.serverOf(leaf.Kind, leaf.Key)
-	if !ok {
+	want := oppositeOf(leaf.Role)
+	aliases := w.endsOf(leaf.Kind, leaf.Key, want)
+	leaf.Ends = len(aliases)
+	if len(aliases) != 1 {
 		return
 	}
+
+	alias := aliases[0]
 	r := w.repos[alias]
 	leaf.Service = r.name
 
@@ -279,18 +289,27 @@ func (w *Workspace) describeFarEnd(leaf *model.LeafInfo) {
 	if err != nil {
 		return
 	}
-	for _, b := range sv.Inbound {
+	bindings := sv.Inbound
+	if want == model.RoleOutbound {
+		bindings = sv.Outbound
+	}
+	for _, b := range bindings {
 		if channelOf(b.Kind) != channelOf(leaf.Kind) || b.Key != leaf.Key {
 			continue
 		}
-		leaf.TargetTitle = b.TargetTitle
-		// The handler's own definition, not the registration that named it:
-		// the registration is where the subscription is declared, and what
-		// this boundary leads to is the function that runs. Falls back to the
-		// registration when the handler isn't an indexed function, which is
-		// the same thing the hop itself would land on.
-		file, line := b.File, b.Line
-		if f, l, ok := idx.Position(b.Target); ok {
+		// What this end *is* depends on the side: an inbound end hands off to
+		// a handler, an outbound end is the call itself, so the function
+		// containing it is what there is to name.
+		target, title, file, line := b.Target, b.TargetTitle, b.File, b.Line
+		if want == model.RoleOutbound {
+			target, title = b.Site, b.SiteTitle
+		}
+		leaf.TargetTitle = title
+		// The definition, not the registration that named it: what the
+		// boundary leads to is the function that runs. Falls back to the
+		// registration when it isn't an indexed function, which is what the
+		// hop itself would land on too.
+		if f, l, ok := idx.Position(target); ok {
 			file, line = f, l
 		}
 		if rel := w.repoRelative(file); rel != "" {
@@ -304,15 +323,15 @@ func (w *Workspace) describeFarEnd(leaf *model.LeafInfo) {
 // cross-repo join that depends on it.
 func (w *Workspace) SetProtoRoot(dir string) error {
 	w.protoRoot = dir
-	w.servedMu.Lock()
-	w.servedBy = map[string]string{}
-	w.servedMu.Unlock()
+	w.channelMu.Lock()
+	w.channels = map[string]*channelEnds{}
+	w.channelMu.Unlock()
 	// Declarations first, then the code-derived half re-published from the
 	// repos already indexed: rebuilding only the declared half would drop
 	// every subscription found so far, and the order is what keeps a proto's
 	// claim ahead of an indexed body's.
 	w.readDeclarations()
-	w.reserveIndexed()
+	w.republishIndexed()
 	var firstErr error
 	for _, alias := range w.order {
 		r := w.repos[alias]
@@ -412,64 +431,109 @@ func (w *Workspace) qualifyCandidates(alias string, in []model.Candidate) []mode
 	return out
 }
 
-// Resolve opens the implementation of a declared key in whichever repo serves
-// it, indexing that repo if this is the first visit. This is the cross-repo
-// hop: the key was matched from declarations alone, and only now — when the
-// user actually asked to go there — is the Go index paid for.
-func (w *Workspace) Resolve(kind, key string) (*model.Resolution, error) {
-	alias, ok := w.serverOf(kind, key)
-	if !ok {
-		// Two things to be careful about in this sentence. "Serves" reads as an
-		// accusation at the publisher, which is the side asking — what's
+// Resolve opens what is on the *other* side of a key from the caller: an emit
+// resolves to the subscribers, a subscription to the publishers. role is the
+// side the caller is standing on; empty means the inbound side is wanted,
+// which is what every link made before leaves carried a role meant.
+//
+// The repo is indexed here if this is the first visit: the key was matched
+// from declarations alone, and only now — when the user actually asked to go
+// there — is the Go index paid for.
+func (w *Workspace) Resolve(kind, key string, role model.BindingRole) (*model.Resolution, error) {
+	want := oppositeOf(role)
+	aliases := w.endsOf(kind, key, want)
+	if len(aliases) == 0 {
+		// Careful with this sentence twice over. "Serves" read as an
+		// accusation at the publisher, which is the side asking — what is
 		// missing is whoever is on the *other* end. And a key nothing declares
 		// is only known once its service has been indexed, so "nobody handles
 		// this" and "nobody has opened the service that does" look identical
-		// from here; claiming the first would be claiming more than is known.
-		return nil, fmt.Errorf("nothing in this workspace handles the far end of %s %q "+
-			"— a subscriber is only known once its service is indexed", kind, key)
+		// from here; claiming the first claims more than is known.
+		return nil, fmt.Errorf("nothing in this workspace is the %s end of %s %q "+
+			"— an end is only known once its service is indexed", want, kind, key)
 	}
+
+	res := &model.Resolution{}
+	for _, alias := range aliases {
+		end, cands, stale, err := w.endpoint(alias, kind, key, want)
+		if err != nil {
+			return nil, err
+		}
+		res.Ends = append(res.Ends, end)
+		// The single-answer fields describe the first end. They exist because
+		// a gRPC method has exactly one implementer, which made "the far end"
+		// look singular; a caller that wants the whole picture reads Ends.
+		if len(res.Ends) == 1 {
+			res.Repo, res.Service = end.Repo, end.Service
+			res.Target, res.Title = end.Target, end.Title
+			res.Candidates, res.Stale = cands, stale
+			if end.Target == "" && len(cands) == 0 {
+				res.Note = fmt.Sprintf("%s is an end of %s but unfold could not identify the code",
+					end.Service, key)
+			}
+		}
+	}
+	return res, nil
+}
+
+// endpoint describes one service's side of a key, indexing it if needed.
+func (w *Workspace) endpoint(alias, kind, key string, role model.BindingRole) (
+	model.Endpoint, []model.Candidate, bool, error,
+) {
 	r := w.repos[alias]
+	end := model.Endpoint{Repo: alias, Service: r.name, Role: role}
 	if err := w.load(alias); err != nil {
-		return nil, err
+		return end, nil, false, err
 	}
+	end.Indexed = true
+
 	r.mu.Lock()
 	idx := r.idx
 	r.mu.Unlock()
-
-	res := &model.Resolution{Repo: alias, Service: r.name}
 	sv, err := idx.ServiceView("")
 	if err != nil {
-		return nil, err
+		return end, nil, false, err
 	}
-	for _, b := range sv.Inbound {
+	bindings := sv.Inbound
+	if role == model.RoleOutbound {
+		bindings = sv.Outbound
+	}
+	var candidates []model.Candidate
+	var stale bool
+	for _, b := range bindings {
 		// Same normalization as the lookup that got us here: the caller asks
 		// with the kind its own side uses, and the answering end's kind is the
 		// other half of the channel.
 		if channelOf(b.Kind) != channelOf(kind) || b.Key != key {
 			continue
 		}
-		res.Target = model.TargetID(w.qualify(alias, string(b.Target)))
-		res.Title = b.TargetTitle
-		res.Stale = b.Stale
-		// With several implementations there's no single answer, so hand
-		// them all back and let the caller choose rather than silently
-		// picking one.
+		// Which code answers depends on the side. An inbound end hands off to
+		// a handler; an outbound end *is* the call, so the function containing
+		// it is what there is to open.
+		target, title, file, line := b.Target, b.TargetTitle, b.File, b.Line
+		if role == model.RoleOutbound {
+			target, title = b.Site, b.SiteTitle
+		}
+		end.Target = model.TargetID(w.qualify(alias, string(target)))
+		end.Title = title
+		stale = b.Stale
 		for _, c := range b.Candidates {
-			res.Candidates = append(res.Candidates, model.Candidate{
+			candidates = append(candidates, model.Candidate{
 				TargetID: model.TargetID(w.qualify(alias, string(c.TargetID))),
 				Label:    c.Label,
 			})
 		}
+		// The definition, not the registration: what this end *is* is the
+		// function that runs, or the one that makes the call.
+		if f, l, ok := idx.Position(target); ok {
+			file, line = f, l
+		}
+		if rel := w.repoRelative(file); rel != "" {
+			end.Path = fmt.Sprintf("%s:%d", rel, line)
+		}
 		break
 	}
-	switch {
-	case res.Target != "" || len(res.Candidates) > 0:
-	default:
-		// The serving repo is known, but its implementation isn't linkable —
-		// say which repo to look in rather than failing outright.
-		res.Note = fmt.Sprintf("%s declares %s but unfold could not identify its implementation", r.name, key)
-	}
-	return res, nil
+	return end, candidates, stale, nil
 }
 
 // PlatformView is the L0 view: every service in the workspace, and the calls
@@ -556,18 +620,23 @@ func (w *Workspace) PlatformView(anchor model.TargetID) (*model.PlatformView, er
 			}
 		}
 		for _, b := range sv.Outbound {
-			to, ok := w.serverOf(b.Kind, b.Key)
-			if !ok || to == alias {
-				continue // nothing here serves it, or it's a self-call
+			// Every service on the other side, not the first one. A gRPC
+			// method has one implementer so the singular held; a topic can
+			// have five subscribers, and drawing one edge would have said the
+			// other four don't receive it.
+			for _, to := range w.endsOf(b.Kind, b.Key, model.RoleInbound) {
+				if to == alias {
+					continue // a service publishing to itself is not an edge
+				}
+				k := [3]string{alias, to, b.Kind}
+				grouped[k] = append(grouped[k], model.PlatformCall{
+					Key:       b.Key,
+					Site:      model.TargetID(w.qualify(alias, string(b.Site))),
+					SiteTitle: b.SiteTitle,
+					File:      b.File,
+					Line:      b.Line,
+				})
 			}
-			k := [3]string{alias, to, b.Kind}
-			grouped[k] = append(grouped[k], model.PlatformCall{
-				Key:       b.Key,
-				Site:      model.TargetID(w.qualify(alias, string(b.Site))),
-				SiteTitle: b.SiteTitle,
-				File:      b.File,
-				Line:      b.Line,
-			})
 		}
 	}
 

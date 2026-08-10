@@ -148,6 +148,15 @@ type LeafInfo struct {
 	Service     string `json:"service,omitempty"`
 	TargetTitle string `json:"targetTitle,omitempty"`
 	TargetPath  string `json:"targetPath,omitempty"`
+	// Role is which side of the channel *this* site is on, which is what says
+	// which side to go looking for: an emit leads to subscribers, a subscribe
+	// leads to publishers. Without it the direction was assumed, and the
+	// assumption only held because the first leaf was a gRPC call.
+	Role BindingRole `json:"role,omitempty"`
+	// Ends is how many services are on the far side. The fields above
+	// describe the only one when there is exactly one; with several, the card
+	// asks for the list rather than picking a winner.
+	Ends int `json:"ends,omitempty"`
 	// CrossRepo offers the implementation in another repository: navigate to
 	// it, or splice it in the way an ordinary call expands.
 	CrossRepo bool `json:"crossRepo,omitempty"`
@@ -487,6 +496,33 @@ type Resolution struct {
 	// Candidates is set instead of Target when the serving repo has several
 	// implementations of the key and none is unambiguous.
 	Candidates []Candidate `json:"candidates,omitempty"`
+	// Ends is every service on the far side of this key, in a fixed order.
+	// A topic may have several subscribers and several publishers — the
+	// single-answer fields above describe Ends[0] and exist because a gRPC
+	// method has exactly one implementer, which made "the far end" look
+	// singular for as long as gRPC was the only case.
+	Ends []Endpoint `json:"ends,omitempty"`
+}
+
+// Endpoint is one end of a platform edge: a service, and the code in it that
+// answers for the key.
+type Endpoint struct {
+	Repo    string      `json:"repo"`
+	Service string      `json:"service"`
+	Role    BindingRole `json:"role"`
+	// Target is the function to open: a handler for an inbound end, the
+	// function containing the call for an outbound one. Empty when the
+	// service is known but its code has not been read.
+	Target TargetID `json:"target,omitempty"`
+	Title  string   `json:"title,omitempty"`
+	// Path is "<service>/<path within it>:<line>", so a location says which
+	// service it is in.
+	Path string `json:"path,omitempty"`
+	// Indexed is false when this service is known to be an end of the key but
+	// its Go code hasn't been indexed, so there is nothing to open yet. Only
+	// possible for a declared end; a code-derived one is known *because* the
+	// code was read.
+	Indexed bool `json:"indexed"`
 }
 
 // PlatformView is the L0 picture: every service in the workspace and the
@@ -572,8 +608,12 @@ func HasWorkspace(e Engine) bool {
 }
 
 // CrossRepoResolver is implemented by engines that federate repositories.
+//
+// role is the side the caller is standing on, because "the far end" is a
+// direction, not a place: an emit resolves to the subscribers, a subscription
+// to the publishers. An empty role asks for the inbound side.
 type CrossRepoResolver interface {
-	Resolve(kind, key string) (*Resolution, error)
+	Resolve(kind, key string, role BindingRole) (*Resolution, error)
 }
 
 // ServiceSearcher is implemented by engines that can bias search toward one

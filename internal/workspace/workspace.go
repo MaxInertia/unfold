@@ -92,17 +92,23 @@ type Workspace struct {
 	// rulePaths are the shared recognizer files, applied to every repo.
 	rulePaths []string
 
-	// servedBy maps a key ("<kind>\x00<key>") to the alias serving it — the
-	// cross-repo join. It fills from two sources: declarations, which need no
-	// Go index at all and are read for the whole workspace up front, and each
-	// repo's own inbound bindings, which arrive as that repo is indexed
-	// because nothing declares a subscription.
+	// channels maps a channel key ("<channel>\x00<key>") to the services on
+	// each side of it — the cross-repo join. It fills from two sources:
+	// declarations, which need no Go index at all and are read for the whole
+	// workspace up front, and each repo's own bindings, which arrive as that
+	// repo is indexed because nothing declares a subscription or a publish.
+	//
+	// Both sides, and a set on each, because a topic is not a gRPC method: it
+	// can have several subscribers and several publishers, and a subscriber
+	// wants to know who emits as much as a publisher wants to know who
+	// listens. One repo per key answered exactly one of those questions and
+	// silently dropped every end after the first.
 	//
 	// Guarded, unlike the rest of the workspace's immutable-after-Open state:
-	// background loads run two at a time and each one publishes what its repo
-	// serves, while readers are answering platform queries throughout.
-	servedMu sync.RWMutex
-	servedBy map[string]string
+	// background loads run two at a time and each publishes what its repo is
+	// an end of, while readers answer platform queries throughout.
+	channelMu sync.RWMutex
+	channels  map[string]*channelEnds
 
 	// bg tracks the background eager load, so WaitIndexed can join it.
 	bg sync.WaitGroup
@@ -193,7 +199,7 @@ func Open(dirs []string, primaryDir, protoRoot string, mode Mode) (*Workspace, e
 		mode:      mode,
 		protoRoot: protoRoot,
 		rulePaths: RulePaths,
-		servedBy:  map[string]string{},
+		channels:  map[string]*channelEnds{},
 	}
 	primaryAbs, _ := filepath.Abs(primaryDir)
 	for _, d := range dirs {
@@ -360,7 +366,9 @@ func (w *Workspace) readDeclarations() {
 			if m.ExcludedFromSDK {
 				continue // exists, but no other service can call it
 			}
-			w.serve(declKey("grpc.method", m.FullName), alias)
+			// A proto says this service *implements* the method: the inbound
+			// end, known without reading any Go.
+			w.publish("grpc.method", m.FullName, alias, model.RoleInbound)
 		}
 	}
 }
@@ -462,37 +470,43 @@ func (w *Workspace) load(alias string) error {
 	if sv, err := idx.ServiceView(""); err == nil {
 		fmt.Fprintf(os.Stderr, "unfold: indexed %s in %s — %d inbound, %d outbound (%d declared rpc)\n",
 			r.name, took.Round(time.Millisecond), len(sv.Inbound), len(sv.Outbound), len(r.methods))
-		w.serveInbound(alias, sv)
+		w.publishBindings(alias, sv)
 	}
 	return nil
 }
 
-// serveInbound registers what this repo serves according to its *code*: a
-// subscription, a route, anything a recognizer found on the inbound side.
+// channelEnds are the services on each side of one channel key.
+type channelEnds struct {
+	inbound  []string
+	outbound []string
+}
+
+// publishBindings registers which sides of which channels this repo is on,
+// according to its *code*.
 //
 // Declarations can't answer this. A proto file names the gRPC methods a
 // service implements without indexing it, which is what makes the cross-repo
 // gRPC join cheap — but nothing declares that a service subscribes to a topic,
-// so a pubsub edge can only come from the subscriber's own body. That is why
-// this half of servedBy fills in as repos are indexed rather than up front:
-// the alternative is indexing the whole workspace before showing anything,
-// which is the startup cost that was deliberately removed.
+// or that it publishes to one, so a pubsub edge can only come from the two
+// bodies at its ends. That is why this half fills in as repos are indexed
+// rather than up front: the alternative is indexing the whole workspace before
+// showing anything, which is the startup cost that was deliberately removed.
 //
-// The consequence to keep in mind: a platform edge into a service nobody has
-// opened yet isn't drawn. In the case this exists for — both ends already
-// indexed — it is drawn as soon as the subscriber is.
-func (w *Workspace) serveInbound(alias string, sv *model.ServiceView) {
+// The consequence to keep in mind: an end in a service nobody has opened yet
+// isn't known. In the case this exists for — both ends already indexed — it is
+// known as soon as they are.
+func (w *Workspace) publishBindings(alias string, sv *model.ServiceView) {
 	for _, b := range sv.Inbound {
-		if b.Key == "" {
-			continue
-		}
-		w.serve(declKey(b.Kind, b.Key), alias)
+		w.publish(b.Kind, b.Key, alias, model.RoleInbound)
+	}
+	for _, b := range sv.Outbound {
+		w.publish(b.Kind, b.Key, alias, model.RoleOutbound)
 	}
 }
 
-// reserveIndexed re-publishes what every already-indexed repo serves, for a
-// rebuild of the join that would otherwise keep only the declared half.
-func (w *Workspace) reserveIndexed() {
+// republishIndexed re-registers every already-indexed repo, for a rebuild of
+// the join that would otherwise keep only the declared half.
+func (w *Workspace) republishIndexed() {
 	for _, alias := range w.order {
 		r := w.repos[alias]
 		r.mu.Lock()
@@ -502,31 +516,76 @@ func (w *Workspace) reserveIndexed() {
 			continue
 		}
 		if sv, err := idx.ServiceView(""); err == nil {
-			w.serveInbound(alias, sv)
+			w.publishBindings(alias, sv)
 		}
 	}
 }
 
-// serve records that alias serves a key, without displacing an existing
-// answer. Declarations are read before any code is indexed and are the
-// authoritative half — a proto says a service *is* the implementation, where
-// an indexed body says only that this is where we found one — so the first
-// answer stands and a second service claiming the same key doesn't silently
-// steal the edge.
-func (w *Workspace) serve(key, alias string) {
-	w.servedMu.Lock()
-	defer w.servedMu.Unlock()
-	if _, taken := w.servedBy[key]; !taken {
-		w.servedBy[key] = alias
+// publish records that alias is on one side of a channel. Idempotent: a repo
+// that emits to the same topic from five call sites is one publisher.
+func (w *Workspace) publish(kind, key, alias string, role model.BindingRole) {
+	if key == "" {
+		return
 	}
+	w.channelMu.Lock()
+	defer w.channelMu.Unlock()
+	k := declKey(kind, key)
+	ends := w.channels[k]
+	if ends == nil {
+		ends = &channelEnds{}
+		w.channels[k] = ends
+	}
+	side := &ends.inbound
+	if role == model.RoleOutbound {
+		side = &ends.outbound
+	}
+	for _, a := range *side {
+		if a == alias {
+			return
+		}
+	}
+	*side = append(*side, alias)
 }
 
-// serverOf reports which repo serves a key.
+// endsOf reports the services on one side of a channel key, in a fixed order.
+// Sorted rather than insertion-ordered: insertion order is whichever
+// background load finished first, and a list that reshuffles between runs is
+// one nobody can talk about.
+func (w *Workspace) endsOf(kind, key string, role model.BindingRole) []string {
+	w.channelMu.RLock()
+	defer w.channelMu.RUnlock()
+	ends := w.channels[declKey(kind, key)]
+	if ends == nil {
+		return nil
+	}
+	side := ends.inbound
+	if role == model.RoleOutbound {
+		side = ends.outbound
+	}
+	out := append([]string(nil), side...)
+	sort.Strings(out)
+	return out
+}
+
+// serverOf reports the first service on the inbound side of a key, for the
+// surfaces with room to name one.
 func (w *Workspace) serverOf(kind, key string) (string, bool) {
-	w.servedMu.RLock()
-	defer w.servedMu.RUnlock()
-	alias, ok := w.servedBy[declKey(kind, key)]
-	return alias, ok
+	ends := w.endsOf(kind, key, model.RoleInbound)
+	if len(ends) == 0 {
+		return "", false
+	}
+	return ends[0], true
+}
+
+// oppositeOf is the side to go looking for, given the side you are standing
+// on: an emit leads to subscribers, a subscribe leads to publishers. An empty
+// role means the caller didn't say — every link made before leaves carried one
+// — and the old behaviour was to look inbound.
+func oppositeOf(role model.BindingRole) model.BindingRole {
+	if role == model.RoleInbound {
+		return model.RoleOutbound
+	}
+	return model.RoleInbound
 }
 
 // engineFor resolves a namespaced id to its repo's engine, loading it if

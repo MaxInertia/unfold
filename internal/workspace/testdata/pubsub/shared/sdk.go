@@ -13,6 +13,13 @@ var FooEventDefn = EventDefinition{
 	Description: "a foo happened",
 }
 
+// Bar has exactly one publisher and one subscriber, so the singular case stays
+// covered alongside the one with several of each.
+var BarEventDefn = EventDefinition{
+	ID:          "bar-happened",
+	Description: "a bar happened",
+}
+
 type Client struct{}
 
 func (c *Client) Emit(def EventDefinition, payload []byte) error { return nil }

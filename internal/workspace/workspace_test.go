@@ -96,7 +96,7 @@ func TestOutboundResolvesToServingRepo(t *testing.T) {
 // space, which Frame must then be able to open.
 func TestResolveOpensTheOtherRepo(t *testing.T) {
 	w := open(t, ModeEager)
-	res, err := w.Resolve("grpc.method", "conversation.v1.ConversationService/GetConversation")
+	res, err := w.Resolve("grpc.method", "conversation.v1.ConversationService/GetConversation", model.RoleOutbound)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestResolveOpensTheOtherRepo(t *testing.T) {
 
 func TestResolveUnknownKey(t *testing.T) {
 	w := open(t, ModeEager)
-	if _, err := w.Resolve("grpc.method", "nope.v1.Nope/Nope"); err == nil {
+	if _, err := w.Resolve("grpc.method", "nope.v1.Nope/Nope", model.RoleOutbound); err == nil {
 		t.Error("expected an error for a key no repo serves")
 	}
 }
@@ -184,7 +184,7 @@ func TestLazyDefersIndexingUntilResolve(t *testing.T) {
 		t.Error("naming the serving service must not have cost a Go index")
 	}
 
-	if _, err := w.Resolve("grpc.method", "conversation.v1.ConversationService/GetConversation"); err != nil {
+	if _, err := w.Resolve("grpc.method", "conversation.v1.ConversationService/GetConversation", model.RoleOutbound); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if !indexed("conversation") {
