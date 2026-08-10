@@ -85,11 +85,14 @@ function CallerNode({ usage, chain }: { usage: Usage; chain: Usage[] }) {
   const store = useViewStore();
   const [open, setOpen] = useState(false);
   const nextChain = [...chain, usage];
-  const isRef = !usage.callId;
-  // A value reference somewhere between the focused symbol and this node:
-  // splicing stops at that link, so loading this chain yields a partial view
-  // (the focused symbol itself won't be in it).
-  const throughRef = chain.some((u) => !u.callId);
+  // Two different questions, which used to have one answer. Whether this link
+  // is a reference is about what the code does; whether it can be spliced is
+  // about whether the engine gave the reference a site. The Go engine now
+  // does, so a ref splices like anything else — the TS engine doesn't yet,
+  // and that is what still truncates a chain.
+  const isRef = usage.kind === "ref";
+  const unsplicable = !usage.callId;
+  const throughUnsplicable = chain.some((u) => !u.callId);
 
   // Load the chain pre-unfolded: innermost is the focused symbol's current
   // subtree, then each chain link wraps it at its call site.
@@ -100,11 +103,13 @@ function CallerNode({ usage, chain }: { usage: Usage; chain: Usage[] }) {
     store.setView(usage.caller, tree);
   }
 
-  const labelTitle = isRef
-    ? "value reference, not a call — clicking opens this function bare"
-    : throughRef
-      ? "this chain passes through a value reference — loads only the links above it (the focused function can't be spliced through a ref)"
-      : "load this chain as one pre-unfolded view";
+  const labelTitle = unsplicable
+    ? "value reference with no site to expand from — clicking opens this function bare"
+    : throughUnsplicable
+      ? "this chain passes through a reference that can't be expanded — loads only the links above it"
+      : isRef
+        ? "value reference, not a call — loads this chain with the function expanded where it's referenced"
+        : "load this chain as one pre-unfolded view";
 
   return (
     <li className={`tree-node tree-node--${usage.kind}`}>
@@ -127,10 +132,10 @@ function CallerNode({ usage, chain }: { usage: Usage; chain: Usage[] }) {
             {kindLabel(usage.kind)}
           </span>
         )}
-        {throughRef && (
+        {throughUnsplicable && (
           <span
             className="tree-kind tree-kind--partial"
-            title="loading from here gives a partial chain — a value reference below this node breaks the splice"
+            title="loading from here gives a partial chain — a reference below this node has no site to expand from, which breaks the splice"
           >
             partial
           </span>

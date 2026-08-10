@@ -454,7 +454,9 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const chainIds = useMemo(() => new Set([...ancestors, frame.id]), [ancestors, frame.id]);
 
   function isRecursive(call: CallSite): boolean {
-    if (call.kind === "direct") return !!call.targetId && chainIds.has(call.targetId);
+    if (call.kind === "direct" || call.kind === "ref") {
+      return !!call.targetId && chainIds.has(call.targetId);
+    }
     if (call.kind === "interface") {
       return (call.candidates ?? []).some((c) => chainIds.has(c.targetId));
     }
@@ -462,21 +464,24 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   }
 
   function isExpandableCall(call: CallSite): boolean {
-    if (call.kind === "direct") return !!call.targetId;
+    if (call.kind === "direct" || call.kind === "ref") return !!call.targetId;
     if (call.kind === "interface") return (call.candidates?.length ?? 0) > 0;
     return false; // indirect never; fanout has its own receiver semantics
   }
 
   // "+1 level": expand every project call in this frame that isn't already
-  // expanded — skipping recursive ones (they'd re-open an ancestor) and
-  // external ones (a trace shouldn't drown in stdlib/dependency bodies).
-  // Both stay individually clickable.
+  // expanded — skipping recursive ones (they'd re-open an ancestor), external
+  // ones (a trace shouldn't drown in stdlib/dependency bodies), and value
+  // references (nothing runs there, so opening them in bulk would pad the
+  // trace with bodies that execution never reaches from here). All three stay
+  // individually clickable.
   const expandableNow = useMemo(
     () =>
       frame.calls
         .filter(
           (c) =>
             isExpandableCall(c) &&
+            c.kind !== "ref" &&
             !c.external &&
             !isRecursive(c) &&
             !slice.expansions[c.id],
@@ -501,7 +506,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     }
     if (call.kind === "indirect") return;
     if (call.kind === "interface" && (call.candidates?.length ?? 0) === 0) return;
-    if (call.kind === "direct" && !call.targetId) return;
+    if ((call.kind === "direct" || call.kind === "ref") && !call.targetId) return;
 
     if (slice.expansions[call.id]) {
       store.collapse(path, call.id);
@@ -603,6 +608,15 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             aria-label="launched as a goroutine"
           >
             ⚡
+          </span>
+        )}
+        {call.kind === "ref" && (
+          <span
+            className="ref-badge"
+            title="named here as a value, not called — expand to read it, but execution doesn't arrive here"
+            aria-label="value reference, not a call"
+          >
+            ⤳
           </span>
         )}
         {recursive && (

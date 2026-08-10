@@ -106,6 +106,7 @@ const (
 	KindDirect    = model.KindDirect
 	KindInterface = model.KindInterface
 	KindIndirect  = model.KindIndirect
+	KindRef       = model.KindRef
 )
 
 // Indexer implements model.Engine, and the optional platform half of it.
@@ -485,7 +486,28 @@ func (i *Indexer) Load(dir, pattern string) error {
 				}
 				tid := TargetID(obj.FullName())
 				if _, known := i.funcs[tid]; known {
+					// A reference is a site too. Nothing is invoked here, but
+					// the function it names has a body, and "what does that
+					// do" is the same question as at a call — so it gets a
+					// CallID and joins fi.calls, which is what makes it
+					// expandable inline and splice-able from the callers list.
+					// Keyed like every other site, by the name token's offset:
+					// the ident is never a callee (callNames excludes those),
+					// so it cannot collide with a call's id.
+					pos := i.fset.Position(node.Pos())
+					ci := &callInfo{
+						id:          CallID(fmt.Sprintf("%s:%d", pos.Filename, pos.Offset)),
+						parent:      fi.id,
+						kind:        KindRef,
+						target:      tid,
+						displayName: obj.Name(),
+						pos:         node.Pos(),
+						end:         node.End(),
+					}
+					fi.calls = append(fi.calls, ci)
+					i.callsByID[ci.id] = ci
 					i.usagesByTarget[tid] = append(i.usagesByTarget[tid], &usageInfo{
+						call:   ci,
 						parent: fi.id,
 						kind:   model.UsageRef,
 						pos:    node.Pos(),
@@ -527,17 +549,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	// Titles for binding endpoints, resolved once the whole function set is
 	// known (a route registered in one package can hand off to a handler
 	// defined in another, so this can't be done during the walk).
-	for n := range i.bindings {
-		b := &i.bindings[n]
-		if fi := i.funcs[b.Target]; fi != nil {
-			b.TargetTitle = fi.title
-		} else {
-			b.Target = "" // handler isn't an indexed function; don't offer a dead link
-		}
-		if fi := i.funcs[b.Site]; fi != nil {
-			b.SiteTitle = fi.title
-		}
-	}
+	i.titleEndpoints(i.bindings)
 	// Declared surface is folded in after the code-derived bindings, so the
 	// publicRoutes cross-check can see what the code actually registered.
 	i.applyVisibility()
@@ -559,6 +571,11 @@ func (i *Indexer) Load(dir, pattern string) error {
 	// outbound edge can't claim a call the service never makes, which is the
 	// filter the gRPC pass had to learn.
 	ruleOut, ruleUnreachable := i.filterReachable(ev.Run())
+	// Titled here rather than with the rest: the pass above runs before the
+	// evaluator has produced anything, so a configured rule's binding used to
+	// arrive with no title at all — the cross-repo hop into a subscriber found
+	// the handler and then had nothing to call it.
+	i.titleEndpoints(ruleOut)
 	i.bindings = append(i.bindings, ruleOut...)
 	i.outboundUnreachable += ruleUnreachable
 	i.ruleStats = ev.Stats
@@ -1113,6 +1130,37 @@ func (i *Indexer) varString(info *types.Info, e ast.Expr) (string, bool) {
 	return "", false
 }
 
+// titleEndpoints fills in the display names for a batch of bindings' endpoints
+// and drops a handler that isn't an indexed function, so the UI never offers a
+// link that goes nowhere. Applied per batch because the batches are produced
+// at different points in the load, and a binding titled from an incomplete
+// function set would be titled wrongly rather than not at all.
+func (i *Indexer) titleEndpoints(bs []model.Binding) {
+	for n := range bs {
+		b := &bs[n]
+		if fi := i.funcs[b.Target]; fi != nil {
+			b.TargetTitle = fi.title
+		} else {
+			b.Target = ""
+		}
+		if fi := i.funcs[b.Site]; fi != nil {
+			b.SiteTitle = fi.title
+		}
+	}
+}
+
+// varFieldsOf resolves an expression naming a package-level struct variable to
+// the strings its fields were initialized with. Nil for anything else, which
+// includes a struct built at the call site: its fields are right there in the
+// source, and reading them would be a different lookup for a case nobody has
+// asked for.
+func (i *Indexer) varFieldsOf(info *types.Info, e ast.Expr) map[string]string {
+	if obj := i.baseVar(info, e); obj != nil {
+		return i.varFields[obj]
+	}
+	return nil
+}
+
 // baseVar resolves the variable an expression denotes, looking through a
 // package qualifier. Nil when the expression is anything else — a call, an
 // index, a field of a field: all of them have an answer, and none of them has
@@ -1334,6 +1382,11 @@ func (i *Indexer) argFacts(info *types.Info, e ast.Expr) platform.Arg {
 		if s, ok := i.varString(info, e); ok {
 			a.Value, a.Known, a.Inferred = s, true, true
 		}
+		// Or the argument is the definition *itself* — a struct var passed
+		// whole, with the identity inside it. There is no Value to take here:
+		// which field is the identity is a fact about the library, so the
+		// fields are carried and a rule says which one it keys off.
+		a.Fields = i.varFieldsOf(info, e)
 	}
 	switch v := e.(type) {
 	case *ast.Ident:
@@ -1927,7 +1980,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 			TargetID:    c.target,
 			Candidates:  c.candidates,
 			Goroutine:   c.goroutine,
-			External:    c.kind == KindDirect && i.isExternal(c.target),
+			External:    (c.kind == KindDirect || c.kind == KindRef) && i.isExternal(c.target),
 		}
 		if d, ok := i.leaves[i.siteLineOf(c)]; ok {
 			cs.Leaf = &model.LeafInfo{Rule: d.RuleID, Label: d.Label, Key: d.Key, CrossRepo: d.CrossRepo}
@@ -1940,6 +1993,11 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 		}
 		calls = append(calls, cs)
 	}
+	// Source order, because these come off an AST walk rather than out of the
+	// text: calls are found pre-order, and references are found at the idents
+	// nested inside them, so `handle(fallback)` yields its two sites in the
+	// order the walk reached them and not the order they are read in.
+	sort.Slice(calls, func(a, b int) bool { return calls[a].SpanStart < calls[b].SpanStart })
 
 	return &Frame{
 		ID:        id,
@@ -2044,7 +2102,7 @@ func (i *Indexer) fileFrame(path string) (*Frame, error) {
 			TargetID:    c.target,
 			Candidates:  c.candidates,
 			Goroutine:   c.goroutine,
-			External:    c.kind == KindDirect && i.isExternal(c.target),
+			External:    (c.kind == KindDirect || c.kind == KindRef) && i.isExternal(c.target),
 		})
 	}
 
@@ -2388,7 +2446,10 @@ func (i *Indexer) FrameForCall(id CallID, choice int) (*Frame, error) {
 		return nil, fmt.Errorf("unknown call %q", id)
 	}
 	switch c.kind {
-	case KindDirect:
+	case KindDirect, KindRef:
+		// A reference resolves exactly like a direct call: one named target,
+		// no dispatch to choose between. What differs is what the expansion
+		// means, and that is the frontend's to say.
 		return i.Frame(c.target)
 	case KindInterface:
 		if len(c.candidates) == 0 {

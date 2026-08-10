@@ -271,8 +271,20 @@ func TestUsages(t *testing.T) {
 			}
 		case "ref":
 			refs++
-			if u.CallID != "" {
-				t.Errorf("ref usage should have no callId, got %s", u.CallID)
+			// A reference is a site you can expand from, so it carries a
+			// CallID like any other — that id is what lets the callers list
+			// splice the referring function above this one instead of
+			// opening it bare, and what makes the reference expandable
+			// inline where it appears.
+			if u.CallID == "" {
+				t.Error("ref usage missing callId")
+				break
+			}
+			fr, err := idx.FrameForCall(u.CallID, u.Choice)
+			if err != nil {
+				t.Errorf("FrameForCall(%s): %v", u.CallID, err)
+			} else if fr.ID != runID {
+				t.Errorf("ref round-trip: got %s, want %s", fr.ID, runID)
 			}
 		default:
 			t.Errorf("unexpected usage kind %q", u.Kind)
@@ -331,6 +343,64 @@ func TestUsages(t *testing.T) {
 	// Unknown target errors.
 	if _, err := idx.Usages(TargetID("nope")); err == nil {
 		t.Error("Usages(unknown) should error")
+	}
+}
+
+// A function named as a value is a site in the referring frame, not only an
+// entry in the reverse index: `apply(RunGreeter, ...)` must come back as a
+// span the reader can expand, spanning the name alone so it can't overlap the
+// enclosing call's own decoration.
+func TestFrameCarriesValueReferences(t *testing.T) {
+	idx := New()
+	if err := idx.Load("testdata/diapp", "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	mainID, err := idx.LookupSymbol("main")
+	if err != nil {
+		t.Fatalf("LookupSymbol(main): %v", err)
+	}
+	runID, err := idx.LookupSymbol("RunGreeter")
+	if err != nil {
+		t.Fatalf("LookupSymbol(RunGreeter): %v", err)
+	}
+	frame, err := idx.Frame(mainID)
+	if err != nil {
+		t.Fatalf("Frame(main): %v", err)
+	}
+
+	var refs []CallSite
+	for _, c := range frame.Calls {
+		if c.Kind == KindRef {
+			refs = append(refs, c)
+		}
+	}
+	if len(refs) != 1 {
+		t.Fatalf("ref sites in main: got %d, want the one in apply(RunGreeter, ...) (%+v)", len(refs), frame.Calls)
+	}
+	ref := refs[0]
+	if ref.TargetID != runID {
+		t.Errorf("ref target: got %s, want %s", ref.TargetID, runID)
+	}
+	if got := frame.Source[ref.SpanStart:ref.SpanEnd]; got != "RunGreeter" {
+		t.Errorf("ref span covers %q, want the name alone", got)
+	}
+
+	// Spans must stay disjoint: the highlighter rejects overlapping
+	// decorations, and a reference always sits inside some other expression.
+	sites := append([]CallSite(nil), frame.Calls...)
+	for n := 1; n < len(sites); n++ {
+		if sites[n].SpanStart < sites[n-1].SpanEnd {
+			t.Errorf("sites %q and %q overlap", sites[n-1].DisplayName, sites[n].DisplayName)
+		}
+	}
+
+	// And the site expands to the referenced body, the whole point of it.
+	got, err := idx.FrameForCall(ref.ID, 0)
+	if err != nil {
+		t.Fatalf("FrameForCall(ref): %v", err)
+	}
+	if got.ID != runID {
+		t.Errorf("ref expands to %s, want %s", got.ID, runID)
 	}
 }
 

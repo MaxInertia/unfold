@@ -2,7 +2,10 @@
 
 export type TargetID = string;
 export type CallID = string;
-export type CallKind = "direct" | "interface" | "indirect" | "fanout";
+// "ref" is a site where the function is named but not called — a callback
+// passed, a handler registered. Expandable like the rest; it just isn't a step
+// in the trace, so it never joins bulk expansion and says so where it renders.
+export type CallKind = "direct" | "interface" | "indirect" | "fanout" | "ref";
 
 export interface CallSite {
   id: CallID;

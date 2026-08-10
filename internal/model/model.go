@@ -19,7 +19,10 @@ type TargetID string
 // CallID uniquely identifies a single call site. Opaque to the frontend.
 type CallID string
 
-// CallKind classifies a call site by how its target is resolved.
+// CallKind classifies a call site by how its target is resolved. "Call site"
+// is the older word for it: KindRef is a site where a function is named but
+// not invoked, which is a place you can still expand from even though nothing
+// runs there.
 type CallKind string
 
 const (
@@ -27,6 +30,12 @@ const (
 	KindInterface CallKind = "interface" // dispatched through an interface; Candidates enumerates impls
 	KindIndirect  CallKind = "indirect"  // through a function value, builtin, or otherwise unresolvable
 	KindFanout    CallKind = "fanout"    // one site reaches many receivers (all run); Receivers enumerates them
+	// KindRef is a value reference: the function named as a value rather than
+	// called — passed as a callback, stored in a field, registered as a
+	// handler. Expandable, because "what does that do" is the same question
+	// you ask at a call; it just isn't answered by control flow arriving here,
+	// so the UI must not let it read as a step in the trace.
+	KindRef CallKind = "ref"
 )
 
 // Frame is the unit the frontend renders: a function's source plus the

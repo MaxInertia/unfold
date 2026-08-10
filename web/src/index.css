@@ -525,6 +525,19 @@ body.resizing {
   border-bottom-width: 3px;
 }
 
+.call-site--ref.call-site--resolvable {
+  /* A value reference is expandable but nothing runs here, so it must not
+     read like the calls around it: no fill, and a dashed rule that says
+     "named, not invoked". The frame it opens carries the same marker. */
+  background: none;
+  border-bottom-style: dashed;
+  border-bottom-color: var(--ref-border, rgba(120, 113, 108, 0.7));
+}
+
+.call-site--ref.call-site--resolvable:hover {
+  background: var(--call-bg-hover);
+}
+
 .call-site.loading {
   opacity: 0.6;
 }
@@ -542,6 +555,17 @@ body.resizing {
   font-size: 0.8em;
   vertical-align: baseline;
   color: var(--goroutine-fg, #0f766e);
+  cursor: help;
+  user-select: none;
+}
+
+/* Value reference (`apply(RunGreeter, …)`): the same shape the callers list
+   uses for a ref, so "named, not called" reads the same in both places. */
+.ref-badge {
+  margin-right: 2px;
+  font-size: 0.8em;
+  vertical-align: baseline;
+  color: var(--ref-fg, #78716c);
   cursor: help;
   user-select: none;
 }

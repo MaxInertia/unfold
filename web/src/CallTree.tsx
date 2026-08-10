@@ -173,13 +173,16 @@ function ExpandedChild({
 function isExpandable(call: CallSite): boolean {
   if (call.kind === "indirect") return false;
   if (call.kind === "interface") return (call.candidates?.length ?? 0) > 0;
-  if (call.kind === "direct") return !!call.targetId;
+  if (call.kind === "direct" || call.kind === "ref") return !!call.targetId;
   return false;
 }
 
 function kindBadge(call: CallSite): string {
   if (call.kind === "interface") return "iface";
   if (call.kind === "indirect") return "indirect";
+  // The tree is a list of what this function does, so a reference has to be
+  // marked as the one row that isn't a step in it.
+  if (call.kind === "ref") return "ref";
   if (call.kind === "direct" && !call.targetId) return "ext";
   return "";
 }
@@ -192,6 +195,8 @@ function rowTitle(call: CallSite): string {
       : "interface call — no known implementations";
   }
   if (call.kind === "indirect") return "indirect call — not expandable";
+  if (call.kind === "ref")
+    return `${call.targetId} — referenced here as a value, not called; expand to read it anyway`;
   if (call.kind === "direct" && !call.targetId)
     return "external call — source not in the loaded module";
   return String(call.targetId ?? call.displayName);

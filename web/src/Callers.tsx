@@ -10,9 +10,12 @@ import {
 
 // spliceAbove builds the slice tree for re-rooting on a caller: the given
 // subtree (the clicked frame's current expansion state) nests inside the
-// caller at the usage's call site, so the caller reads as spliced above.
-// A value reference has no call site to splice through, so the caller
-// opens bare.
+// caller at the usage's site, so the caller reads as spliced above.
+//
+// A value reference splices the same way — it carries a site id now, since a
+// reference is somewhere you can expand from even though nothing is invoked
+// there. The empty slice is left for a usage with no site at all, which the
+// TS engine can still produce.
 export function spliceAbove(u: Usage, subtree: FrameSlice): FrameSlice {
   if (!u.callId) return emptySlice;
   return {
@@ -122,7 +125,7 @@ function UsageStrip({
         onClick={onPick}
         title={
           isRef
-            ? "value reference, not a call — opens the caller bare (this frame can't be spliced into it)"
+            ? "value reference, not a call — makes this the root and expands this frame where it's referenced"
             : "make this caller the root; this frame stays expanded at the call site"
         }
       >
@@ -131,7 +134,7 @@ function UsageStrip({
           <span className={`caller-kind caller-kind--${usage.kind}`}>
             {kindLabel(usage.kind)}
           </span>
-          {isRef && <span className="caller-noslice">⤳ not a call · opens bare</span>}
+          {isRef && <span className="caller-noslice">⤳ referenced, not called</span>}
           {inView && <span className="caller-kind caller-kind--inview">in view</span>}
           <span className="caller-loc">
             {shortPath(usage.file)}:{usage.line}
