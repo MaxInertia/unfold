@@ -100,11 +100,9 @@ function CallNode({
 
   const badge = kindBadge(call);
   const recursive =
-    call.kind === "direct"
-      ? !!call.targetId && chain.includes(call.targetId)
-      : call.kind === "interface"
-        ? (call.candidates ?? []).some((c) => chain.includes(c.targetId))
-        : false;
+    call.targetId
+      ? chain.includes(call.targetId)
+      : (call.candidates ?? []).some((c) => chain.includes(c.targetId));
   return (
     <li className={`tree-node tree-node--${call.kind}`}>
       <div
@@ -173,7 +171,8 @@ function ExpandedChild({
 function isExpandable(call: CallSite): boolean {
   if (call.kind === "indirect") return false;
   if (call.kind === "interface") return (call.candidates?.length ?? 0) > 0;
-  if (call.kind === "direct" || call.kind === "ref") return !!call.targetId;
+  if (call.kind === "ref") return !!call.targetId || (call.candidates?.length ?? 0) > 0;
+  if (call.kind === "direct") return !!call.targetId;
   return false;
 }
 
@@ -195,8 +194,11 @@ function rowTitle(call: CallSite): string {
       : "interface call — no known implementations";
   }
   if (call.kind === "indirect") return "indirect call — not expandable";
-  if (call.kind === "ref")
-    return `${call.targetId} — referenced here as a value, not called; expand to read it anyway`;
+  if (call.kind === "ref") {
+    const n = call.candidates?.length ?? 0;
+    const what = call.targetId ?? (n > 0 ? `${n} implementation${n === 1 ? "" : "s"}` : call.displayName);
+    return `${what} — referenced here as a value, not called; expand to read it anyway`;
+  }
   if (call.kind === "direct" && !call.targetId)
     return "external call — source not in the loaded module";
   return String(call.targetId ?? call.displayName);

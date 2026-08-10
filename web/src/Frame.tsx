@@ -473,16 +473,19 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
 
   function isRecursive(call: CallSite): boolean {
     if (call.kind === "direct" || call.kind === "ref") {
-      return !!call.targetId && chainIds.has(call.targetId);
+      if (call.targetId) return chainIds.has(call.targetId);
     }
-    if (call.kind === "interface") {
+    if (call.kind === "interface" || call.kind === "ref") {
       return (call.candidates ?? []).some((c) => chainIds.has(c.targetId));
     }
     return false;
   }
 
   function isExpandableCall(call: CallSite): boolean {
-    if (call.kind === "direct" || call.kind === "ref") return !!call.targetId;
+    // A reference names either one function or, when it goes through an
+    // interface, any of its implementations — the same two shapes a call has.
+    if (call.kind === "ref") return !!call.targetId || (call.candidates?.length ?? 0) > 0;
+    if (call.kind === "direct") return !!call.targetId;
     if (call.kind === "interface") return (call.candidates?.length ?? 0) > 0;
     return false; // indirect never; fanout has its own receiver semantics
   }
@@ -524,7 +527,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     }
     if (call.kind === "indirect") return;
     if (call.kind === "interface" && (call.candidates?.length ?? 0) === 0) return;
-    if ((call.kind === "direct" || call.kind === "ref") && !call.targetId) return;
+    if (!isExpandableCall(call)) return;
 
     if (slice.expansions[call.id]) {
       store.collapse(path, call.id);
@@ -1177,7 +1180,10 @@ function InlineChild({
   ancestors,
 }: InlineChildProps) {
   const candidates = call.candidates ?? [];
-  const showSwitcher = call.kind === "interface" && candidates.length > 1;
+  // A reference through an interface picks among implementations exactly as a
+  // call through one does, so it gets the same switcher.
+  const showSwitcher =
+    (call.kind === "interface" || call.kind === "ref") && candidates.length > 1;
   return (
     <div className="inline-child">
       {showSwitcher && (

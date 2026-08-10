@@ -431,6 +431,9 @@ func (i *Indexer) Load(dir, pattern string) error {
 		// same way: a CallExpr is visited before the Ident that names it.
 		goLaunched := make(map[*ast.CallExpr]bool)
 		callNames := make(map[*ast.Ident]bool)
+		// Sel idents already recorded as a reference by the selector case, so
+		// the ident case doesn't record them a second time.
+		selRefs := make(map[*ast.Ident]bool)
 		ast.Inspect(fi.body, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.GoStmt:
@@ -476,8 +479,56 @@ func (i *Indexer) Load(dir, pattern string) error {
 					ci.goroutine = true
 				}
 				fi.calls = append(fi.calls, ci)
+			case *ast.SelectorExpr:
+				// A method named as a value — `foo.Bar.Handle`. The ident case
+				// below already catches the ones go/types records in Uses: a
+				// package function, and a concrete method. It cannot catch an
+				// *interface* method, because an interface method has no body
+				// and so is not an indexed function — and a handler injected
+				// as an interface is exactly how a subscriber is usually
+				// written, so that was the shape that silently wasn't a site.
+				//
+				// It resolves the way an interface *call* does: not one target
+				// but a set of implementations, offered as candidates.
+				if callNames[node.Sel] {
+					return true
+				}
+				sel, ok := fi.pkg.TypesInfo.Selections[node]
+				if !ok {
+					return true
+				}
+				fnObj, _ := sel.Obj().(*types.Func)
+				if fnObj == nil || !isInterface(sel.Recv()) {
+					return true
+				}
+				cands := i.candidatesFor(sel.Recv(), fnObj.Name())
+				if len(cands) == 0 {
+					return true // nothing implements it; naming a hop to nowhere would be worse
+				}
+				ci := &callInfo{
+					parent:      fi.id,
+					kind:        KindRef,
+					displayName: fnObj.Name(),
+					candidates:  cands,
+					pos:         node.Sel.Pos(),
+					end:         node.Sel.End(),
+				}
+				fi.calls = append(fi.calls, ci)
+				selRefs[node.Sel] = true
+				// One usage per implementation, carrying the choice that
+				// selects it — the same shape an interface call produces, so
+				// the callers list can reproduce this site as an expansion.
+				for j, cand := range cands {
+					i.usagesByTarget[cand.TargetID] = append(i.usagesByTarget[cand.TargetID], &usageInfo{
+						call:   ci,
+						choice: j,
+						parent: fi.id,
+						kind:   model.UsageRef,
+						pos:    node.Sel.Pos(),
+					})
+				}
 			case *ast.Ident:
-				if callNames[node] {
+				if callNames[node] || selRefs[node] {
 					return true
 				}
 				obj, ok := fi.pkg.TypesInfo.Uses[node].(*types.Func)
@@ -2435,10 +2486,20 @@ func (i *Indexer) FrameForCall(id CallID, choice int) (*Frame, error) {
 	}
 	switch c.kind {
 	case KindDirect, KindRef:
-		// A reference resolves exactly like a direct call: one named target,
-		// no dispatch to choose between. What differs is what the expansion
-		// means, and that is the frontend's to say.
-		return i.Frame(c.target)
+		// A reference to a named function resolves like a direct call: one
+		// target, no dispatch to choose between. A reference to an *interface*
+		// method has the same shape as an interface call — several bodies it
+		// may name — so it falls through to the same choice.
+		if c.target != "" {
+			return i.Frame(c.target)
+		}
+		if len(c.candidates) == 0 {
+			return nil, ErrNoCandidates
+		}
+		if choice < 0 || choice >= len(c.candidates) {
+			choice = 0
+		}
+		return i.Frame(c.candidates[choice].TargetID)
 	case KindInterface:
 		if len(c.candidates) == 0 {
 			return nil, ErrNoCandidates

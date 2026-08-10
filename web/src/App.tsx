@@ -482,7 +482,11 @@ function AppShell() {
             />
           )}
           {error && <div className="app-error">{error}</div>}
-          {loading && <div className="app-loading">loading…</div>}
+          {/* Only when there is nothing to look at. A reindex refetches the
+              root frame, and announcing that over a view the reader is already
+              reading makes a refresh look like a reload — the frame below
+              stays put and is replaced when the new body arrives. */}
+          {loading && !rootFrame && <div className="app-loading">loading…</div>}
           {zoom === "platform" ? (
             <PlatformView
               anchor={rootFrame?.id ?? null}

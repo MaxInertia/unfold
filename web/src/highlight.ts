@@ -30,7 +30,8 @@ export async function highlightToHast(opts: HighlightOptions): Promise<HastRoot>
   const lang = supportedLang(opts.language);
   const decorations = opts.calls.map((c) => {
     const expandable =
-      ((c.kind === "direct" || c.kind === "ref") && !!c.targetId) ||
+      (c.kind === "ref" && (!!c.targetId || (c.candidates?.length ?? 0) > 0)) ||
+      (c.kind === "direct" && !!c.targetId) ||
       (c.kind === "interface" && (c.candidates?.length ?? 0) > 0) ||
       (c.kind === "fanout" && (c.receivers?.length ?? 0) > 0);
     return {
