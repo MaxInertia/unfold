@@ -1,7 +1,9 @@
 package indexer
 
 import (
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -350,6 +352,78 @@ func TestUsages(t *testing.T) {
 // entry in the reverse index: `apply(RunGreeter, ...)` must come back as a
 // span the reader can expand, spanning the name alone so it can't overlap the
 // enclosing call's own decoration.
+// A call id must survive an edit to a different part of the file. It used to
+// be the byte offset of the name token, so every save moved every id below the
+// change — and a watch-mode reindex then invalidated the whole expanded view
+// at once, collapsing the reader's trace to its root frame.
+func TestCallIDsSurviveEditsElsewhereInTheFile(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) {
+		t.Helper()
+		src := "package p\n\n" + body
+		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/p\n\ngo 1.21\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const target = `
+func target() {
+	helper()
+	other()
+}
+
+func helper() {}
+func other()  {}
+`
+
+	write(target)
+	before := New()
+	if err := before.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ids := callIDsOf(t, before, "target")
+
+	// An edit above the function: comments, a new declaration, anything that
+	// moves every byte after it.
+	write("// a new comment\n\nfunc untouched() {}\n" + target)
+	after := New()
+	if err := after.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load after edit: %v", err)
+	}
+	if got := callIDsOf(t, after, "target"); !reflect.DeepEqual(got, ids) {
+		t.Errorf("ids moved when code above them changed:\n before %v\n  after %v", ids, got)
+	}
+
+	// And they still identify one site each: expanding the first must land on
+	// helper, not on whatever now sits at that offset.
+	fr, err := after.FrameForCall(ids[0], 0)
+	if err != nil {
+		t.Fatalf("FrameForCall(%s): %v", ids[0], err)
+	}
+	if fr.Title != "helper" {
+		t.Errorf("first site expands to %q, want helper", fr.Title)
+	}
+}
+
+func callIDsOf(t *testing.T, idx *Indexer, symbol string) []CallID {
+	t.Helper()
+	id, err := idx.LookupSymbol(symbol)
+	if err != nil {
+		t.Fatalf("LookupSymbol(%s): %v", symbol, err)
+	}
+	frame, err := idx.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame(%s): %v", symbol, err)
+	}
+	out := make([]CallID, 0, len(frame.Calls))
+	for _, c := range frame.Calls {
+		out = append(out, c.ID)
+	}
+	return out
+}
+
 func TestFrameCarriesValueReferences(t *testing.T) {
 	idx := New()
 	if err := idx.Load("testdata/diapp", "./..."); err != nil {

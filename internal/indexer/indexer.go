@@ -89,7 +89,8 @@ func byteOffsetForUTF16(b []byte, u16 int) int {
 // JSON shapes. These aliases keep the indexer's call sites terse and let
 // existing callers/tests continue to reference indexer.Frame etc. For the
 // Go engine, TargetID is *types.Func.FullName (e.g.
-// "github.com/x/y.(*T).Method") and CallID is "<file>:<byte-offset>".
+// "github.com/x/y.(*T).Method") and CallID is "<enclosing function>@<n>",
+// the nth site in source order inside that function (see assignCallIDs).
 type (
 	TargetID     = model.TargetID
 	CallID       = model.CallID
@@ -475,7 +476,6 @@ func (i *Indexer) Load(dir, pattern string) error {
 					ci.goroutine = true
 				}
 				fi.calls = append(fi.calls, ci)
-				i.callsByID[ci.id] = ci
 			case *ast.Ident:
 				if callNames[node] {
 					return true
@@ -488,15 +488,11 @@ func (i *Indexer) Load(dir, pattern string) error {
 				if _, known := i.funcs[tid]; known {
 					// A reference is a site too. Nothing is invoked here, but
 					// the function it names has a body, and "what does that
-					// do" is the same question as at a call — so it gets a
-					// CallID and joins fi.calls, which is what makes it
-					// expandable inline and splice-able from the callers list.
-					// Keyed like every other site, by the name token's offset:
-					// the ident is never a callee (callNames excludes those),
-					// so it cannot collide with a call's id.
-					pos := i.fset.Position(node.Pos())
+					// do" is the same question as at a call — so it joins
+					// fi.calls and is given an id with the rest, which is what
+					// makes it expandable inline and splice-able from the
+					// callers list.
 					ci := &callInfo{
-						id:          CallID(fmt.Sprintf("%s:%d", pos.Filename, pos.Offset)),
 						parent:      fi.id,
 						kind:        KindRef,
 						target:      tid,
@@ -505,7 +501,6 @@ func (i *Indexer) Load(dir, pattern string) error {
 						end:         node.End(),
 					}
 					fi.calls = append(fi.calls, ci)
-					i.callsByID[ci.id] = ci
 					i.usagesByTarget[tid] = append(i.usagesByTarget[tid], &usageInfo{
 						call:   ci,
 						parent: fi.id,
@@ -517,6 +512,8 @@ func (i *Indexer) Load(dir, pattern string) error {
 			return true
 		})
 	}
+
+	i.assignCallIDs()
 
 	// Reverse index over call sites: a direct call references its target; an
 	// interface call references every candidate it may dispatch to (Choice
@@ -1669,16 +1666,10 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 	if !ok {
 		return nil
 	}
-	// Key the call by its *name* token, not by the expression start. In a
-	// chained call like `sdk.New().Get(ctx)` the outer CallExpr and the inner
-	// `sdk.New()` begin at the same token, so keying on ce.Pos() gave them
-	// the same id and one silently replaced the other in the index — losing a
-	// usage, and with it the caller edge for whichever lost.
-	pos := i.fset.Position(spanPos)
-	id := CallID(fmt.Sprintf("%s:%d", pos.Filename, pos.Offset))
-
+	// No id yet: ids are assigned per function after the walk (see
+	// assignCallIDs), because a call's identity is its place in its function,
+	// not its byte offset in a file.
 	ci := &callInfo{
-		id:     id,
 		parent: parent.id,
 		pos:    spanPos,
 		end:    spanEnd,
@@ -1996,12 +1987,6 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 		}
 		calls = append(calls, cs)
 	}
-	// Source order, because these come off an AST walk rather than out of the
-	// text: calls are found pre-order, and references are found at the idents
-	// nested inside them, so `handle(fallback)` yields its two sites in the
-	// order the walk reached them and not the order they are read in.
-	sort.Slice(calls, func(a, b int) bool { return calls[a].SpanStart < calls[b].SpanStart })
-
 	return &Frame{
 		ID:        id,
 		Title:     fi.title,
@@ -2536,6 +2521,35 @@ func (i *Indexer) excerpt(file string, line, bodyStart, bodyEnd int) (string, in
 		return "", 0
 	}
 	return strings.Join(lines[start-1:end], "\n"), start
+}
+
+// assignCallIDs gives every site an id built from the function it is in and
+// its position among that function's sites, in source order.
+//
+// The id used to be the file and the byte offset of the name token. That is
+// unique and cheap, and it changes when anything above it in the file changes
+// — so a watch-mode reindex after any edit invalidated every expansion in the
+// view at once, and the reader's whole trace collapsed to its root frame on
+// save. It also made a shared URL good for exactly one revision of the file.
+//
+// A function's identity is its name, which survives edits elsewhere, and a
+// call's identity within it is its ordinal. Adding a call *inside* a function
+// still renumbers that function's later sites — but that is an edit to the
+// very code being read, where losing your place is expected, rather than one
+// three hundred lines above it.
+//
+// Ordinals are assigned after the walk rather than during it because the
+// walk finds a chained call's inner and outer sites out of source order —
+// `sdk.New().Get(ctx)` yields Get before New — and an ordinal that depended on
+// traversal order would be stable in exactly the way that doesn't matter.
+func (i *Indexer) assignCallIDs() {
+	for _, fi := range i.funcs {
+		sort.Slice(fi.calls, func(a, b int) bool { return fi.calls[a].pos < fi.calls[b].pos })
+		for n, c := range fi.calls {
+			c.id = CallID(fmt.Sprintf("%s@%d", fi.id, n))
+			i.callsByID[c.id] = c
+		}
+	}
 }
 
 // Position reports where a target is defined, without building its frame.
