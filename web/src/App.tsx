@@ -212,16 +212,44 @@ function AppShell() {
     // (and, via the remount below, its expanded children) refetch.
   }, [symbol, revision]);
 
+  // Health is what tells the UI a platform and a workspace exist, so a single
+  // dropped response cost the whole page its zoom levels: it was fetched once,
+  // the failure was swallowed, and the only cure was a manual reload. Retry
+  // until it answers — there is no correct view without it — and refetch on
+  // `revision`, because linking a repo turns a single-repo session into a
+  // workspace and the platform level has to appear without a refresh.
   useEffect(() => {
-    fetch("/api/health")
-      .then((r) => r.json())
-      .then((h) => {
-        setTarget(h.target ?? null);
-        setBookmarkProject(h.target ?? null); // namespace bookmarks per project
-        setPlatform(!!h.platform);
-        setWorkspace(!!h.workspace);
-      })
-      .catch(() => {});
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = (tries: number) => {
+      fetch("/api/health")
+        .then((r) => {
+          if (!r.ok) throw new Error(`health: ${r.status}`);
+          return r.json();
+        })
+        .then((h) => {
+          if (!alive) return;
+          setTarget(h.target ?? null);
+          setBookmarkProject(h.target ?? null); // namespace bookmarks per project
+          setPlatform(!!h.platform);
+          setWorkspace(!!h.workspace);
+        })
+        .catch(() => {
+          if (!alive) return;
+          // Backs off to a second and stays there: the server is local, so it
+          // is either still coming up or gone, and a page left open across a
+          // restart should recover on its own rather than wait to be reloaded.
+          timer = setTimeout(() => attempt(tries + 1), Math.min(1000, 100 * 2 ** tries));
+        });
+    };
+    attempt(0);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [revision]);
+
+  useEffect(() => {
     loadNotes();
   }, []);
 
