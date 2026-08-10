@@ -2024,7 +2024,13 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 			Goroutine:   c.goroutine,
 			External:    (c.kind == KindDirect || c.kind == KindRef) && i.isExternal(c.target),
 		}
-		if d, ok := i.leaves[i.siteLineOf(c)]; ok {
+		// Leaves are keyed by file:line, and a line holds more than one site
+		// now that a value reference is one: `Subscribe(defn, handleFoo)` is a
+		// call *and* a reference, and both matched the line. A rule matched
+		// the call — the evaluator never sees references — so a reference must
+		// not inherit its boundary, or the card renders once per site on the
+		// line instead of once per boundary.
+		if d, ok := i.leaves[i.siteLineOf(c)]; ok && c.kind != KindRef {
 			cs.Leaf = &model.LeafInfo{
 				Rule: d.RuleID, Label: d.Label,
 				Key: d.Key, Kind: d.Kind, Role: d.Role, CrossRepo: d.CrossRepo,

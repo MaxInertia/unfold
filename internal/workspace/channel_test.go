@@ -227,3 +227,51 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// A boundary belongs to the call the rule matched, not to every site that
+// happens to share its line.
+//
+// `c.Subscribe(defn, handleFoo)` is two sites: the call, and the handler named
+// as a value. Leaves are keyed by file:line — which was unambiguous until a
+// reference became a site — so both inherited the boundary and the card
+// rendered twice at one registration.
+func TestOneBoundaryPerCallNotPerSiteOnTheLine(t *testing.T) {
+	w := bothWays(t, "subscriber")
+
+	id, err := w.LookupSymbol("consume")
+	if err != nil {
+		t.Fatalf("LookupSymbol(consume): %v", err)
+	}
+	fr, err := w.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame(consume): %v", err)
+	}
+
+	perLine := map[int]int{}
+	for _, c := range fr.Calls {
+		if c.Leaf == nil {
+			continue
+		}
+		// Two registrations in this function, each on its own line; each must
+		// contribute exactly one boundary.
+		perLine[c.SpanStart]++
+		if c.Kind == model.KindRef {
+			t.Errorf("a reference (%s) inherited the call's boundary", c.DisplayName)
+		}
+	}
+	if len(perLine) != 2 {
+		t.Errorf("got %d boundaries in consume, want 2 — one per Subscribe", len(perLine))
+	}
+
+	// And the handler reference is still a site: losing the leaf must not cost
+	// it its own expandability.
+	refs := 0
+	for _, c := range fr.Calls {
+		if c.Kind == model.KindRef {
+			refs++
+		}
+	}
+	if refs != 2 {
+		t.Errorf("got %d handler references, want 2", refs)
+	}
+}
