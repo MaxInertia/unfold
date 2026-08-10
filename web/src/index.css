@@ -3426,12 +3426,19 @@ body.resizing {
 }
 
 .leaf-key,
-.leaf-rule {
+.leaf-dest {
   color: var(--muted);
   font-size: 0.68rem;
 }
 
-.leaf-rule {
+/* Where the boundary leads, next to the label that says it leads somewhere. */
+.leaf-dest {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* The key ends the bar: it's the thing both sides share, so it's what you
+   compare when an edge looks wrong. */
+.leaf-key {
   margin-left: auto;
 }
 

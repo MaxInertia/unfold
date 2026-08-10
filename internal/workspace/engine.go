@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 
 	"github.com/MaxInertia/unfold/internal/model"
@@ -196,7 +197,17 @@ func (w *Workspace) Files() []string {
 }
 
 func (w *Workspace) qualifyFrame(alias string, f *model.Frame) {
-	if f == nil || alias == w.primary {
+	if f == nil {
+		return
+	}
+	// Both of these apply to the primary's frames too, which is why they come
+	// before the early return below: in a workspace, "which service is this"
+	// is a question about every frame on screen, not only the imported ones.
+	f.RelPath = w.repoRelative(f.File)
+	for n := range f.Calls {
+		w.describeFarEnd(f.Calls[n].Leaf)
+	}
+	if alias == w.primary {
 		return
 	}
 	f.ID = model.TargetID(w.qualify(alias, string(f.ID)))
@@ -215,6 +226,77 @@ func (w *Workspace) qualifyFrame(alias string, f *model.Frame) {
 			}
 			c.Receivers = recv
 		}
+	}
+}
+
+// repoRelative renders an absolute file as "<service>/<path within it>", by
+// finding the repository that contains it. Empty for a file no repository
+// owns — a dependency outside the workspace, or the standard library — where
+// naming a service would be a claim rather than a location.
+func (w *Workspace) repoRelative(file string) string {
+	if file == "" {
+		return ""
+	}
+	for _, alias := range w.order {
+		r := w.repos[alias]
+		if !underDir(file, r.dir) {
+			continue
+		}
+		rel, err := filepath.Rel(r.dir, file)
+		if err != nil {
+			return ""
+		}
+		return filepath.Join(r.name, rel)
+	}
+	return ""
+}
+
+// describeFarEnd fills in what a cross-repo leaf points at, so the boundary can
+// say where it goes before anyone clicks it.
+//
+// The service is free: it comes from the same join the hop itself uses. The
+// function is not — it lives in the other repo's index — so it is filled only
+// if that repo is already indexed. Indexing it here would mean opening a frame
+// silently paying for a whole other repository.
+func (w *Workspace) describeFarEnd(leaf *model.LeafInfo) {
+	if leaf == nil || !leaf.CrossRepo || leaf.Key == "" {
+		return
+	}
+	alias, ok := w.serverOf(leaf.Kind, leaf.Key)
+	if !ok {
+		return
+	}
+	r := w.repos[alias]
+	leaf.Service = r.name
+
+	r.mu.Lock()
+	idx, loaded := r.idx, r.loaded
+	r.mu.Unlock()
+	if !loaded || idx == nil {
+		return
+	}
+	sv, err := idx.ServiceView("")
+	if err != nil {
+		return
+	}
+	for _, b := range sv.Inbound {
+		if channelOf(b.Kind) != channelOf(leaf.Kind) || b.Key != leaf.Key {
+			continue
+		}
+		leaf.TargetTitle = b.TargetTitle
+		// The handler's own definition, not the registration that named it:
+		// the registration is where the subscription is declared, and what
+		// this boundary leads to is the function that runs. Falls back to the
+		// registration when the handler isn't an indexed function, which is
+		// the same thing the hop itself would land on.
+		file, line := b.File, b.Line
+		if f, l, ok := idx.Position(b.Target); ok {
+			file, line = f, l
+		}
+		if rel := w.repoRelative(file); rel != "" {
+			leaf.TargetPath = fmt.Sprintf("%s:%d", rel, line)
+		}
+		return
 	}
 }
 

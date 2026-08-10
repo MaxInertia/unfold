@@ -287,9 +287,14 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     });
 
     let alive = true;
+    // Only this frame's own call sites can be fetched here. A slice can carry
+    // entries this frame has no call for — a leaf's spliced remote body, whose
+    // slot exists to give that subtree a path in the store, and a stale id
+    // from a shared URL. Both used to be fetched by call id and fail.
+    const own = new Set(frame.calls.map((c) => c.id));
     for (const cid of wantedIds) {
       const want = slice.expansions[cid];
-      if (!want) continue;
+      if (!want || !own.has(cid)) continue;
       const loaded = loadedChildren.get(cid);
       // Need to (re)fetch if not loaded OR loaded with stale choice.
       if (loaded && (loaded as { __choice?: number }).__choice === want.choice) continue;
@@ -720,15 +725,25 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       // A rule-marked boundary renders instead of an expansion: the point is
       // that expanding into the transport is not what you wanted.
       if (call.leaf) {
+        // The spliced body gets its own slot in the slice rather than sharing
+        // the call's. They are different subtrees: expanding the call opens
+        // the callee here, and the leaf opens the implementation in another
+        // repo. Sharing the id would make one collapse the other — and
+        // without a slot at all the remote frame sat at a path the store had
+        // no entry for, so every expansion inside it was silently dropped.
+        const slot = leafSlot(call.id);
         extras.push(
           <LeafCard
             key={`leaf:${call.id}`}
             leaf={call.leaf}
+            open={!!slice.expansions[slot]}
+            onInline={() => store.expand(path, slot, 0)}
+            onHide={() => store.collapse(path, slot)}
             onOpen={(id) => store.setSymbol(id)}
             renderFrame={(f) => (
               <Frame
                 frame={f}
-                path={[...path, { callId: call.id, choice: 0 }]}
+                path={[...path, { callId: slot, choice: 0 }]}
                 ancestors={[...ancestors, frame.id]}
               />
             )}
@@ -885,7 +900,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       data-frame-key={pathKey(path)}
       // Read by StickyHeaders to render the pinned call-chain stack.
       data-frame-title={frameTitle(frame)}
-      data-frame-loc={`${shortPath(frame.file)}:${frame.startLine}`}
+      data-frame-loc={`${frameLoc(frame)}:${frame.startLine}`}
     >
       <header className="frame-header">
         <button
@@ -988,7 +1003,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
           title="open in editor"
           onClick={() => openInEditor(frame.file, frame.startLine).catch(() => {})}
         >
-          {shortPath(frame.file)}:{frame.startLine}
+          {frameLoc(frame)}:{frame.startLine}
         </button>
         {onClose && (
           <button className="frame-close" onClick={onClose} aria-label="collapse">
@@ -1186,6 +1201,14 @@ function mergeRange(current: [number, number][], add: [number, number]): [number
   return out;
 }
 
+// leafSlot is the slice key for a leaf's spliced remote body. It is deliberately
+// not a call id any engine emits: the frame that owns this slot has no call
+// site for the far end — that body was resolved by key, not by call — so
+// nothing may try to fetch it as one.
+function leafSlot(callId: CallID): CallID {
+  return `${callId}#leaf` as CallID;
+}
+
 function buildLineCalls(frame: FrameT): Map<number, CallSite[]> {
   const map = new Map<number, CallSite[]>();
   for (const c of frame.calls) {
@@ -1238,6 +1261,14 @@ function prettyName(id: string): string {
   const parts = id.split("/");
   if (parts.length <= 2) return id;
   return ".../" + parts.slice(-2).join("/");
+}
+
+// Where the frame is, as short as it can be while still answering "which
+// service". In a workspace the engine supplies a service-qualified path; a
+// single repo has no services to distinguish, so the tail of the path is
+// enough and stays as it was.
+function frameLoc(frame: FrameT): string {
+  return frame.relPath || shortPath(frame.file);
 }
 
 function shortPath(p: string): string {

@@ -2538,6 +2538,21 @@ func (i *Indexer) excerpt(file string, line, bodyStart, bodyEnd int) (string, in
 	return strings.Join(lines[start-1:end], "\n"), start
 }
 
+// Position reports where a target is defined, without building its frame.
+// Frame reads the source range off disk and highlights it; a caller that only
+// wants to *name* a location — a boundary saying where it leads — shouldn't
+// pay for the body it isn't showing.
+func (i *Indexer) Position(id TargetID) (string, int, bool) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	fi, ok := i.funcs[id]
+	if !ok || fi.node == nil {
+		return "", 0, false
+	}
+	pos := i.fset.Position(fi.node.Pos())
+	return pos.Filename, pos.Line, true
+}
+
 // LookupSymbol resolves a symbol name (qualified or unqualified) to a
 // target. If multiple match, the first lexicographic FullName wins.
 func (i *Indexer) LookupSymbol(name string) (TargetID, error) {

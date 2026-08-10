@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fetchBodyByTarget, resolveBinding } from "./api";
 import type { Frame as FrameT, LeafInfo, TargetID } from "./types";
 
@@ -17,10 +17,19 @@ import type { Frame as FrameT, LeafInfo, TargetID } from "./types";
 // works to avoid elsewhere.
 export function LeafCard({
   leaf,
+  open,
+  onInline,
+  onHide,
   onOpen,
   renderFrame,
 }: {
   leaf: LeafInfo;
+  // Whether the spliced body is showing. Owned by the slice rather than by
+  // this component: the body is a subtree of the view, so "collapse all", a
+  // shared URL and the back button all have to be able to speak about it.
+  open: boolean;
+  onInline: () => void;
+  onHide: () => void;
   onOpen: (id: TargetID) => void;
   // Renders a resolved remote frame inline. Supplied by Frame so the spliced
   // body gets the same expansion machinery as any other child.
@@ -30,6 +39,11 @@ export function LeafCard({
   const [busy, setBusy] = useState<"open" | "inline" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // What the boundary leads to. The path is there when the far service is
+  // already indexed; naming the service alone is the honest fallback, because
+  // finding the function would mean indexing that repo just to draw this bar.
+  const destination = leaf.targetPath || leaf.service || "";
+
   async function far(): Promise<TargetID | null> {
     const res = await resolveBinding(leaf.kind ?? "grpc.method", leaf.key ?? "");
     if (res.target) return res.target;
@@ -38,7 +52,7 @@ export function LeafCard({
     return null;
   }
 
-  async function open() {
+  async function openAsRoot() {
     setBusy("open");
     setError(null);
     try {
@@ -56,7 +70,10 @@ export function LeafCard({
     setError(null);
     try {
       const t = await far();
-      if (t) setInlined(await fetchBodyByTarget(t));
+      if (t) {
+        setInlined(await fetchBodyByTarget(t));
+        onInline();
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -64,18 +81,54 @@ export function LeafCard({
     }
   }
 
+  function hide() {
+    setInlined(null);
+    onHide();
+  }
+
+  // A slot that's open with no body is a view restored from a URL or from the
+  // back button — the slice remembers that the far side was spliced in, and the
+  // body itself was never in it. Resolve it again rather than showing a card
+  // that says nothing is there.
+  useEffect(() => {
+    if (!open || inlined || busy) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const t = await far();
+        if (!t || !alive) return;
+        const body = await fetchBodyByTarget(t);
+        if (alive) setInlined(body);
+      } catch (e) {
+        if (alive) setError((e as Error).message);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // far() closes over the leaf, which is stable for a given call site.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, inlined, busy]);
+
   return (
     <div className="leaf-card">
       <div className="leaf-bar">
         <span className="leaf-label">{leaf.label || leaf.key || "boundary"}</span>
-        {leaf.key && <span className="leaf-key">{leaf.key}</span>}
+        {/* Where it goes, beside the label that says it goes somewhere. The
+            path is service-qualified because "handlers/foo.go" is the one
+            thing that can't tell you which service you'd land in. */}
+        {destination && (
+          <span className="leaf-dest" title={leaf.targetTitle ? `${leaf.targetTitle} — ${destination}` : destination}>
+            {leaf.targetTitle ? `${leaf.targetTitle} · ${destination}` : destination}
+          </span>
+        )}
         {leaf.crossRepo && (
           <>
-            <button type="button" className="leaf-action" disabled={!!busy} onClick={() => void open()}>
+            <button type="button" className="leaf-action" disabled={!!busy} onClick={() => void openAsRoot()}>
               {busy === "open" ? "…" : "open"}
             </button>
-            {inlined ? (
-              <button type="button" className="leaf-action" onClick={() => setInlined(null)}>
+            {open ? (
+              <button type="button" className="leaf-action" onClick={hide}>
                 hide
               </button>
             ) : (
@@ -90,13 +143,21 @@ export function LeafCard({
             )}
           </>
         )}
-        <span className="leaf-rule" title={`recognized by rule ${leaf.rule}`}>
-          {leaf.rule}
+        {/* The key, out at the end: it's what the two sides share, so it's
+            what you check when an edge looks wrong. The rule that decided all
+            this is a second-order question — it moves into the tooltip rather
+            than taking the widest slot on the bar. */}
+        <span className="leaf-key" title={`${leaf.kind ?? "key"} — recognized by rule ${leaf.rule}`}>
+          {leaf.key}
         </span>
       </div>
       {error && <div className="call-error">{error}</div>}
-      {inlined && (
-        <div className="leaf-inlined">
+      {open && inlined && (
+        // inline-child as well, so the spliced body is laid out like every
+        // other inline expansion — classic indent mode offsets that class, and
+        // a body that stayed flush left was the one child of a frame that
+        // didn't follow the setting.
+        <div className="leaf-inlined inline-child">
           {/* The hop stays named even with the far side spliced in. */}
           <div className="leaf-hop">execution leaves this process here</div>
           {renderFrame(inlined)}

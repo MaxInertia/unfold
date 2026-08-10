@@ -31,6 +31,13 @@ export interface LeafInfo {
   key?: string;
   kind?: string;
   crossRepo?: boolean;
+  // Where the boundary leads, when that's already known. `service` comes from
+  // the join and is always there for a resolvable key; the function is only
+  // filled when the far service is already indexed (see LeafInfo in the Go
+  // model — resolving it eagerly would index another repo to draw a frame).
+  service?: string;
+  targetTitle?: string;
+  targetPath?: string; // "<service>/<path within it>:<line>"
 }
 
 export interface Candidate {
@@ -49,6 +56,9 @@ export interface Frame {
   id: TargetID;
   title?: string; // display-friendly name; falls back to a prettified id
   file: string;
+  // "<service>/<path within it>" — set only in a workspace, where the tail of
+  // an absolute path can't say which service the body belongs to.
+  relPath?: string;
   language: string; // "go"
   startLine: number;
   endLine: number;

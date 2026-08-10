@@ -152,6 +152,22 @@ func TestEmitLeafOffersTheSubscribersHandler(t *testing.T) {
 		t.Fatalf("leaf identifies the far end as %s/%s, want sdk.event/foo-happened", leaf.Kind, leaf.Key)
 	}
 
+	// A boundary should say where it goes before anyone clicks it, and say it
+	// in terms that name the service — "main.go:11" is true of every repo.
+	if leaf.Service != "subscriber" {
+		t.Errorf("leaf names service %q, want subscriber", leaf.Service)
+	}
+	if leaf.TargetTitle != "handleFoo" {
+		t.Errorf("leaf names target %q, want handleFoo", leaf.TargetTitle)
+	}
+	if leaf.TargetPath != "subscriber/main.go:11" {
+		t.Errorf("leaf target path %q, want subscriber/main.go:11 — the handler, service-qualified", leaf.TargetPath)
+	}
+	// The frame carries the same, for its own header.
+	if fr.RelPath != "publisher/main.go" {
+		t.Errorf("frame relPath %q, want publisher/main.go", fr.RelPath)
+	}
+
 	// Which is what the UI hands to resolve, and it has to land on the method
 	// the other repo passed to Subscribe.
 	res, err := w.Resolve(leaf.Kind, leaf.Key)

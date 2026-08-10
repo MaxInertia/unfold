@@ -50,8 +50,15 @@ type Frame struct {
 	// or "English.greet"), used for the frame header and bookmark labels. The
 	// ID is engine-specific and often not display-friendly (the TS engine's is
 	// "<file>#<pos>"), so engines supply a clean Title.
-	Title     string     `json:"title,omitempty"`
-	File      string     `json:"file"`
+	Title string `json:"title,omitempty"`
+	File  string `json:"file"`
+	// RelPath is where this body lives said the way the platform says it:
+	// "<service>/<path within that service>". Set only in a workspace, where
+	// the last couple of segments of an absolute path are the one thing that
+	// can't tell you which service you're reading — and reading across
+	// services is the entire point of splicing a remote frame in. Empty for a
+	// single repo, and for a file that belongs to no repo in the workspace.
+	RelPath   string     `json:"relPath,omitempty"`
 	Language  string     `json:"language"` // "go", "typescript", "tsx", ...
 	StartLine int        `json:"startLine"`
 	EndLine   int        `json:"endLine"`
@@ -129,6 +136,18 @@ type LeafInfo struct {
 	// end resolves against.
 	Key  string `json:"key,omitempty"`
 	Kind string `json:"kind,omitempty"`
+	// Service, TargetTitle and TargetPath describe the far end when it is
+	// already known — the service comes from the join, which costs nothing,
+	// and the function comes from that service's index, so it is filled only
+	// when that service happens to be indexed already. Resolving it here
+	// otherwise would index another repository as a side effect of drawing a
+	// frame, which is the cost the whole lazy workspace exists to avoid.
+	//
+	// TargetPath is "<service>/<path within it>:<line>", because a bare file
+	// path is the one thing that can't say which service you'd be going to.
+	Service     string `json:"service,omitempty"`
+	TargetTitle string `json:"targetTitle,omitempty"`
+	TargetPath  string `json:"targetPath,omitempty"`
 	// CrossRepo offers the implementation in another repository: navigate to
 	// it, or splice it in the way an ordinary call expands.
 	CrossRepo bool `json:"crossRepo,omitempty"`
