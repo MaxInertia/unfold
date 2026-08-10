@@ -48,6 +48,15 @@ type Server struct {
 	// "repos" when a repository started or finished indexing. One channel per
 	// subscriber, so a slow reader can't hold up an indexer.
 	clients map[chan string]struct{}
+
+	// reloadMu serializes index rebuilds; see Reload.
+	reloadMu sync.Mutex
+
+	// pending are repositories the user has linked whose index is still being
+	// built, keyed by directory. They are reported alongside the engine's own
+	// repos so a repo doesn't disappear between being added and being ready.
+	pendingMu sync.Mutex
+	pending   map[string]*pendingRepo
 }
 
 // New builds a server backed by any indexing engine (Go or TypeScript).
@@ -356,7 +365,7 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.reload(); err != nil {
+	if err := s.Reload(); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "rules saved but the index failed to rebuild: "+err.Error())
 		return
 	}
@@ -409,16 +418,7 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 	// GET reports what is open and what state each repo is in — cheap, and the
 	// thing a "what is it doing" indicator reads. POST changes the set.
 	if r.Method == http.MethodGet {
-		lister, ok := s.engine.(interface{ Repos() []model.RepoInfo })
-		if !ok {
-			writeJSON(w, http.StatusOK, map[string]any{"repos": []model.RepoInfo{}})
-			return
-		}
-		repos := lister.Repos()
-		if repos == nil {
-			repos = []model.RepoInfo{}
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"repos": repos})
+		writeJSON(w, http.StatusOK, map[string]any{"repos": s.repoList()})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -471,19 +471,14 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.reload(); err != nil {
-		// The engine is unchanged — Reload keeps the previous one on failure —
-		// so the link has to be rolled back too, or the next rebuild for any
-		// reason would silently apply a repo the user was told had failed.
-		if body.Unlink {
-			engine.LinkRepo(abs)
-		} else {
-			engine.UnlinkRepo(abs)
-		}
-		writeError(w, http.StatusUnprocessableEntity, "could not open "+abs+": "+err.Error())
-		return
-	}
-
+	// The link is recorded now, and the index is built behind it.
+	//
+	// Rebuilding inline meant the picker sat there for as long as the whole
+	// workspace took to index, which is the wrong thing to wait on: the
+	// decision — this repo is part of my workspace — was already made, and it
+	// is what the user came to the dialog to express. Everything downstream
+	// already copes with a repo that is named but not yet readable, because a
+	// lazy workspace is full of them.
 	if s.projectDir != "" {
 		p := prefs.Load(s.projectDir)
 		p.LinkedRepos = append([]string(nil), engine.LinkedRepos...)
@@ -491,8 +486,44 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 			log.Printf("unfold: could not persist linked repositories: %v", err)
 		}
 	}
-	s.NotifyReload()
+	if !body.Unlink {
+		s.addPending(abs)
+	}
+	s.NotifyRepos()
 
+	go func() {
+		err := s.Reload()
+		s.clearPending(abs, err)
+		if err != nil {
+			// The engine is unchanged — Reload keeps the previous one on
+			// failure — so the link is rolled back too, or the next rebuild
+			// for any reason would silently apply a repo that failed. The
+			// user has already been answered, so the failure has to reach
+			// them through the repo list instead of this request.
+			if body.Unlink {
+				engine.LinkRepo(abs)
+			} else {
+				engine.UnlinkRepo(abs)
+			}
+			if s.projectDir != "" {
+				p := prefs.Load(s.projectDir)
+				p.LinkedRepos = append([]string(nil), engine.LinkedRepos...)
+				_ = prefs.Save(s.projectDir, p)
+			}
+			log.Printf("unfold: could not open %s: %v", abs, err)
+		}
+		s.NotifyRepos()
+		s.NotifyReload()
+	}()
+
+	writeJSON(w, http.StatusOK, map[string]any{"repos": s.repoList(), "linked": engine.LinkedRepos})
+}
+
+// repoList is what the engine holds, plus anything linked whose index is still
+// being built. A repo the user just added is part of their workspace from the
+// moment they said so — reporting only what the engine has finished loading
+// would make it vanish for the duration of the very wait it is announcing.
+func (s *Server) repoList() []model.RepoInfo {
 	// Unlinking the last repo leaves a plain single-repo engine, whose Repos
 	// is nil — which would marshal to null where the client expects a list.
 	repos := []model.RepoInfo{}
@@ -501,7 +532,64 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 			repos = got
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"repos": repos, "linked": engine.LinkedRepos})
+	have := make(map[string]bool, len(repos))
+	for _, r := range repos {
+		have[r.Dir] = true
+	}
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for dir, p := range s.pending {
+		if have[dir] {
+			continue
+		}
+		repos = append(repos, model.RepoInfo{
+			Alias:    filepath.Base(dir),
+			Name:     filepath.Base(dir),
+			Dir:      dir,
+			Indexing: p.err == "",
+			Error:    p.err,
+		})
+	}
+	sort.Slice(repos, func(a, b int) bool { return repos[a].Alias < repos[b].Alias })
+	return repos
+}
+
+func (s *Server) addPending(dir string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if s.pending == nil {
+		s.pending = map[string]*pendingRepo{}
+	}
+	s.pending[dir] = &pendingRepo{}
+}
+
+// clearPending drops a repo from the pending set once the rebuild that was
+// going to adopt it has finished. A failure is kept, with its reason: the
+// request that asked for this was answered before the answer was known, so
+// this list is the only place left to report it.
+func (s *Server) clearPending(dir string, err error) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if err == nil {
+		delete(s.pending, dir)
+		return
+	}
+	if p := s.pending[dir]; p != nil {
+		p.err = err.Error()
+	}
+}
+
+// Reload rebuilds the index, serialized. Two rebuilds at once each construct
+// an engine and then swap, so the one that wins is whichever finishes last
+// rather than whichever started last — and the callers (a watched file, a
+// saved rule, a linked repo) have no idea about each other.
+func (s *Server) Reload() error {
+	if s.reload == nil {
+		return fmt.Errorf("this session can't rebuild its index")
+	}
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	return s.reload()
 }
 
 // POST /api/proto-root {"path": "<abs dir>"} — point the declared gRPC
@@ -611,6 +699,10 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 // GET /api/platform — every service in the workspace and the calls between
 // them. Available only with a workspace open; a single repo has a service
 // view but nothing above it.
+type pendingRepo struct {
+	err string // set when the rebuild that would have adopted it failed
+}
+
 // GET /api/channels — every key the workspace has seen, with the services at
 // each end. Cheap: it reads the join, not any Go index.
 func (s *Server) handleChannels(w http.ResponseWriter, _ *http.Request) {

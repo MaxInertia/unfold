@@ -3425,32 +3425,21 @@ body.resizing {
   font-weight: 600;
 }
 
-/* Several far ends: one row each, because there is no "the" other side. */
-.leaf-ends {
-  list-style: none;
-  margin: 0.25rem 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.leaf-end {
-  display: flex;
-  align-items: baseline;
-  gap: 0.4rem;
-  padding: 0.1rem 0.45rem;
-  font-size: 0.72rem;
-}
-
-.leaf-end-service {
-  font-weight: 600;
-}
-
-.leaf-end-title {
-  color: var(--fg);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+/* Several far ends are one boundary with a choice, so they get a picker on the
+   bar rather than a row each — the same shape the impl switcher uses. */
+.leaf-pick {
+  font: inherit;
   font-size: 0.68rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0 0.2rem;
+}
+
+.leaf-count {
+  color: var(--muted);
+  font-size: 0.66rem;
 }
 
 /* Where the boundary leads, and the only thing at the end of the bar: the

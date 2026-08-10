@@ -270,7 +270,11 @@ func (w *Workspace) describeFarEnd(leaf *model.LeafInfo) {
 	}
 	want := oppositeOf(leaf.Role)
 	aliases := w.endsOf(leaf.Kind, leaf.Key, want)
-	leaf.Ends = len(aliases)
+	for _, alias := range aliases {
+		if r, ok := w.repos[alias]; ok {
+			leaf.Ends = append(leaf.Ends, r.name)
+		}
+	}
 	if len(aliases) != 1 {
 		return
 	}

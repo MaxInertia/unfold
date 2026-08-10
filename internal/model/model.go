@@ -153,10 +153,13 @@ type LeafInfo struct {
 	// leads to publishers. Without it the direction was assumed, and the
 	// assumption only held because the first leaf was a gRPC call.
 	Role BindingRole `json:"role,omitempty"`
-	// Ends is how many services are on the far side. The fields above
-	// describe the only one when there is exactly one; with several, the card
-	// asks for the list rather than picking a winner.
-	Ends int `json:"ends,omitempty"`
+	// Ends names every service on the far side, in a fixed order. Cheap: the
+	// names come from the join, where the *code* at each end would cost that
+	// service's index. That split is what lets a boundary offer a choice
+	// without paying for the thing being chosen between until one is picked.
+	//
+	// The single-end fields above describe Ends[0] when there is exactly one.
+	Ends []string `json:"ends,omitempty"`
 	// CrossRepo offers the implementation in another repository: navigate to
 	// it, or splice it in the way an ordinary call expands.
 	CrossRepo bool `json:"crossRepo,omitempty"`

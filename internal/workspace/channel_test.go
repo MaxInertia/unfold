@@ -154,8 +154,10 @@ func TestSubscribeLeafPointsAtThePublishers(t *testing.T) {
 	if foo.Role != model.RoleInbound {
 		t.Errorf("subscribe leaf role %q, want inbound", foo.Role)
 	}
-	if foo.Ends != 2 {
-		t.Errorf("foo-happened has %d publishers, want 2", foo.Ends)
+	// Named, not just counted: the card offers a choice between them, and it
+	// can do that from the join without indexing either.
+	if !equalStrings(foo.Ends, []string{"publisher", "publisher2"}) {
+		t.Errorf("foo-happened publishers: got %v, want both named", foo.Ends)
 	}
 	// With several ends, the single-end fields stay empty rather than naming
 	// one of them as though it were the answer.
@@ -163,8 +165,8 @@ func TestSubscribeLeafPointsAtThePublishers(t *testing.T) {
 		t.Errorf("a boundary with 2 ends named one anyway: %+v", foo)
 	}
 	// bar-happened has exactly one publisher, so it does name it.
-	if bar.Ends != 1 {
-		t.Fatalf("bar-happened has %d publishers, want 1", bar.Ends)
+	if !equalStrings(bar.Ends, []string{"publisher"}) {
+		t.Fatalf("bar-happened publishers: got %v, want [publisher]", bar.Ends)
 	}
 	if bar.Service != "publisher" || bar.TargetTitle != "publishBar" {
 		t.Errorf("bar's publisher is %s/%s, want publisher/publishBar", bar.Service, bar.TargetTitle)

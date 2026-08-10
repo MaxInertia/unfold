@@ -41,10 +41,11 @@ export interface LeafInfo {
   // Which side of the channel this site is on — an emit leads to subscribers,
   // a subscribe leads to publishers. Empty means the inbound side is wanted.
   role?: "inbound" | "outbound";
-  // How many services are on the far side. The fields above describe the only
-  // one when there is exactly one; with several, the card asks for the list
-  // rather than being handed a winner.
-  ends?: number;
+  // Every service on the far side, named. Cheap — the names come from the
+  // join, where the code at each end costs that service's index — which is
+  // what lets the card offer a choice without paying for it until one is
+  // picked. The fields above describe ends[0] when there is exactly one.
+  ends?: string[];
 }
 
 export interface Candidate {

@@ -155,8 +155,8 @@ func TestEmitLeafOffersTheSubscribersHandler(t *testing.T) {
 	if leaf.Key != "bar-happened" || leaf.Kind != "sdk.event" {
 		t.Fatalf("leaf identifies the far end as %s/%s, want sdk.event/bar-happened", leaf.Kind, leaf.Key)
 	}
-	if leaf.Ends != 1 {
-		t.Errorf("leaf counts %d ends, want 1", leaf.Ends)
+	if len(leaf.Ends) != 1 || leaf.Ends[0] != "subscriber" {
+		t.Errorf("leaf names ends %v, want [subscriber]", leaf.Ends)
 	}
 
 	// A boundary should say where it goes before anyone clicks it, and say it

@@ -13,8 +13,10 @@ import type { Endpoint, Frame as FrameT, LeafInfo, TargetID } from "./types";
 // "The other side" is a direction, not a place. An emit leads to the services
 // that subscribe; a subscription leads to the services that publish. And there
 // can be several of either — a topic with three subscribers has three far
-// ends, and picking one to show would be saying the other two don't receive
-// it. So the card lists what it finds rather than resolving to a winner.
+// ends. That is one boundary with a choice, not three boundaries, so the card
+// carries a picker and the buttons act on what is picked. Only the chosen end
+// is resolved: the names are free (they come from the join), where the code at
+// each end costs that service's index.
 //
 // Inlining across a network hop makes the trace read as one continuous body
 // when execution actually left the process, so the boundary stays visible even
@@ -45,10 +47,13 @@ export function LeafCard({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ends, setEnds] = useState<Endpoint[] | null>(null);
+  // Which far end the buttons act on. A boundary with several ends is one
+  // boundary with a choice, not several boundaries — the same shape the impl
+  // switcher uses for a call that may dispatch to any of a set.
+  const [picked, setPicked] = useState(0);
 
-  // What the far side is called, from this side. The label is the rule
-  // author's, so it already says it; this is for the list beneath.
-  const several = (leaf.ends ?? 0) > 1;
+  const names = leaf.ends ?? [];
+  const several = names.length > 1;
   // Where the boundary leads when there is exactly one end — the server fills
   // this in only then, and only when that service is already indexed.
   const destination = leaf.targetPath || leaf.service || "";
@@ -85,37 +90,36 @@ export function LeafCard({
     return [];
   }
 
-  async function withEnds<T>(what: string, run: (ends: Endpoint[]) => Promise<T>) {
+  // The ends are named up front but their code isn't loaded until one is
+  // chosen: resolving indexes the service being resolved into, which is a cost
+  // nobody should pay for the ends they didn't pick.
+  async function withPicked(what: string, run: (end: Endpoint) => Promise<void> | void) {
     setBusy(what);
     setError(null);
     try {
       const found = ends ?? (await far());
       setEnds(found);
-      if (found.length) await run(found);
+      const end =
+        found.find((e) => e.service === names[picked]) ?? found[Math.min(picked, found.length - 1)];
+      if (end) await run(end);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(null);
     }
-  }
-
-  function openEnd(end: Endpoint) {
-    if (end.target) onOpen(end.target);
   }
 
   async function inlineEnd(end: Endpoint) {
-    if (!end.target) return;
-    setBusy(`inline:${end.repo}`);
-    setError(null);
-    try {
-      setInlined(await fetchBodyByTarget(end.target));
-      onInline();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(null);
+    if (!end.target) {
+      setError(`${end.service} is an end of this key but has no code to open`);
+      return;
     }
+    setInlined(await fetchBodyByTarget(end.target));
+    onInline();
   }
+
+  // Whatever we know about the chosen end — only after something resolved it.
+  const pickedEnd = ends?.find((e) => e.service === names[picked]) ?? null;
 
   function hide() {
     setInlined(null);
@@ -150,13 +154,39 @@ export function LeafCard({
     <div className="leaf-card">
       <div className="leaf-bar">
         <span className="leaf-label">{leaf.label || leaf.key || "boundary"}</span>
-        {leaf.crossRepo && !several && (
+        {/* One boundary with a choice, not several boundaries. Picking here
+            costs nothing: the names came from the join, and only the end you
+            act on is resolved. */}
+        {several && (
+          <select
+            className="leaf-pick"
+            value={picked}
+            onChange={(e) => {
+              setPicked(Number(e.target.value));
+              // The spliced body belongs to the end that was showing.
+              if (open) hide();
+            }}
+            aria-label="which service"
+            title={`${names.length} services on the other side of ${leaf.key ?? "this key"}`}
+          >
+            {names.map((name, i) => (
+              <option key={name} value={i}>
+                {name}
+              </option>
+            ))}
+          </select>
+        )}
+        {leaf.crossRepo && (
           <>
             <button
               type="button"
               className="leaf-action"
               disabled={!!busy}
-              onClick={() => void withEnds("open", async (e) => openEnd(e[0]))}
+              onClick={() =>
+                void withPicked("open", (end) => {
+                  if (end.target) onOpen(end.target);
+                })
+              }
             >
               {busy === "open" ? "…" : "open"}
             </button>
@@ -169,26 +199,14 @@ export function LeafCard({
                 type="button"
                 className="leaf-action"
                 disabled={!!busy}
-                onClick={() => void withEnds("inline", (e) => inlineEnd(e[0]))}
+                onClick={() => void withPicked("inline", inlineEnd)}
               >
-                {busy ? "indexing…" : "inline"}
+                {busy === "inline" ? "indexing…" : "inline"}
               </button>
             )}
           </>
         )}
-        {/* With several ends the buttons move onto the rows: there is no "the"
-            far side to act on, and a card that acted on one of them would be
-            answering a question nobody asked. */}
-        {leaf.crossRepo && several && !ends && (
-          <button
-            type="button"
-            className="leaf-action"
-            disabled={!!busy}
-            onClick={() => void withEnds("list", async () => {})}
-          >
-            {busy ? "indexing…" : `${leaf.ends} services`}
-          </button>
-        )}
+        {several && <span className="leaf-count">{names.length} services</span>}
         {/* One thing at the end: where this lands. The key isn't repeated —
             it's in the code the bar is sitting under. */}
         {!several && destination && (
@@ -205,34 +223,9 @@ export function LeafCard({
             {destination}
           </span>
         )}
+        {several && pickedEnd?.path && <span className="leaf-dest">{pickedEnd.path}</span>}
       </div>
       {error && <div className="call-error">{error}</div>}
-      {ends && ends.length > 1 && (
-        <ul className="leaf-ends">
-          {ends.map((end) => (
-            <li key={end.repo} className="leaf-end">
-              <span className="leaf-end-service">{end.service}</span>
-              <span className="leaf-end-title">{end.title || "(not linkable)"}</span>
-              {end.target && (
-                <>
-                  <button type="button" className="leaf-action" onClick={() => openEnd(end)}>
-                    open
-                  </button>
-                  <button
-                    type="button"
-                    className="leaf-action"
-                    disabled={!!busy}
-                    onClick={() => void inlineEnd(end)}
-                  >
-                    {busy === `inline:${end.repo}` ? "…" : "inline"}
-                  </button>
-                </>
-              )}
-              {end.path && <span className="leaf-dest">{end.path}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
       {open && inlined && (
         // inline-child as well, so the spliced body is laid out like every
         // other inline expansion — classic indent mode offsets that class, and

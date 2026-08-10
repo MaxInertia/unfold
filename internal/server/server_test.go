@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MaxInertia/unfold/internal/engine"
 	"github.com/MaxInertia/unfold/internal/indexer"
@@ -455,8 +457,39 @@ func TestLinkRepoValidatesBeforeRebuilding(t *testing.T) {
 	// The linked set is package-level state on the engine, so a test that
 	// leaves entries behind changes what the next one loads.
 	t.Cleanup(func() { engine.LinkedRepos = nil })
-	reloads := 0
-	srv.SetReloader(func() error { reloads++; return nil })
+	// A rebuild is asynchronous now — the link is recorded and answered
+	// immediately, and the index is built behind it — so the count is written
+	// from another goroutine and every assertion about it has to wait for the
+	// rebuild rather than race it.
+	var reloads atomic.Int64
+	rebuilt := make(chan error, 8)
+	ok := func() error { reloads.Add(1); rebuilt <- nil; return nil }
+	srv.SetReloader(ok)
+
+	// waitRebuild blocks until a rebuild finishes, or fails the test.
+	waitRebuild := func(t *testing.T) error {
+		t.Helper()
+		select {
+		case err := <-rebuilt:
+			return err
+		case <-time.After(10 * time.Second):
+			t.Fatal("no rebuild ran")
+			return nil
+		}
+	}
+	// noRebuild asserts that nothing was rebuilt — for the paths that must be
+	// refused before any index work is paid for.
+	noRebuild := func(t *testing.T, before int64) {
+		t.Helper()
+		select {
+		case <-rebuilt:
+			t.Error("a refused request rebuilt the index anyway")
+		case <-time.After(150 * time.Millisecond):
+		}
+		if reloads.Load() != before {
+			t.Errorf("rebuilds: got %d, want %d", reloads.Load(), before)
+		}
+	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -482,52 +515,89 @@ func TestLinkRepoValidatesBeforeRebuilding(t *testing.T) {
 	}
 
 	t.Run("rejects a non-module", func(t *testing.T) {
-		before := reloads
+		before := reloads.Load()
 		post(t, `{"path":"`+t.TempDir()+`"}`, http.StatusBadRequest)
-		if reloads != before {
-			t.Error("a directory with no go.mod must be rejected before any rebuild")
-		}
+		noRebuild(t, before)
 	})
 
 	t.Run("rejects a missing directory", func(t *testing.T) {
-		before := reloads
+		before := reloads.Load()
 		post(t, `{"path":"`+filepath.Join(t.TempDir(), "nope")+`"}`, http.StatusBadRequest)
-		if reloads != before {
-			t.Error("a path that doesn't exist must not trigger a rebuild")
-		}
+		noRebuild(t, before)
 	})
 
 	t.Run("links a real module, once", func(t *testing.T) {
 		dir := repoFixture(t)
-		before := reloads
-		post(t, `{"path":"`+dir+`"}`, http.StatusOK)
-		if reloads != before+1 {
-			t.Errorf("linking should rebuild exactly once, got %d", reloads-before)
+		before := reloads.Load()
+		out := post(t, `{"path":"`+dir+`"}`, http.StatusOK)
+
+		// Answered before the index exists, and the repo is already in the
+		// list it answers with — being added is the user's decision, and it
+		// holds from the moment they make it.
+		listed := false
+		for _, r := range out["repos"].([]any) {
+			if r.(map[string]any)["dir"] == dir {
+				listed = true
+				if r.(map[string]any)["indexing"] != true {
+					t.Error("a repo whose index is still building should say so")
+				}
+			}
+		}
+		if !listed {
+			t.Errorf("the linked repo is missing from the response: %v", out["repos"])
+		}
+
+		waitRebuild(t)
+		if got := reloads.Load(); got != before+1 {
+			t.Errorf("linking should rebuild exactly once, got %d", got-before)
 		}
 		// The same repo twice is a no-op, not a second copy in the workspace.
 		post(t, `{"path":"`+dir+`"}`, http.StatusConflict)
-		if reloads != before+1 {
-			t.Error("re-linking an open repo must not rebuild")
-		}
+		noRebuild(t, before+1)
 		post(t, `{"path":"`+dir+`","unlink":true}`, http.StatusOK)
+		waitRebuild(t)
 	})
 
 	t.Run("unlinking something not linked is refused", func(t *testing.T) {
-		before := reloads
+		before := reloads.Load()
 		post(t, `{"path":"`+repoFixture(t)+`","unlink":true}`, http.StatusBadRequest)
-		if reloads != before {
-			t.Error("no rebuild for a repo that was never linked")
-		}
+		noRebuild(t, before)
 	})
 
-	t.Run("a failed rebuild rolls the link back", func(t *testing.T) {
+	t.Run("a failed rebuild rolls the link back and reports it", func(t *testing.T) {
 		dir := repoFixture(t)
-		srv.SetReloader(func() error { return errFake })
-		post(t, `{"path":"`+dir+`"}`, http.StatusUnprocessableEntity)
+		srv.SetReloader(func() error { rebuilt <- errFake; return errFake })
+		// Answered before the outcome is known, so the failure can't come back
+		// on this request — it has to reach the reader through the repo list.
+		post(t, `{"path":"`+dir+`"}`, http.StatusOK)
+		waitRebuild(t)
+
+		var failure string
+		for i := 0; i < 100 && failure == ""; i++ {
+			res, err := http.Get(ts.URL + "/api/repos")
+			if err != nil {
+				t.Fatalf("get repos: %v", err)
+			}
+			var body struct {
+				Repos []model.RepoInfo `json:"repos"`
+			}
+			_ = json.NewDecoder(res.Body).Decode(&body)
+			res.Body.Close()
+			for _, r := range body.Repos {
+				if r.Dir == dir && r.Error != "" {
+					failure = r.Error
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if failure == "" {
+			t.Error("a rebuild that failed never showed up in the repo list")
+		}
+
 		// The engine kept the previous index, so the link must not survive —
 		// otherwise the next rebuild for any other reason would silently
 		// apply a repo the user was told had failed.
-		srv.SetReloader(func() error { reloads++; return nil })
+		srv.SetReloader(ok)
 		post(t, `{"path":"`+dir+`","unlink":true}`, http.StatusBadRequest)
 	})
 

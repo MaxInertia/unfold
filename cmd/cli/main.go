@@ -147,7 +147,11 @@ func main() {
 	if *watch {
 		w, err := engine.NewWatcher(*dir, 250*time.Millisecond, func(cause string) {
 			log.Printf("change detected in %s, reindexing...", cause)
-			if err := eng.Reload(); err != nil {
+			// Through the server, which serializes rebuilds: a save and a
+			// linked repo can arrive at the same moment, and two rebuilds that
+			// each construct an engine and then swap leave whichever finished
+			// last in charge — not whichever started last.
+			if err := srv.Reload(); err != nil {
 				log.Printf("reindex failed (keeping previous index): %v", err)
 				return
 			}

@@ -51,7 +51,11 @@ export function LinkRepo({ label = "+ link repo…" }: { label?: string }) {
       label="repository to open"
       placeholder="~/src/orders"
       action="open this repository"
-      busyLabel="indexing…"
+      // "adding…", not "indexing…": the request returns as soon as the repo
+      // is part of the workspace, and the index is built behind it. The
+      // services button carries that wait, where it can be watched instead of
+      // held open in a dialog whose question has already been answered.
+      busyLabel="adding…"
       error={error}
       busy={busy}
       onSubmit={(p) => void link(p)}
