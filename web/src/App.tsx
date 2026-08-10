@@ -322,30 +322,35 @@ function AppShell() {
       <header className="app-header">
         <h1>unfold</h1>
         {target && <span className="app-target">target: <code>{target}</code></span>}
-        {platform && (
+        {/* One group, laid out rather than each button pinned to the right
+            edge on its own — which is what they were, so they sat on top of
+            each other whenever more than one was showing. */}
+        <div className="app-actions">
+          {platform && (
+            <button
+              type="button"
+              className={`app-settings${rulesOpen ? " app-settings--open" : ""}`}
+              onClick={toggleRules}
+              title="recognizers — what unfold treats as a platform edge, and how much each rule matched"
+              aria-label="toggle recognizers"
+            >
+              ⌥
+            </button>
+          )}
+          {/* Beside settings, because it is the same kind of thing: not part
+              of the code you are reading, but something about the session you
+              occasionally need to see. */}
+          <WorkspaceStatus />
           <button
             type="button"
-            className={`app-settings${rulesOpen ? " app-settings--open" : ""}`}
-            onClick={toggleRules}
-            title="recognizers — what unfold treats as a platform edge, and how much each rule matched"
-            aria-label="toggle recognizers"
+            className={`app-settings${settingsOpen ? " app-settings--open" : ""}`}
+            onClick={() => setSettingsOpen((v) => !v)}
+            title="settings"
+            aria-label="toggle settings"
           >
-            ⌥
+            ⚙
           </button>
-        )}
-        {/* Beside settings, because it is the same kind of thing: not part of
-            the code you are reading, but something about the session you
-            occasionally need to see. */}
-        <WorkspaceStatus />
-        <button
-          type="button"
-          className={`app-settings${settingsOpen ? " app-settings--open" : ""}`}
-          onClick={() => setSettingsOpen((v) => !v)}
-          title="settings"
-          aria-label="toggle settings"
-        >
-          ⚙
-        </button>
+        </div>
       </header>
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {rulesOpen && <RulesPanel onClose={closeRules} />}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchRepos, indexRepo } from "./api";
+import { AddRepoModal } from "./AddRepo";
 import { useReloadRevision, useReposRevision } from "./reload";
 import type { RepoInfo } from "./types";
 
@@ -19,6 +20,7 @@ export function WorkspaceStatus() {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const reposRevision = useReposRevision();
   const revision = useReloadRevision();
 
@@ -38,9 +40,11 @@ export function WorkspaceStatus() {
     // reload rebuilds the whole set (linking a repo, saving a rule).
   }, [reposRevision, revision]);
 
-  // A single-repo session has no workspace to describe, and an indicator that
-  // says "1 of 1" forever is furniture.
-  if (!repos || repos.length <= 1) return null;
+  // Shown even for a single repo, now that this is also where a repository is
+  // added: hiding it would hide the way out of being a single-repo session.
+  // It was furniture as an unexplained glyph reading "1 of 1"; it isn't as a
+  // named thing you can open.
+  if (!repos) return null;
 
   const working = repos.some((r) => r.indexing);
   const ready = repos.filter((r) => r.indexed).length;
@@ -63,7 +67,7 @@ export function WorkspaceStatus() {
     <div className="ws-status">
       <button
         type="button"
-        className={`icon-button ws-status-button${working ? " ws-status-button--working" : ""}`}
+        className={`ws-status-button${working ? " ws-status-button--working" : ""}`}
         onClick={() => setOpen((v) => !v)}
         // Still a button while it spins: the whole reason to show progress is
         // that someone is waiting on it, and they should be able to see what
@@ -76,7 +80,10 @@ export function WorkspaceStatus() {
             : `${ready} of ${repos.length} services indexed`
         }
       >
-        {working ? <span className="spinner" aria-hidden="true" /> : "◫"}
+        <span>workspace</span>
+        {/* The spinner appends rather than replaces: the button still says
+            what it is while it says what it's doing. */}
+        {working && <span className="spinner" aria-hidden="true" />}
         {failed > 0 && !working && <span className="ws-status-dot" aria-hidden="true" />}
       </button>
       {open && (
@@ -132,12 +139,26 @@ export function WorkspaceStatus() {
               </li>
             ))}
           </ul>
+          {/* Adding a repository belongs here, beside the list of what is
+              already open — this is the surface that answers "what is in my
+              workspace", so it is where the answer gets changed. */}
+          <button
+            type="button"
+            className="ws-panel-add"
+            onClick={() => {
+              setAdding(true);
+              setOpen(false);
+            }}
+          >
+            + add repository
+          </button>
           <p className="ws-panel-note">
             A service that isn’t indexed is still named everywhere — it just has
             no code to open yet.
           </p>
         </div>
       )}
+      {adding && <AddRepoModal onClose={() => setAdding(false)} />}
     </div>
   );
 }

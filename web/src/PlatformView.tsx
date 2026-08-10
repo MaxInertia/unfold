@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchPlatformView, indexRepo } from "./api";
-import { LinkRepo } from "./LinkRepo";
+import { AddRepoButton } from "./AddRepo";
 import { edgePath, labelPoint, layout, NODE_H, NODE_W } from "./platformLayout";
 import type { PlatformEdge, PlatformService, PlatformView as PlatformViewT, TargetID } from "./types";
 
@@ -83,7 +83,7 @@ export function PlatformView({
             {reaching} service{reaching === 1 ? "" : "s"} reach it
           </span>
         )}
-        <LinkRepo />
+        <AddRepoButton />
         {/* Say what's missing rather than letting an unindexed service read
             as one that calls nothing. With an anchor this matters more than
             it looks: reach is transitive, so an unindexed service in the

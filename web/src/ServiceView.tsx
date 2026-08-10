@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BindingRow, displayKey, type CrossingState } from "./BindingRow";
 import { buildCrossing, crossingSummary } from "./crossing";
-import { LinkRepo } from "./LinkRepo";
+import { AddRepoButton } from "./AddRepo";
 import { ProtoRootPicker } from "./ProtoRootPicker";
 import type { Binding, BindingVisibility, ServiceView as ServiceViewT, TargetID } from "./types";
 import { bindingMatches, type ServiceFilters } from "./ZoomSidebar";
@@ -107,7 +107,7 @@ export function ServiceView({
             ))}
           </>
         )}
-        <LinkRepo />
+        <AddRepoButton />
       </div>
 
       {/* An empty gRPC surface and a misconfigured proto root look identical

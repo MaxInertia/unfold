@@ -1550,11 +1550,16 @@ body.resizing {
   position: relative;
 }
 
+/* The header's controls, grouped at the right edge. Each used to pin itself
+   there absolutely, which works for exactly one of them. */
+.app-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
 .app-settings {
-  position: absolute;
-  right: 1rem;
-  top: 50%;
-  transform: translateY(-50%);
   font: inherit;
   font-size: 1.05rem;
   line-height: 1;
@@ -3791,4 +3796,54 @@ body.resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The workspace button is text, not a glyph: it names a thing you can open,
+   and it has room to append what that thing is doing. */
+.ws-status-button {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+}
+
+.ws-panel-add {
+  font: inherit;
+  font-size: 0.72rem;
+  margin-top: 0.4rem;
+  width: 100%;
+  background: none;
+  border: 1px dashed var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.2rem 0.3rem;
+  cursor: pointer;
+}
+
+.ws-panel-add:hover {
+  color: var(--fg);
+  border-color: var(--call-border);
+}
+
+/* One question asked from three places, so one dialog rather than a picker
+   unfolding inside whichever surface happened to ask. */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(0 0 0 / 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 1rem 1rem;
+}
+
+.modal {
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.3);
+  padding: 0.75rem;
+  width: min(38rem, 100%);
+  max-height: 80vh;
+  overflow: auto;
 }
