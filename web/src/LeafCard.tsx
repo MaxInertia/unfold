@@ -114,14 +114,6 @@ export function LeafCard({
     <div className="leaf-card">
       <div className="leaf-bar">
         <span className="leaf-label">{leaf.label || leaf.key || "boundary"}</span>
-        {/* Where it goes, beside the label that says it goes somewhere. The
-            path is service-qualified because "handlers/foo.go" is the one
-            thing that can't tell you which service you'd land in. */}
-        {destination && (
-          <span className="leaf-dest" title={leaf.targetTitle ? `${leaf.targetTitle} — ${destination}` : destination}>
-            {leaf.targetTitle ? `${leaf.targetTitle} · ${destination}` : destination}
-          </span>
-        )}
         {leaf.crossRepo && (
           <>
             <button type="button" className="leaf-action" disabled={!!busy} onClick={() => void openAsRoot()}>
@@ -143,13 +135,24 @@ export function LeafCard({
             )}
           </>
         )}
-        {/* The key, out at the end: it's what the two sides share, so it's
-            what you check when an edge looks wrong. The rule that decided all
-            this is a second-order question — it moves into the tooltip rather
-            than taking the widest slot on the bar. */}
-        <span className="leaf-key" title={`${leaf.kind ?? "key"} — recognized by rule ${leaf.rule}`}>
-          {leaf.key}
-        </span>
+        {/* One thing at the end: where this lands. The key isn't repeated —
+            it's in the code the bar is sitting under, and a bar that wrapped to
+            two lines cost more than it explained. Everything else it used to
+            say is a tooltip away. */}
+        {destination && (
+          <span
+            className="leaf-dest"
+            title={[
+              leaf.targetTitle && `${leaf.targetTitle} in ${leaf.service}`,
+              leaf.key && `${leaf.kind ?? "key"} ${leaf.key}`,
+              `recognized by rule ${leaf.rule}`,
+            ]
+              .filter(Boolean)
+              .join(" — ")}
+          >
+            {destination}
+          </span>
+        )}
       </div>
       {error && <div className="call-error">{error}</div>}
       {open && inlined && (
