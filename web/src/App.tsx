@@ -504,10 +504,13 @@ function AppShell() {
           ) : (
             rootFrame && (
               <div className="app-root-frame">
-                {/* Remount the whole frame tree on reindex so every expanded
-                    child refetches; the expansion intent persists in the store. */}
+                {/* Not keyed on the revision. Remounting made every expanded
+                    child refetch, which is right, but it also unmounted them
+                    first — so a reindex emptied the view and refilled it a few
+                    seconds later. Each frame refetches its own children in
+                    place instead, keeping what it has until the new body
+                    arrives. */}
                 <Frame
-                  key={revision}
                   frame={rootFrame}
                   path={[]}
                   onZoomOut={platform ? () => setZoom("service") : undefined}

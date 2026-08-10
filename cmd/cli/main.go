@@ -141,8 +141,8 @@ func main() {
 
 	// Watch mode: reindex on source changes and push a reload to the browser.
 	if *watch {
-		w, err := engine.NewWatcher(*dir, 250*time.Millisecond, func() {
-			log.Printf("change detected, reindexing...")
+		w, err := engine.NewWatcher(*dir, 250*time.Millisecond, func(cause string) {
+			log.Printf("change detected in %s, reindexing...", cause)
 			if err := eng.Reload(); err != nil {
 				log.Printf("reindex failed (keeping previous index): %v", err)
 				return

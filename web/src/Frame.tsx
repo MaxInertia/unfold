@@ -21,6 +21,7 @@ import {
   type FramePath,
 } from "./viewState";
 import { useBookmarks } from "./bookmarks";
+import { useReloadRevision } from "./reload";
 import { RecognizeCall } from "./RecognizeCall";
 import { LeafCard } from "./LeafCard";
 import { CallersPanel } from "./Callers";
@@ -69,6 +70,8 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
   const [callersOpen, setCallersOpen] = useState(false);
   const settings = useSettings();
+  // A rebuilt index is a reason to refetch a body, not to throw the view away.
+  const revision = useReloadRevision();
   const depth = path.length;
   const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
   const [recognizing, setRecognizing] = useState(false);
@@ -295,16 +298,26 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     for (const cid of wantedIds) {
       const want = slice.expansions[cid];
       if (!want || !own.has(cid)) continue;
-      const loaded = loadedChildren.get(cid);
-      // Need to (re)fetch if not loaded OR loaded with stale choice.
-      if (loaded && (loaded as { __choice?: number }).__choice === want.choice) continue;
+      const loaded = loadedChildren.get(cid) as
+        | (FrameT & { __choice?: number; __rev?: number })
+        | undefined;
+      // Refetch when it isn't loaded, when the chosen implementation changed,
+      // or when the index has been rebuilt under it. The old body stays on
+      // screen until the new one arrives: a reindex used to remount the whole
+      // tree, so every open frame vanished and came back seconds later, which
+      // is a redraw the reader has to recover from rather than a refresh.
+      if (loaded && loaded.__choice === want.choice && loaded.__rev === revision) continue;
       if (loading.has(cid)) continue;
       setLoading((s) => new Set(s).add(cid));
       fetchBodyByCall(cid, want.choice)
         .then((child) => {
           if (!alive) return;
-          // Tag with the choice so we can detect choice changes.
-          (child as { __choice?: number }).__choice = want.choice;
+          // Tag with the choice and the index revision it came from, so both
+          // a switched implementation and a rebuilt index are detectable.
+          Object.assign(child as FrameT & { __choice?: number; __rev?: number }, {
+            __choice: want.choice,
+            __rev: revision,
+          });
           setLoading((s) => {
             const n = new Set(s);
             n.delete(cid);
@@ -331,7 +344,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slice.expansions]);
+  }, [slice.expansions, revision]);
 
   // Fetch the body of each expanded fan-out receiver, and prune frames for
   // receivers that have since been collapsed. Each receiver resolves to its
