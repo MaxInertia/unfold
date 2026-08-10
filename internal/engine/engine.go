@@ -125,8 +125,11 @@ func UnlinkRepo(dir string) bool {
 //
 // Returns nil when there is only the launch module and nothing linked, which
 // is the signal to stay a plain single-repo index rather than paying for
-// workspace machinery to federate one thing.
-func goDirs(dir string) []string {
+// workspace machinery to federate one thing. That signal is the reason a
+// discovery failure must be an error and not an empty result: the two are
+// indistinguishable downstream, and the quiet one comes up as a session with
+// no platform level, no zoom-out, and nothing said about why.
+func goDirs(dir string) ([]string, error) {
 	var dirs []string
 	seen := map[string]bool{}
 	add := func(d string) {
@@ -143,10 +146,11 @@ func goDirs(dir string) []string {
 
 	if Workspace != "" {
 		found, err := workspace.Discover(Workspace)
-		if err == nil {
-			for _, d := range found {
-				add(d)
-			}
+		if err != nil {
+			return nil, fmt.Errorf("--workspace: %w", err)
+		}
+		for _, d := range found {
+			add(d)
 		}
 	}
 	if len(LinkedRepos) > 0 {
@@ -156,9 +160,9 @@ func goDirs(dir string) []string {
 		}
 	}
 	if Workspace == "" && len(LinkedRepos) == 0 {
-		return nil
+		return nil, nil
 	}
-	return dirs
+	return dirs, nil
 }
 
 // moduleRoot walks up from dir to the directory holding its go.mod. unfold is
@@ -188,7 +192,11 @@ func moduleRoot(dir string) string {
 func Load(lang Lang, dir, target string) (model.Engine, error) {
 	switch lang {
 	case LangGo:
-		if dirs := goDirs(dir); len(dirs) > 0 {
+		dirs, err := goDirs(dir)
+		if err != nil {
+			return nil, err
+		}
+		if len(dirs) > 0 {
 			workspace.RulePaths = RecognizerFiles
 			// A repo you linked by hand is one you mean to walk into, so it is
 			// indexed behind the primary even when the workspace is too large

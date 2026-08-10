@@ -143,7 +143,12 @@ func Discover(root string) ([]string, error) {
 		}
 	}
 	if len(dirs) == 0 {
-		return nil, fmt.Errorf("no Go modules found in %s", abs)
+		// Naming the one-level rule here rather than just the directory: the
+		// usual cause is a workspace whose checkouts sit a level deeper than
+		// this looks, and "no Go modules found" reads like the repos are
+		// missing rather than like they weren't looked for.
+		return nil, fmt.Errorf("no go.mod in %s or any of its immediate subdirectories "+
+			"(a workspace is the directory your repository checkouts sit directly in)", abs)
 	}
 	sort.Strings(dirs)
 	return dirs, nil
