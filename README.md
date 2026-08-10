@@ -414,6 +414,12 @@ Both ends of a pubsub edge can be read in place, from either side:
   execution left the process there, and a trace that reads as one continuous
   body would be saying otherwise.
 
+The two ends of a channel don't have to share a kind, and for pub/sub they
+shouldn't: `pubsub.topic` is a publish and `pubsub.subscription` is a
+subscribe, because they are different roles. They join as one channel. Any
+other pair of kinds joins only if they're identical, so a custom vocabulary
+should either use the `pubsub.*` pair or use one kind on both sides.
+
 ### Seeing which rules are in force
 
 The **⌥ recognizers** panel lists every rule, built-in and configured: whether

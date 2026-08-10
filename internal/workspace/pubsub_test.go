@@ -205,6 +205,74 @@ func TestSubscribeHandlerIsExpandableInPlace(t *testing.T) {
 	}
 }
 
+// The two ends of a channel are not called the same thing, and the join has to
+// survive that. unfold's own vocabulary publishes to a `pubsub.topic` and
+// subscribes to a `pubsub.subscription` — different roles, rightly named
+// differently — so a join that demanded an identical kind could never connect
+// a publish to its subscriber, including for the built-in recognizers.
+func TestPubsubJoinsAcrossTopicAndSubscriptionKinds(t *testing.T) {
+	rulesFile := filepath.Join(t.TempDir(), "recognizers.json")
+	err := os.WriteFile(rulesFile, []byte(`{"rules":[
+	  {"id":"sdk.emit",
+	   "match":{"func":"Emit","minArgs":1},
+	   "emit":{"role":"outbound","kind":"pubsub.topic","key":"{arg0.ID}"},
+	   "leaf":{"expand":false,"label":"→ subscriber","crossRepo":true}},
+	  {"id":"sdk.subscribe",
+	   "match":{"func":"Subscribe","minArgs":2},
+	   "emit":{"role":"inbound","kind":"pubsub.subscription","key":"{arg0.ID}","handler":"arg1"}}
+	]}`), 0o644)
+	if err != nil {
+		t.Fatalf("write rules: %v", err)
+	}
+	prev := RulePaths
+	RulePaths = []string{rulesFile}
+	t.Cleanup(func() { RulePaths = prev })
+
+	dirs, err := Discover(abs(t, "testdata/pubsub"))
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	w, err := Open(dirs, abs(t, "testdata/pubsub/publisher"), "", ModeEager)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	w.WaitIndexed()
+
+	// The hop the leaf's "inline" button makes, with the publishing side's
+	// kind — which is the only kind that side knows.
+	res, err := w.Resolve("pubsub.topic", "foo-happened")
+	if err != nil {
+		t.Fatalf("Resolve(pubsub.topic): %v", err)
+	}
+	if res.Title != "handleFoo" {
+		t.Errorf("the hop lands on %q, want handleFoo", res.Title)
+	}
+
+	sv, err := w.ServiceView("")
+	if err != nil {
+		t.Fatalf("ServiceView: %v", err)
+	}
+	for _, b := range sv.Outbound {
+		if b.Kind == "pubsub.topic" && b.ServedByRepo != "subscriber" {
+			t.Errorf("publish to %q says it's served by %q, want subscriber", b.Key, b.ServedByRepo)
+		}
+	}
+
+	pv, err := w.PlatformView("")
+	if err != nil {
+		t.Fatalf("PlatformView: %v", err)
+	}
+	var edge bool
+	for _, e := range pv.Edges {
+		if e.From == "publisher" && e.To == "subscriber" {
+			edge = true
+		}
+	}
+	if !edge {
+		t.Errorf("no publisher→subscriber edge across the two kinds (%+v)", pv.Edges)
+	}
+}
+
 // A key nothing declares is unknown until its service is indexed, and the two
 // states must not be reported as the same thing: "nobody serves this" is a
 // claim about the platform, where this is a claim about what has been opened.

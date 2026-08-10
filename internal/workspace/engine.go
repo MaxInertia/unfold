@@ -337,12 +337,14 @@ func (w *Workspace) qualifyCandidates(alias string, in []model.Candidate) []mode
 func (w *Workspace) Resolve(kind, key string) (*model.Resolution, error) {
 	alias, ok := w.serverOf(kind, key)
 	if !ok {
-		// A key nothing declares is only known once its service has been
-		// indexed, so "nobody serves this" and "nobody has opened the service
-		// that does" look identical here. Say so, rather than reporting the
-		// stronger claim.
-		return nil, fmt.Errorf("no indexed service in this workspace serves %s %q "+
-			"(a subscription is only known once its service is indexed)", kind, key)
+		// Two things to be careful about in this sentence. "Serves" reads as an
+		// accusation at the publisher, which is the side asking — what's
+		// missing is whoever is on the *other* end. And a key nothing declares
+		// is only known once its service has been indexed, so "nobody handles
+		// this" and "nobody has opened the service that does" look identical
+		// from here; claiming the first would be claiming more than is known.
+		return nil, fmt.Errorf("nothing in this workspace handles the far end of %s %q "+
+			"— a subscriber is only known once its service is indexed", kind, key)
 	}
 	r := w.repos[alias]
 	if err := w.load(alias); err != nil {
@@ -358,7 +360,10 @@ func (w *Workspace) Resolve(kind, key string) (*model.Resolution, error) {
 		return nil, err
 	}
 	for _, b := range sv.Inbound {
-		if b.Kind != kind || b.Key != key {
+		// Same normalization as the lookup that got us here: the caller asks
+		// with the kind its own side uses, and the answering end's kind is the
+		// other half of the channel.
+		if channelOf(b.Kind) != channelOf(kind) || b.Key != key {
 			continue
 		}
 		res.Target = model.TargetID(w.qualify(alias, string(b.Target)))

@@ -365,7 +365,31 @@ func (w *Workspace) readDeclarations() {
 	}
 }
 
-func declKey(kind, key string) string { return kind + "\x00" + key }
+// declKey is the join identity: what an outbound edge asks for, and what an
+// inbound one answers with. It normalizes the kind, because the two ends of a
+// channel are not called the same thing.
+func declKey(kind, key string) string { return channelOf(kind) + "\x00" + key }
+
+// channelOf collapses the names for the two ends of one channel to the channel
+// itself.
+//
+// A gRPC method is called `grpc.method` from both sides — the caller names the
+// method it calls and the server declares the method it implements — so the
+// join could be an exact match on kind and nobody noticed. Pub/sub is not like
+// that: the publish side is `pubsub.topic` and the subscribe side is
+// `pubsub.subscription`, and rightly, because they are different roles. Joining
+// on kind then meant the two ends of every pubsub edge could never meet,
+// including for the built-in recognizers.
+//
+// The kind still namespaces the key everywhere it is *displayed*; this is only
+// about what counts as the same channel when matching the ends.
+func channelOf(kind string) string {
+	switch kind {
+	case "pubsub.topic", "pubsub.subscription":
+		return "pubsub"
+	}
+	return kind
+}
 
 // Repos reports the workspace's repositories, for display.
 func (w *Workspace) Repos() []model.RepoInfo {
