@@ -3618,3 +3618,188 @@ body.resizing {
   border-style: dashed;
   color: var(--muted);
 }
+
+/* ----- workspace status: what is open, and what it is doing ----- */
+
+.ws-status {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Shares the header button shape with settings and recognizers. */
+.ws-status-button {
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.15rem 0.35rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.ws-status-button:hover {
+  color: var(--fg);
+  border-color: var(--card-border);
+}
+
+/* Working, and still a button: the reason to show progress is that someone is
+   waiting on it, and they should be able to see what for. */
+.ws-status-button--working {
+  color: var(--fg);
+}
+
+.spinner {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  border: 2px solid var(--card-border);
+  border-top-color: var(--fg);
+  border-radius: 50%;
+  animation: ws-spin 0.8s linear infinite;
+}
+
+.spinner--small {
+  width: 0.7em;
+  height: 0.7em;
+  border-width: 1.5px;
+}
+
+@keyframes ws-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Motion is decoration here; the state is in the panel and the tooltip. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+}
+
+.ws-status-dot {
+  width: 0.4em;
+  height: 0.4em;
+  border-radius: 50%;
+  background: var(--error-fg, #b91c1c);
+}
+
+.ws-panel {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 40;
+  min-width: 17rem;
+  padding: 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+}
+
+.ws-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.ws-panel-title {
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.ws-panel-count,
+.ws-panel-note {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.ws-panel-note {
+  margin: 0.4rem 0 0;
+}
+
+.ws-panel-error {
+  color: var(--error-fg, #b91c1c);
+  font-size: 0.72rem;
+  margin-bottom: 0.3rem;
+}
+
+.ws-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ws-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+}
+
+.ws-item-state {
+  display: inline-flex;
+  width: 1em;
+  justify-content: center;
+}
+
+.ws-glyph--ready {
+  color: var(--ok-fg, #15803d);
+}
+
+.ws-glyph--idle {
+  color: var(--muted);
+}
+
+.ws-glyph--error {
+  color: var(--error-fg, #b91c1c);
+}
+
+.ws-item-name {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.ws-item-primary {
+  color: var(--muted);
+  font-size: 0.62rem;
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+  padding: 0 0.2rem;
+}
+
+.ws-item-action {
+  font: inherit;
+  font-size: 0.68rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0 0.3rem;
+  cursor: pointer;
+}
+
+.ws-item-action:hover {
+  color: var(--fg);
+}
+
+.ws-item-error {
+  color: var(--error-fg, #b91c1c);
+  font-size: 0.68rem;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

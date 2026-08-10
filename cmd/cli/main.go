@@ -123,6 +123,10 @@ func main() {
 	url := fmt.Sprintf("http://%s", listener.Addr().String())
 
 	srv := server.New(eng)
+	// Background indexing is invisible from the browser otherwise: a repo can
+	// start and finish being read with nothing on screen saying so, which is
+	// exactly the wait a reader wants to see.
+	workspace.OnRepoChange = srv.NotifyRepos
 	srv.SetTarget(target)
 	srv.SetDiffer(differ)
 	srv.SetProjectDir(projectDir(*dir))

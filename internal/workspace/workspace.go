@@ -78,7 +78,12 @@ type repo struct {
 	mu     sync.Mutex
 	idx    *indexer.Indexer
 	loaded bool
-	err    error
+	// loading is true while this repo's code is being read. Kept beside
+	// `loaded` rather than derived from the load lock, because "is someone
+	// holding the lock" is not a question a reader can ask without waiting for
+	// the answer — which is the wait this whole split exists to avoid.
+	loading bool
+	err     error
 }
 
 // Workspace implements model.Engine over several repos.
@@ -112,6 +117,20 @@ type Workspace struct {
 
 	// bg tracks the background eager load, so WaitIndexed can join it.
 	bg sync.WaitGroup
+}
+
+// OnRepoChange is called whenever a repository starts or finishes indexing, so
+// a UI can show what is happening without polling for it. Package-level for the
+// same reason RulePaths is: it is a process-wide wiring, set once at startup.
+//
+// Called from whichever goroutine changed the state, including background
+// loaders, so it must not block.
+var OnRepoChange func()
+
+func repoChanged() {
+	if OnRepoChange != nil {
+		OnRepoChange()
+	}
 }
 
 // RulePaths are the shared recognizer files every repo in a workspace loads.
@@ -405,14 +424,15 @@ func (w *Workspace) Repos() []model.RepoInfo {
 	for _, alias := range w.order {
 		r := w.repos[alias]
 		r.mu.Lock()
-		loaded, err := r.loaded, r.err
+		loaded, loading, err := r.loaded, r.loading, r.err
 		r.mu.Unlock()
 		info := model.RepoInfo{
-			Alias:   alias,
-			Name:    r.name,
-			Dir:     r.dir,
-			Primary: alias == w.primary,
-			Indexed: loaded,
+			Alias:    alias,
+			Name:     r.name,
+			Dir:      r.dir,
+			Primary:  alias == w.primary,
+			Indexed:  loaded,
+			Indexing: loading,
 		}
 		if err != nil {
 			info.Error = err.Error()
@@ -442,6 +462,17 @@ func (w *Workspace) load(alias string) error {
 	if prevErr != nil {
 		return prevErr // don't retry a repo that already failed to build
 	}
+	r.mu.Lock()
+	r.loading = true
+	r.mu.Unlock()
+	repoChanged()
+	defer func() {
+		r.mu.Lock()
+		r.loading = false
+		r.mu.Unlock()
+		repoChanged()
+	}()
+
 	idx := indexer.New()
 	// Rules are a platform-wide fact — they describe libraries, not one
 	// service — so every repo in the workspace gets the same set, plus its own

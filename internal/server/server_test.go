@@ -532,13 +532,31 @@ func TestLinkRepoValidatesBeforeRebuilding(t *testing.T) {
 	})
 
 	t.Run("guards", func(t *testing.T) {
+		// GET reads the repo list — what is open, and what each one is doing.
+		// It changes nothing, so it is not behind the mutation guard; the
+		// guard is for POST, which rebuilds the index.
 		res, err := http.Get(ts.URL + "/api/repos")
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}
+		var body struct {
+			Repos []model.RepoInfo `json:"repos"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Errorf("GET /api/repos should return a repo list: %v", err)
+		}
 		res.Body.Close()
-		if res.StatusCode != http.StatusMethodNotAllowed {
-			t.Errorf("GET should be refused, got %d", res.StatusCode)
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("GET should be allowed, got %d", res.StatusCode)
+		}
+		req0, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/repos", nil)
+		res0, err := http.DefaultClient.Do(req0)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		res0.Body.Close()
+		if res0.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("an unsupported method should be refused, got %d", res0.StatusCode)
 		}
 		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/repos", strings.NewReader(`{"path":"/tmp"}`))
 		req.Header.Set("Origin", "http://evil.example")

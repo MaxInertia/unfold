@@ -125,6 +125,14 @@ export function resolveBinding(
   return getJSON<Resolution>(`/api/resolve?${qs.toString()}`);
 }
 
+// What repositories are open and what each is doing. Cheap and read-only —
+// the "what is it working on" indicator polls nothing, it re-reads this when
+// the server says something changed.
+export async function fetchRepos(): Promise<RepoInfo[]> {
+  const res = await getJSON<{ repos: RepoInfo[] }>("/api/repos");
+  return res.repos ?? [];
+}
+
 // Every key the workspace has seen, with the services at each end. Cheap: it
 // reads the join, not any index, so it answers for the whole workspace
 // whatever has been opened.

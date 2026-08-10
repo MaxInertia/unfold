@@ -186,6 +186,10 @@ export interface RepoInfo {
   dir: string;
   primary?: boolean;
   indexed?: boolean; // its Go code is loaded; lazy repos start false
+  // Being read right now. Distinct from !indexed, which is the resting state
+  // of a repo nobody has opened: one is "not yet", the other "not unless you
+  // ask".
+  indexing?: boolean;
   error?: string;
 }
 

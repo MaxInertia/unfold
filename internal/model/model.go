@@ -478,9 +478,14 @@ type RepoInfo struct {
 	Alias   string `json:"alias"` // stable key used to namespace ids
 	Name    string `json:"name"`  // display name (the manifest's, usually)
 	Dir     string `json:"dir"`
-	Primary bool   `json:"primary,omitempty"` // the repo unfold was pointed at
-	Indexed bool   `json:"indexed,omitempty"` // its Go code is loaded
-	Error   string `json:"error,omitempty"`
+	Primary bool `json:"primary,omitempty"` // the repo unfold was pointed at
+	Indexed bool `json:"indexed,omitempty"` // its Go code is loaded
+	// Indexing is true while its Go code is being read. Distinct from
+	// !Indexed, which is the resting state of a repo nobody has opened: one
+	// is "not yet", the other is "not unless you ask", and a reader waiting on
+	// a service needs to know which of those they are looking at.
+	Indexing bool   `json:"indexing,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // Resolution is the answer to "open the implementation of this key". Target

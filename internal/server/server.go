@@ -44,7 +44,10 @@ type Server struct {
 
 	// Connected /api/events subscribers, notified when the engine reindexes.
 	mu      sync.Mutex
-	clients map[chan struct{}]struct{}
+	// clients receive event names — "reload" when the index was rebuilt,
+	// "repos" when a repository started or finished indexing. One channel per
+	// subscriber, so a slow reader can't hold up an indexer.
+	clients map[chan string]struct{}
 }
 
 // New builds a server backed by any indexing engine (Go or TypeScript).
@@ -53,7 +56,7 @@ func New(engine model.Engine) *Server {
 	if err != nil {
 		panic(err)
 	}
-	return &Server{engine: engine, static: sub, clients: map[chan struct{}]struct{}{}}
+	return &Server{engine: engine, static: sub, clients: map[chan string]struct{}{}}
 }
 
 // SetTarget records the indexer pattern (e.g. "./...") for the /api/health response.
@@ -121,7 +124,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch := make(chan struct{}, 1)
+	// Buffered enough that a burst of repo-state changes — four repos loading
+	// two at a time — isn't dropped while a client is being written to.
+	ch := make(chan string, 8)
 	s.addClient(ch)
 	defer s.removeClient(ch)
 
@@ -135,8 +140,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-ch:
-			fmt.Fprint(w, "event: reload\ndata: {}\n\n")
+		case event := <-ch:
+			fmt.Fprintf(w, "event: %s\ndata: {}\n\n", event)
 			flusher.Flush()
 		case <-ping.C:
 			fmt.Fprint(w, ": ping\n\n")
@@ -145,27 +150,36 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// NotifyReload wakes every connected /api/events subscriber. Non-blocking: a
-// client that hasn't drained its previous notification already has a reload
-// pending, so dropping the duplicate is fine.
-func (s *Server) NotifyReload() {
+// NotifyReload tells every subscriber the index was rebuilt.
+func (s *Server) NotifyReload() { s.notify("reload") }
+
+// NotifyRepos tells every subscriber that a repository started or finished
+// indexing. Separate from a reload because it is not one: nothing about the
+// code on screen changed, and a view that refetched itself every time a
+// background load ticked would be redrawing to report someone else's progress.
+func (s *Server) NotifyRepos() { s.notify("repos") }
+
+// notify wakes every connected /api/events subscriber. Non-blocking: a client
+// whose buffer is full is already behind, and the events are edges on a state
+// it can always re-read.
+func (s *Server) notify(event string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for ch := range s.clients {
 		select {
-		case ch <- struct{}{}:
+		case ch <- event:
 		default:
 		}
 	}
 }
 
-func (s *Server) addClient(ch chan struct{}) {
+func (s *Server) addClient(ch chan string) {
 	s.mu.Lock()
 	s.clients[ch] = struct{}{}
 	s.mu.Unlock()
 }
 
-func (s *Server) removeClient(ch chan struct{}) {
+func (s *Server) removeClient(ch chan string) {
 	s.mu.Lock()
 	delete(s.clients, ch)
 	s.mu.Unlock()
@@ -392,9 +406,24 @@ func mustJSON(v any) []byte {
 // Mutating and filesystem-touching, so it's guarded like /api/open: POST only
 // and same-origin only.
 func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
+	// GET reports what is open and what state each repo is in — cheap, and the
+	// thing a "what is it doing" indicator reads. POST changes the set.
+	if r.Method == http.MethodGet {
+		lister, ok := s.engine.(interface{ Repos() []model.RepoInfo })
+		if !ok {
+			writeJSON(w, http.StatusOK, map[string]any{"repos": []model.RepoInfo{}})
+			return
+		}
+		repos := lister.Repos()
+		if repos == nil {
+			repos = []model.RepoInfo{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"repos": repos})
+		return
+	}
 	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		writeError(w, http.StatusMethodNotAllowed, "POST only")
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST only")
 		return
 	}
 	if !sameOrigin(r) {

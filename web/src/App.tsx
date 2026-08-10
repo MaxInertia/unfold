@@ -12,6 +12,7 @@ import { loadNotes } from "./notes";
 import { ServiceView } from "./ServiceView";
 import { PlatformView } from "./PlatformView";
 import { ChannelIndex } from "./ChannelIndex";
+import { WorkspaceStatus } from "./WorkspaceStatus";
 import { EntrypointsPanel, OutboundsPanel } from "./AnchorPanels";
 import { ZoomTrail } from "./ZoomTrail";
 import {
@@ -332,6 +333,10 @@ function AppShell() {
             ⌥
           </button>
         )}
+        {/* Beside settings, because it is the same kind of thing: not part of
+            the code you are reading, but something about the session you
+            occasionally need to see. */}
+        <WorkspaceStatus />
         <button
           type="button"
           className={`app-settings${settingsOpen ? " app-settings--open" : ""}`}
