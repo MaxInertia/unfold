@@ -3490,3 +3490,131 @@ body.resizing {
 .leaf-inlined {
   margin-top: 0.2rem;
 }
+
+/* ----- the key index: every channel, and who is on each side ----- */
+
+/* Two readings of one level, so the toggle sits above both rather than
+   inside either. */
+.platform-modes {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.platform-mode {
+  font: inherit;
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+
+.platform-mode--on {
+  color: var(--fg);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.channels-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.channels-filter {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  flex: 1 1 auto;
+  max-width: 24rem;
+}
+
+.channels-count,
+.channels-note {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.channels-note--error {
+  color: var(--error-fg, #b91c1c);
+}
+
+.channels-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.channel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.75rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+}
+
+.channel-key-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.channel-kind {
+  color: var(--muted);
+  font-size: 0.68rem;
+  margin-left: 0.4rem;
+}
+
+.channel-ends {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.channel-side {
+  display: inline-flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+/* An empty side is a finding, not a gap in the rendering. */
+.channel-side--empty {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
+.channel-arrow {
+  color: var(--muted);
+}
+
+.channel-service {
+  font: inherit;
+  font-size: 0.72rem;
+  background: var(--call-bg);
+  border: 1px solid var(--call-border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 0 0.35rem;
+  cursor: pointer;
+}
+
+/* Nameable but not openable: its code hasn't been read. */
+.channel-service--unindexed {
+  background: none;
+  border-style: dashed;
+  color: var(--muted);
+}

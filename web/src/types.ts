@@ -216,6 +216,26 @@ export interface Endpoint {
   indexed: boolean; // false: known to be an end, code not read yet
 }
 
+// One key and the services at each end of it — the index behind "what events
+// are there, and who is on them". Named, not described: knowing which function
+// subscribes means indexing that service, and this is meant to be readable for
+// a whole workspace at once.
+export interface Channel {
+  // What the key lives in — "pubsub", "grpc.method". Not a kind: the two sides
+  // of a channel are named differently, so the index is keyed by what they
+  // share.
+  channel: string;
+  key: string;
+  inbound: ChannelEnd[]; // receives: subscribers, handlers, implementers
+  outbound: ChannelEnd[]; // sends
+}
+
+export interface ChannelEnd {
+  repo: string;
+  service: string;
+  indexed: boolean; // known from a declaration, code not read: nameable, not openable
+}
+
 // The L0 view. Services come from declarations so all are listed; edges need
 // a service's code to have been read, so an un-indexed service shows no
 // outgoing calls — which the view says rather than implying it calls nothing.

@@ -202,6 +202,19 @@ func (r *Reloadable) IndexRepo(alias string) error {
 	return ir.IndexRepo(alias)
 }
 
+// Channels forwards the key index when the engine holds one. A single repo
+// has channels too — its own bindings — but no other end to name, so the
+// question only means something for a workspace.
+func (r *Reloadable) Channels() []model.Channel {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	lister, ok := r.cur.(model.ChannelLister)
+	if !ok {
+		return nil
+	}
+	return lister.Channels()
+}
+
 // Repos forwards the workspace's repository list. Empty for a single-repo
 // engine, which is the honest answer rather than an error: nothing is wrong,
 // there is simply no workspace yet — and linking a repo is exactly how one

@@ -1,5 +1,6 @@
 import type {
   CallID,
+  Channel,
   PlatformView,
   Resolution,
   Frame,
@@ -122,6 +123,14 @@ export function resolveBinding(
   const qs = new URLSearchParams({ kind, key });
   if (role) qs.set("role", role);
   return getJSON<Resolution>(`/api/resolve?${qs.toString()}`);
+}
+
+// Every key the workspace has seen, with the services at each end. Cheap: it
+// reads the join, not any index, so it answers for the whole workspace
+// whatever has been opened.
+export async function fetchChannels(): Promise<Channel[]> {
+  const res = await getJSON<{ channels: Channel[] }>("/api/channels");
+  return res.channels ?? [];
 }
 
 // The subdirectories of a path, for the proto-root picker. A browser can't

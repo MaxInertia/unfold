@@ -525,6 +525,44 @@ type Endpoint struct {
 	Indexed bool `json:"indexed"`
 }
 
+// Channel is one key and the services standing at each end of it: who sends,
+// who receives. The platform view answers "what talks to what"; this answers
+// the question underneath it — "what is this event, and who is on it" —
+// without having to find a call site that mentions it first.
+//
+// Ends are named, not described: knowing *which* function subscribes means
+// having indexed that service, and this is meant to be readable for a whole
+// workspace at once. Following one is what /api/resolve is for.
+type Channel struct {
+	// Channel is what the key lives in, and it is deliberately not a Kind: the
+	// two sides of one channel are named differently — a publish is a
+	// "pubsub.topic" and a subscribe a "pubsub.subscription" — so the index is
+	// keyed by the thing they share. Calling this a kind would put a value in
+	// it that no rule ever wrote.
+	Channel string `json:"channel"`
+	Key     string `json:"key"`
+	// Inbound receives (subscribers, route handlers, RPC implementers);
+	// Outbound sends. Either may be empty: a topic nobody listens to and a
+	// subscription nobody feeds are both real, and both worth seeing.
+	Inbound  []ChannelEnd `json:"inbound"`
+	Outbound []ChannelEnd `json:"outbound"`
+}
+
+// ChannelEnd is one service on one side of a channel.
+type ChannelEnd struct {
+	Repo    string `json:"repo"`
+	Service string `json:"service"`
+	// Indexed is false when this end is known from a declaration and the
+	// service's code hasn't been read, so it can be named but not opened.
+	Indexed bool `json:"indexed"`
+}
+
+// ChannelLister is implemented by engines that can enumerate every key they
+// have seen, on both sides.
+type ChannelLister interface {
+	Channels() []Channel
+}
+
 // PlatformView is the L0 picture: every service in the workspace and the
 // calls between them.
 //

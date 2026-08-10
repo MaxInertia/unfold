@@ -11,6 +11,7 @@ import { NotesList } from "./NotesUI";
 import { loadNotes } from "./notes";
 import { ServiceView } from "./ServiceView";
 import { PlatformView } from "./PlatformView";
+import { ChannelIndex } from "./ChannelIndex";
 import { EntrypointsPanel, OutboundsPanel } from "./AnchorPanels";
 import { ZoomTrail } from "./ZoomTrail";
 import {
@@ -107,6 +108,9 @@ function AppShell() {
   // once you're above the frame level.
   const [serviceFilters, setServiceFilters] = useState<ServiceFilters>(emptyServiceFilters);
   const [platformFilter, setPlatformFilter] = useState("");
+  // Which reading of the platform level is showing. Local rather than in the
+  // URL: it is a way of looking at one level, not a different place to be.
+  const [platformMode, setPlatformMode] = useState<"graph" | "keys">("graph");
   const selectedService = store.service;
   const setSelectedService = store.setService;
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -488,16 +492,42 @@ function AppShell() {
               stays put and is replaced when the new body arrives. */}
           {loading && !rootFrame && <div className="app-loading">loading…</div>}
           {zoom === "platform" ? (
-            <PlatformView
-              anchor={rootFrame?.id ?? null}
-              filter={platformFilter}
-              selected={selectedService}
-              onSelect={setSelectedService}
-              onOpenService={store.openService}
-              // setSymbol already lands you in the code and clears the service
-              // pick, in one history entry.
-              onOpenSite={(id) => store.setSymbol(id)}
-            />
+            <>
+              {/* Two readings of the same level. The graph is shaped by
+                  service — who calls whom; the key index is shaped by the
+                  thing they share, which is the question you have when you
+                  know the event's name and not who is on it. */}
+              <div className="platform-modes">
+                <button
+                  type="button"
+                  className={`platform-mode${platformMode === "graph" ? " platform-mode--on" : ""}`}
+                  onClick={() => setPlatformMode("graph")}
+                >
+                  services
+                </button>
+                <button
+                  type="button"
+                  className={`platform-mode${platformMode === "keys" ? " platform-mode--on" : ""}`}
+                  onClick={() => setPlatformMode("keys")}
+                >
+                  keys
+                </button>
+              </div>
+              {platformMode === "graph" ? (
+                <PlatformView
+                  anchor={rootFrame?.id ?? null}
+                  filter={platformFilter}
+                  selected={selectedService}
+                  onSelect={setSelectedService}
+                  onOpenService={store.openService}
+                  // setSymbol already lands you in the code and clears the
+                  // service pick, in one history entry.
+                  onOpenSite={(id) => store.setSymbol(id)}
+                />
+              ) : (
+                <ChannelIndex onSelectService={setSelectedService} />
+              )}
+            </>
           ) : zoom === "service" ? (
             <ServiceView
               view={serviceView}

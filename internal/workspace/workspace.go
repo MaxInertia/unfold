@@ -577,6 +577,74 @@ func (w *Workspace) serverOf(kind, key string) (string, bool) {
 	return ends[0], true
 }
 
+// Channels lists every key the workspace has seen, with the services at each
+// end. Read straight off the join — no Go index is touched, so this stays
+// answerable for a whole workspace whatever has been opened.
+//
+// A key with an empty side is kept rather than filtered out. A topic nobody
+// subscribes to and a subscription nobody publishes to are exactly what a
+// reader is looking for when they open this, and dropping them would make the
+// list agree with itself while disagreeing with the platform.
+func (w *Workspace) Channels() []model.Channel {
+	w.channelMu.RLock()
+	keys := make([]string, 0, len(w.channels))
+	sides := make(map[string]channelEnds, len(w.channels))
+	for k, ends := range w.channels {
+		keys = append(keys, k)
+		sides[k] = channelEnds{
+			inbound:  append([]string(nil), ends.inbound...),
+			outbound: append([]string(nil), ends.outbound...),
+		}
+	}
+	w.channelMu.RUnlock()
+
+	sort.Strings(keys)
+	out := make([]model.Channel, 0, len(keys))
+	for _, k := range keys {
+		channel, key, ok := splitDeclKey(k)
+		if !ok {
+			continue
+		}
+		ends := sides[k]
+		out = append(out, model.Channel{
+			Channel:  channel,
+			Key:      key,
+			Inbound:  w.channelEndsOf(ends.inbound),
+			Outbound: w.channelEndsOf(ends.outbound),
+		})
+	}
+	return out
+}
+
+// channelEndsOf names each service on one side, in a fixed order.
+func (w *Workspace) channelEndsOf(aliases []string) []model.ChannelEnd {
+	sorted := append([]string(nil), aliases...)
+	sort.Strings(sorted)
+	out := make([]model.ChannelEnd, 0, len(sorted))
+	for _, alias := range sorted {
+		r, ok := w.repos[alias]
+		if !ok {
+			continue
+		}
+		r.mu.Lock()
+		loaded := r.loaded
+		r.mu.Unlock()
+		out = append(out, model.ChannelEnd{Repo: alias, Service: r.name, Indexed: loaded})
+	}
+	return out
+}
+
+// splitDeclKey undoes declKey, yielding the channel (the normalized kind) and
+// the key. The separator is a NUL, which no kind or key can contain, so this
+// can't be ambiguous.
+func splitDeclKey(k string) (channel, key string, ok bool) {
+	i := strings.IndexByte(k, 0)
+	if i < 0 {
+		return "", "", false
+	}
+	return k[:i], k[i+1:], true
+}
+
 // oppositeOf is the side to go looking for, given the side you are standing
 // on: an emit leads to subscribers, a subscribe leads to publishers. An empty
 // role means the caller didn't say — every link made before leaves carried one

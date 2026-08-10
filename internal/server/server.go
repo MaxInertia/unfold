@@ -98,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/dirs", s.handleDirs)
 	mux.HandleFunc("/api/resolve", s.handleResolve)
 	mux.HandleFunc("/api/platform", s.handlePlatform)
+	mux.HandleFunc("/api/channels", s.handleChannels)
 	mux.HandleFunc("/api/index-repo", s.handleIndexRepo)
 	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/open", s.handleOpen)
@@ -581,6 +582,21 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 // GET /api/platform — every service in the workspace and the calls between
 // them. Available only with a workspace open; a single repo has a service
 // view but nothing above it.
+// GET /api/channels — every key the workspace has seen, with the services at
+// each end. Cheap: it reads the join, not any Go index.
+func (s *Server) handleChannels(w http.ResponseWriter, _ *http.Request) {
+	lister, ok := s.engine.(model.ChannelLister)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, model.ErrNoWorkspace.Error())
+		return
+	}
+	channels := lister.Channels()
+	if channels == nil {
+		channels = []model.Channel{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"channels": channels})
+}
+
 func (s *Server) handlePlatform(w http.ResponseWriter, r *http.Request) {
 	we, ok := s.engine.(model.WorkspaceEngine)
 	if !ok {
