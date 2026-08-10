@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MaxInertia/unfold/internal/model"
@@ -273,5 +274,42 @@ func TestOneBoundaryPerCallNotPerSiteOnTheLine(t *testing.T) {
 	}
 	if refs != 2 {
 		t.Errorf("got %d handler references, want 2", refs)
+	}
+}
+
+// Two calls on one line, and only one of them is the boundary.
+//
+// `c.With("retries").Subscribe(defn, h)` is a chain: two call sites and a
+// reference, all on the same line. A boundary keyed by line landed on every
+// one of them, so one registration drew three cards — which is what a
+// registration written as a chain looks like in real code.
+func TestChainedRegistrationDrawsOneBoundary(t *testing.T) {
+	w := bothWays(t, "subscriber2")
+
+	id, err := w.LookupSymbol("consumeToo")
+	if err != nil {
+		t.Fatalf("LookupSymbol(consumeToo): %v", err)
+	}
+	fr, err := w.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame(consumeToo): %v", err)
+	}
+
+	var withBoundary []string
+	for _, c := range fr.Calls {
+		if c.Leaf != nil {
+			withBoundary = append(withBoundary, c.DisplayName)
+		}
+	}
+	if len(withBoundary) != 1 {
+		t.Errorf("got %d boundaries on one chained registration (%v), want 1 — on the Subscribe",
+			len(withBoundary), withBoundary)
+	}
+	if len(withBoundary) == 1 && !strings.HasSuffix(withBoundary[0], "Subscribe") {
+		t.Errorf("the boundary landed on %q, want the Subscribe call", withBoundary[0])
+	}
+	// The line still holds three sites; they just don't all claim the boundary.
+	if len(fr.Calls) < 3 {
+		t.Errorf("expected the chain's sites to still be sites, got %d", len(fr.Calls))
 	}
 }

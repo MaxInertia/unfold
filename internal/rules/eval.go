@@ -166,7 +166,7 @@ func (e *Evaluator) Run() []model.Binding {
 					continue
 				}
 				if r.Leaf != nil {
-					e.leaves[siteLine(c)] = LeafDecision{
+					e.leaves[siteKey(c)] = LeafDecision{
 						RuleID: r.ID, Expand: r.Leaf.Expand,
 						Label: r.Leaf.Label, CrossRepo: r.Leaf.CrossRepo,
 						Key: b.Key, Kind: b.Kind, Role: b.Role,
@@ -350,6 +350,17 @@ func Validate(rs []Rule) []error {
 
 // siteLine identifies a call site the way a Frame's call sites can be matched
 // back to it — file and line, which is what the indexer knows at render time.
+// siteKey identifies one call site: its file and the offset of its name token.
+// Used for decisions *about* a site — a boundary — because a line can hold
+// several sites (a chained call, or a call and a handler named as a value
+// beside it) and a decision keyed by line lands on all of them.
+func siteKey(c platform.Call) string {
+	return c.File + ":" + itoa(c.Offset)
+}
+
+// siteLine identifies the *line* a site is on, for the questions that are
+// genuinely about a line — "what already recognizes this?", asked from a UI
+// that knows where the cursor is and not which byte a name starts at.
 func siteLine(c platform.Call) string {
 	return c.File + ":" + itoa(c.Line)
 }

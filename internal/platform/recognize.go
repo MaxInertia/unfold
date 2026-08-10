@@ -76,6 +76,12 @@ type Call struct {
 	Site model.TargetID
 	File string
 	Line int
+	// Offset is the byte offset of the call in its file — the one thing here
+	// that identifies *this* call rather than the line it sits on. A line can
+	// hold several sites (`broker.Topic(t).Subscribe(h)`, or a call and a
+	// handler named as a value beside it), and a decision keyed by line is a
+	// decision applied to all of them.
+	Offset int
 }
 
 // A Recognizer returns the bindings a call site implies, or nil.

@@ -22,6 +22,11 @@ var BarEventDefn = EventDefinition{
 
 type Client struct{}
 
+// With returns the client again, so a registration can be written as a chain —
+// two calls on one line, which is the shape that made a line too coarse a key
+// for a decision about a call.
+func (c *Client) With(opt string) *Client { return c }
+
 func (c *Client) Emit(def EventDefinition, payload []byte) error { return nil }
 
 func (c *Client) Subscribe(def EventDefinition, handler func([]byte) error) error { return nil }

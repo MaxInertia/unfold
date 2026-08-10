@@ -1124,9 +1124,17 @@ func (i *Indexer) callFactsIn(pkg *packages.Package, site TargetID, ce *ast.Call
 	}
 
 	pos := i.fset.Position(ce.Pos())
+	// The name token, not the expression start: a chained call and its inner
+	// call begin at the same byte, which is the collision the call id itself
+	// had to be keyed away from for exactly the same reason.
+	offset := pos.Offset
+	if spanPos, _, ok := nameSpan(ce.Fun); ok {
+		offset = i.fset.Position(spanPos).Offset
+	}
 	c := platform.Call{
 		PkgPath: obj.Pkg().Path(),
 		Func:    obj.Name(),
+		Offset:  offset,
 		Site:    site,
 		File:    pos.Filename,
 		Line:    pos.Line,
@@ -2030,7 +2038,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 		// the call — the evaluator never sees references — so a reference must
 		// not inherit its boundary, or the card renders once per site on the
 		// line instead of once per boundary.
-		if d, ok := i.leaves[i.siteLineOf(c)]; ok && c.kind != KindRef {
+		if d, ok := i.leaves[i.siteKeyOf(c)]; ok {
 			cs.Leaf = &model.LeafInfo{
 				Rule: d.RuleID, Label: d.Label,
 				Key: d.Key, Kind: d.Kind, Role: d.Role, CrossRepo: d.CrossRepo,
@@ -2841,8 +2849,11 @@ func isBuiltinID(id string) bool {
 	return false
 }
 
-// siteLineOf identifies a call the way the rule evaluator recorded it.
-func (i *Indexer) siteLineOf(c *callInfo) string {
+// siteKeyOf identifies one call site the way the evaluator does: by where its
+// name token starts, not by its line. Two sites can share a line — a chained
+// call, or a call and a value reference beside it — and a boundary keyed by
+// line was a boundary drawn on every one of them.
+func (i *Indexer) siteKeyOf(c *callInfo) string {
 	p := i.fset.Position(c.pos)
-	return p.Filename + ":" + strconv.Itoa(p.Line)
+	return p.Filename + ":" + strconv.Itoa(p.Offset)
 }

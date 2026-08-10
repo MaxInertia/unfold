@@ -3847,3 +3847,13 @@ body.resizing {
   max-height: 80vh;
   overflow: auto;
 }
+
+/* A boundary with nothing on the other side, or nothing openable at it. Said
+   on the bar, where a button used to be — pressing one that can't work and
+   reading the failure afterwards is a worse way to learn the same thing. */
+.leaf-nowhere {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-style: italic;
+  cursor: help;
+}

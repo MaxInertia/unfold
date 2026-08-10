@@ -54,6 +54,15 @@ export function LeafCard({
 
   const names = leaf.ends ?? [];
   const several = names.length > 1;
+  // Nothing on the other side — or nothing indexed yet, which from here looks
+  // the same and is the more honest of the two claims. Offering open and
+  // inline would be offering to go somewhere that isn't there: they used to be
+  // there, and answered with a 404 from the resolve behind them.
+  const nowhere = names.length === 0;
+  // Named, but with no code to point at: the service is an end of this key and
+  // its handler isn't an indexed function. Worth saying once on the bar rather
+  // than as the result of pressing a button that couldn't work.
+  const unopenable = pickedEndHasNoCode(ends, names, picked);
   // Where the boundary leads when there is exactly one end — the server fills
   // this in only then, and only when that service is already indexed.
   const destination = leaf.targetPath || leaf.service || "";
@@ -176,7 +185,7 @@ export function LeafCard({
             ))}
           </select>
         )}
-        {leaf.crossRepo && (
+        {leaf.crossRepo && !nowhere && (
           <>
             <button
               type="button"
@@ -207,6 +216,19 @@ export function LeafCard({
           </>
         )}
         {several && <span className="leaf-count">{names.length} services</span>}
+        {nowhere && (
+          <span
+            className="leaf-nowhere"
+            title={`nothing indexed in this workspace is on the other side of ${leaf.kind ?? "this key"} ${leaf.key ?? ""} — an end is only known once its service is indexed`}
+          >
+            {leaf.role === "inbound" ? "no indexed emitter" : "no indexed receiver"}
+          </span>
+        )}
+        {unopenable && (
+          <span className="leaf-nowhere" title="this service is an end of the key, but unfold could not identify the code at it">
+            no code to open
+          </span>
+        )}
         {/* One thing at the end: where this lands. The key isn't repeated —
             it's in the code the bar is sitting under. */}
         {!several && destination && (
@@ -239,4 +261,17 @@ export function LeafCard({
       )}
     </div>
   );
+}
+
+// pickedEndHasNoCode reports whether the end currently chosen resolved to a
+// service with nothing openable in it. Only knowable after a resolve, which is
+// why it is a state of the card rather than of the leaf.
+function pickedEndHasNoCode(
+  ends: Endpoint[] | null,
+  names: string[],
+  picked: number,
+): boolean {
+  if (!ends) return false;
+  const end = ends.find((e) => e.service === names[picked]) ?? ends[0];
+  return !!end && !end.target;
 }
