@@ -41,8 +41,31 @@ func NewReloadable(lang Lang, dir, target string) (*Reloadable, error) {
 // not be the one that started last, leaving a staler engine current. Callers
 // must serialize Reload. The Watcher satisfies this: its single debounce
 // loop invokes onChange one call at a time.
-func (r *Reloadable) Reload() error {
-	eng, err := Load(r.lang, r.dir, r.target)
+func (r *Reloadable) Reload() error { return r.rebuild(nil) }
+
+// ReloadKeeping rebuilds, discarding only the indexes of the named repository
+// directories and carrying the rest over. Naming none keeps everything, which
+// is right for a rebuild caused by something that changed no code at all —
+// a repository being linked.
+//
+// Reload itself keeps nothing, and that is the correct default for the caller
+// that has no idea what changed: a stale index is a wrong answer, where a
+// re-read is only a slow one.
+func (r *Reloadable) ReloadKeeping(rebuild ...string) error {
+	set := make(map[string]bool, len(rebuild))
+	for _, d := range rebuild {
+		if d != "" {
+			set[d] = true
+		}
+	}
+	return r.rebuild(set)
+}
+
+func (r *Reloadable) rebuild(discard map[string]bool) error {
+	r.mu.RLock()
+	prev := r.cur
+	r.mu.RUnlock()
+	eng, err := Rebuild(prev, r.lang, r.dir, r.target, discard)
 	if err != nil {
 		return err
 	}
@@ -50,10 +73,21 @@ func (r *Reloadable) Reload() error {
 	old := r.cur
 	r.cur = eng
 	r.mu.Unlock()
-	if c, ok := old.(io.Closer); ok {
+	// Closing the old engine would close indexes the new one just adopted, so
+	// only an engine that handed nothing over can be closed. A workspace holds
+	// no closable resource of its own; the TS engine's sidecar process is the
+	// case this protects, and it never adopts.
+	if c, ok := old.(io.Closer); ok && eng != old && !adopted(old, eng) {
 		_ = c.Close()
 	}
 	return nil
+}
+
+// adopted reports whether the new engine took anything over from the old one.
+func adopted(old, next model.Engine) bool {
+	_, wasWorkspace := old.(interface{ Repos() []model.RepoInfo })
+	_, isWorkspace := next.(interface{ Repos() []model.RepoInfo })
+	return wasWorkspace && isWorkspace
 }
 
 // Close releases the current engine.

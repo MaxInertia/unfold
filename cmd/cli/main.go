@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -136,6 +137,7 @@ func main() {
 	// only takes effect on a rebuild. Reload is the same path watch mode
 	// uses — it swaps atomically and keeps the previous engine on failure.
 	srv.SetReloader(eng.Reload)
+	srv.SetReloaderKeeping(eng.ReloadKeeping)
 	httpServer := &http.Server{Handler: srv.Handler()}
 
 	serverErr := make(chan error, 1)
@@ -151,7 +153,11 @@ func main() {
 			// linked repo can arrive at the same moment, and two rebuilds that
 			// each construct an engine and then swap leave whichever finished
 			// last in charge — not whichever started last.
-			if err := srv.Reload(); err != nil {
+			// Only the repository the file lives in is re-read. The others
+			// cannot have changed — nothing outside a module is in its index
+			// — and reading them again is the cost that made every save feel
+			// like a restart.
+			if err := srv.ReloadKeeping(engine.ModuleRoot(filepath.Dir(cause))); err != nil {
 				log.Printf("reindex failed (keeping previous index): %v", err)
 				return
 			}

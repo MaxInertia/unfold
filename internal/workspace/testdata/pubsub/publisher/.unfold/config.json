@@ -1,5 +1,7 @@
 {
   "linkedRepos": [
-    "/home/maxinertia/projects/unfold/internal/workspace/testdata/pubsub/subscriber"
+    "/home/maxinertia/projects/unfold/internal/workspace/testdata/pubsub/subscriber",
+    "/home/maxinertia/projects/unfold/internal/workspace/testdata/pubsub/subscriber2",
+    "/home/maxinertia/projects/unfold/internal/workspace/testdata/pubsub/publisher2"
   ]
 }

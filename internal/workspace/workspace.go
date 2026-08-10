@@ -210,6 +210,23 @@ func isModule(dir string) bool {
 // unfold at; its ids stay unprefixed so single-repo URLs and bookmarks keep
 // working. protoRoot resolves manifests' protoPaths.
 func Open(dirs []string, primaryDir, protoRoot string, mode Mode) (*Workspace, error) {
+	return Reopen(nil, dirs, primaryDir, protoRoot, mode, nil)
+}
+
+// Reopen is Open, carrying over the indexes of repositories whose code cannot
+// have changed since prev was built.
+//
+// A rebuild used to discard every index and read them all again, because it
+// had no way to know why it was happening. Linking a repository made that
+// obvious and expensive: adding one service re-read the four already open,
+// which is minutes of work to learn something about none of them.
+//
+// rebuild names the repository directories that must be read again anyway —
+// the one whose file was saved. A nil map keeps everything that exists; a
+// rules change keeps nothing, because recognizers are a workspace-wide fact
+// and a rule applied to some repos and not others is the silently-shrinking
+// surface the whole rule system is careful about.
+func Reopen(prev *Workspace, dirs []string, primaryDir, protoRoot string, mode Mode, rebuild map[string]bool) (*Workspace, error) {
 	if len(dirs) == 0 {
 		return nil, fmt.Errorf("no repositories")
 	}
@@ -258,6 +275,7 @@ func Open(dirs []string, primaryDir, protoRoot string, mode Mode) (*Workspace, e
 	}
 	sort.Strings(w.order)
 	w.readDeclarations()
+	w.adopt(prev, rebuild)
 	// The repo the user actually opened must index, or there's nothing to
 	// show; the rest may fail quietly until visited. Eager mode used to
 	// swallow this one too, which meant a primary that didn't compile came up
@@ -504,6 +522,47 @@ func (w *Workspace) load(alias string) error {
 		w.publishBindings(alias, sv)
 	}
 	return nil
+}
+
+// adopt takes over prev's indexes for repositories at the same directory,
+// skipping any named in rebuild. An adopted repo republishes what it is an end
+// of, because that is normally done by the load it just skipped.
+func (w *Workspace) adopt(prev *Workspace, rebuild map[string]bool) {
+	if prev == nil {
+		return
+	}
+	byDir := make(map[string]*repo, len(prev.repos))
+	for _, r := range prev.repos {
+		byDir[r.dir] = r
+	}
+	for _, alias := range w.order {
+		r := w.repos[alias]
+		if rebuild[r.dir] {
+			continue
+		}
+		old, ok := byDir[r.dir]
+		if !ok {
+			continue
+		}
+		old.mu.Lock()
+		idx, loaded, err := old.idx, old.loaded, old.err
+		old.mu.Unlock()
+		if !loaded || idx == nil {
+			// A repo that failed carries its failure over too: retrying it on
+			// an unrelated rebuild would re-pay a compile that already failed,
+			// every time anyone links anything.
+			r.mu.Lock()
+			r.err = err
+			r.mu.Unlock()
+			continue
+		}
+		r.mu.Lock()
+		r.idx, r.loaded = idx, true
+		r.mu.Unlock()
+		if sv, err := idx.ServiceView(""); err == nil {
+			w.publishBindings(alias, sv)
+		}
+	}
 }
 
 // channelEnds are the services on each side of one channel key.

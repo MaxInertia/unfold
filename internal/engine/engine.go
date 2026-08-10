@@ -165,6 +165,12 @@ func goDirs(dir string) ([]string, error) {
 	return dirs, nil
 }
 
+// ModuleRoot is the repository directory a path belongs to — the directory
+// holding its go.mod. Exported because a caller that knows *what* changed has
+// to name the repository it changed in, and a watched file is a path inside
+// one rather than its root.
+func ModuleRoot(dir string) string { return moduleRoot(dir) }
+
 // moduleRoot walks up from dir to the directory holding its go.mod. unfold is
 // routinely started from a package inside a module, and a workspace's repos
 // are module roots — handing it a subdirectory would make the launch repo
@@ -190,6 +196,17 @@ func moduleRoot(dir string) string {
 // target is the engine-specific scope (a Go package pattern like "./..."
 // for Go; ignored by the TS engine, which loads the whole tsconfig project).
 func Load(lang Lang, dir, target string) (model.Engine, error) {
+	return Rebuild(nil, lang, dir, target, nil)
+}
+
+// Rebuild is Load, carrying over what prev already read.
+//
+// rebuild names repository directories whose index must be discarded — the one
+// whose file changed. A nil map keeps every index prev holds, which is what a
+// reload caused by something other than an edit wants: linking a repository
+// changed no code, so re-reading the repositories already open is work that
+// can only produce what they already said.
+func Rebuild(prev model.Engine, lang Lang, dir, target string, rebuild map[string]bool) (model.Engine, error) {
 	switch lang {
 	case LangGo:
 		dirs, err := goDirs(dir)
@@ -203,7 +220,8 @@ func Load(lang Lang, dir, target string) (model.Engine, error) {
 			// to be eager — which is the state linking one more repo can
 			// itself produce.
 			workspace.Preload = append([]string(nil), LinkedRepos...)
-			return workspace.Open(dirs, projectDir(dir), ProtoRoot, IndexMode)
+			prevWs, _ := prev.(*workspace.Workspace)
+			return workspace.Reopen(prevWs, dirs, projectDir(dir), ProtoRoot, IndexMode, rebuild)
 		}
 		idx := indexer.New()
 		idx.SetRules(rules.Load(RecognizerFiles...))

@@ -40,7 +40,8 @@ type Server struct {
 	projectDir string
 	// reload rebuilds the engine in place. Nil disables the endpoints that
 	// need one, rather than letting them half-apply a change.
-	reload func() error
+	reload         func() error
+	reloadKeeping  func(rebuild ...string) error
 
 	// Connected /api/events subscribers, notified when the engine reindexes.
 	mu      sync.Mutex
@@ -74,6 +75,11 @@ func (s *Server) SetTarget(target string) { s.target = target }
 // SetDiffer enables diff annotations on returned frames, comparing against the
 // base engine d wraps. Nil leaves diff mode off.
 func (s *Server) SetDiffer(d *diff.Differ) { s.differ = d }
+
+// SetReloaderKeeping supplies a rebuild that can carry indexes over, naming
+// only the repositories that must be read again. Optional: without it every
+// rebuild is a full one, which is correct and merely slower.
+func (s *Server) SetReloaderKeeping(fn func(rebuild ...string) error) { s.reloadKeeping = fn }
 
 // SetReloader supplies the function that rebuilds the engine, enabling the
 // endpoints that change what the engine is built from.
@@ -492,7 +498,10 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 	s.NotifyRepos()
 
 	go func() {
-		err := s.Reload()
+		// Nothing named: linking a repository changes no code, so every index
+		// already built is still exactly right. The new repo has none, and
+		// gets one.
+		err := s.ReloadKeeping()
 		s.clearPending(abs, err)
 		if err != nil {
 			// The engine is unchanged — Reload keeps the previous one on
@@ -590,6 +599,18 @@ func (s *Server) Reload() error {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	return s.reload()
+}
+
+// ReloadKeeping rebuilds while carrying over the indexes of every repository
+// except those named. For the rebuilds that changed no code at all — linking a
+// repository — that is all of them.
+func (s *Server) ReloadKeeping(rebuild ...string) error {
+	if s.reloadKeeping == nil {
+		return s.Reload()
+	}
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	return s.reloadKeeping(rebuild...)
 }
 
 // POST /api/proto-root {"path": "<abs dir>"} — point the declared gRPC
