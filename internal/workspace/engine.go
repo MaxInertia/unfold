@@ -222,8 +222,15 @@ func (w *Workspace) qualifyFrame(alias string, f *model.Frame) {
 // cross-repo join that depends on it.
 func (w *Workspace) SetProtoRoot(dir string) error {
 	w.protoRoot = dir
+	w.servedMu.Lock()
 	w.servedBy = map[string]string{}
+	w.servedMu.Unlock()
+	// Declarations first, then the code-derived half re-published from the
+	// repos already indexed: rebuilding only the declared half would drop
+	// every subscription found so far, and the order is what keeps a proto's
+	// claim ahead of an indexed body's.
 	w.readDeclarations()
+	w.reserveIndexed()
 	var firstErr error
 	for _, alias := range w.order {
 		r := w.repos[alias]
@@ -291,7 +298,7 @@ func (w *Workspace) ServiceViewOf(repo string, anchor model.TargetID) (*model.Se
 	for n := range sv.Outbound {
 		b := &sv.Outbound[n]
 		w.qualifyBinding(repo, b)
-		if alias, ok := w.servedBy[declKey(b.Kind, b.Key)]; ok && alias != repo {
+		if alias, ok := w.serverOf(b.Kind, b.Key); ok && alias != repo {
 			b.ServedBy = w.repos[alias].name
 			b.ServedByRepo = alias
 		}
@@ -328,9 +335,14 @@ func (w *Workspace) qualifyCandidates(alias string, in []model.Candidate) []mode
 // hop: the key was matched from declarations alone, and only now — when the
 // user actually asked to go there — is the Go index paid for.
 func (w *Workspace) Resolve(kind, key string) (*model.Resolution, error) {
-	alias, ok := w.servedBy[declKey(kind, key)]
+	alias, ok := w.serverOf(kind, key)
 	if !ok {
-		return nil, fmt.Errorf("no service in this workspace serves %s %q", kind, key)
+		// A key nothing declares is only known once its service has been
+		// indexed, so "nobody serves this" and "nobody has opened the service
+		// that does" look identical here. Say so, rather than reporting the
+		// stronger claim.
+		return nil, fmt.Errorf("no indexed service in this workspace serves %s %q "+
+			"(a subscription is only known once its service is indexed)", kind, key)
 	}
 	r := w.repos[alias]
 	if err := w.load(alias); err != nil {
@@ -457,7 +469,7 @@ func (w *Workspace) PlatformView(anchor model.TargetID) (*model.PlatformView, er
 			}
 		}
 		for _, b := range sv.Outbound {
-			to, ok := w.servedBy[declKey(b.Kind, b.Key)]
+			to, ok := w.serverOf(b.Kind, b.Key)
 			if !ok || to == alias {
 				continue // nothing here serves it, or it's a self-call
 			}

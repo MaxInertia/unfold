@@ -191,12 +191,29 @@ func expandKeyDetail(tmpl string, c platform.Call, caps Captures, inner string) 
 			}
 			b.WriteString(inner)
 		case strings.HasPrefix(ref, "arg"):
-			n, ok := argIndex(ref)
-			if !ok || n >= len(c.Args) || !c.Args[n].Known {
+			n, field, ok := argRef(ref)
+			if !ok || n >= len(c.Args) {
 				return "", false, false
 			}
-			b.WriteString(c.Args[n].Value)
-			inferred = inferred || c.Args[n].Inferred
+			arg := c.Args[n]
+			if field != "" {
+				// "{arg1.ID}" — the argument is the event definition itself
+				// and the key is a field of it. Only a var's initializer can
+				// answer this, so the value is always what the program starts
+				// with rather than what it is: inferred, unconditionally.
+				v, ok := arg.Fields[field]
+				if !ok {
+					return "", false, false
+				}
+				b.WriteString(v)
+				inferred = true
+				break
+			}
+			if !arg.Known {
+				return "", false, false
+			}
+			b.WriteString(arg.Value)
+			inferred = inferred || arg.Inferred
 		default:
 			v, ok := caps[ref]
 			if !ok {
@@ -205,6 +222,22 @@ func expandKeyDetail(tmpl string, c platform.Call, caps Captures, inner string) 
 			b.WriteString(v)
 		}
 	}
+}
+
+// argRef parses "arg0" and "arg1.ID": the argument's index, and the field of
+// it the key lives in (empty when the argument is the key). The field form is
+// for a library whose calls take a definition rather than a name, where no
+// part of the call site says which member of that value is the identity.
+func argRef(ref string) (int, string, bool) {
+	rest, field := ref, ""
+	if i := strings.IndexByte(ref, '.'); i >= 0 {
+		rest, field = ref[:i], ref[i+1:]
+		if field == "" {
+			return 0, "", false
+		}
+	}
+	n, ok := argIndex(rest)
+	return n, field, ok
 }
 
 // argIndex parses "arg0", "arg12".

@@ -92,8 +92,16 @@ type Workspace struct {
 	// rulePaths are the shared recognizer files, applied to every repo.
 	rulePaths []string
 
-	// servedBy maps a declared key ("<kind>\x00<key>") to the alias serving
-	// it. This is the cross-repo join, and it needs no Go index at all.
+	// servedBy maps a key ("<kind>\x00<key>") to the alias serving it — the
+	// cross-repo join. It fills from two sources: declarations, which need no
+	// Go index at all and are read for the whole workspace up front, and each
+	// repo's own inbound bindings, which arrive as that repo is indexed
+	// because nothing declares a subscription.
+	//
+	// Guarded, unlike the rest of the workspace's immutable-after-Open state:
+	// background loads run two at a time and each one publishes what its repo
+	// serves, while readers are answering platform queries throughout.
+	servedMu sync.RWMutex
 	servedBy map[string]string
 
 	// bg tracks the background eager load, so WaitIndexed can join it.
@@ -352,7 +360,7 @@ func (w *Workspace) readDeclarations() {
 			if m.ExcludedFromSDK {
 				continue // exists, but no other service can call it
 			}
-			w.servedBy[declKey("grpc.method", m.FullName)] = alias
+			w.serve(declKey("grpc.method", m.FullName), alias)
 		}
 	}
 }
@@ -430,8 +438,71 @@ func (w *Workspace) load(alias string) error {
 	if sv, err := idx.ServiceView(""); err == nil {
 		fmt.Fprintf(os.Stderr, "unfold: indexed %s in %s — %d inbound, %d outbound (%d declared rpc)\n",
 			r.name, took.Round(time.Millisecond), len(sv.Inbound), len(sv.Outbound), len(r.methods))
+		w.serveInbound(alias, sv)
 	}
 	return nil
+}
+
+// serveInbound registers what this repo serves according to its *code*: a
+// subscription, a route, anything a recognizer found on the inbound side.
+//
+// Declarations can't answer this. A proto file names the gRPC methods a
+// service implements without indexing it, which is what makes the cross-repo
+// gRPC join cheap — but nothing declares that a service subscribes to a topic,
+// so a pubsub edge can only come from the subscriber's own body. That is why
+// this half of servedBy fills in as repos are indexed rather than up front:
+// the alternative is indexing the whole workspace before showing anything,
+// which is the startup cost that was deliberately removed.
+//
+// The consequence to keep in mind: a platform edge into a service nobody has
+// opened yet isn't drawn. In the case this exists for — both ends already
+// indexed — it is drawn as soon as the subscriber is.
+func (w *Workspace) serveInbound(alias string, sv *model.ServiceView) {
+	for _, b := range sv.Inbound {
+		if b.Key == "" {
+			continue
+		}
+		w.serve(declKey(b.Kind, b.Key), alias)
+	}
+}
+
+// reserveIndexed re-publishes what every already-indexed repo serves, for a
+// rebuild of the join that would otherwise keep only the declared half.
+func (w *Workspace) reserveIndexed() {
+	for _, alias := range w.order {
+		r := w.repos[alias]
+		r.mu.Lock()
+		idx, loaded := r.idx, r.loaded
+		r.mu.Unlock()
+		if !loaded || idx == nil {
+			continue
+		}
+		if sv, err := idx.ServiceView(""); err == nil {
+			w.serveInbound(alias, sv)
+		}
+	}
+}
+
+// serve records that alias serves a key, without displacing an existing
+// answer. Declarations are read before any code is indexed and are the
+// authoritative half — a proto says a service *is* the implementation, where
+// an indexed body says only that this is where we found one — so the first
+// answer stands and a second service claiming the same key doesn't silently
+// steal the edge.
+func (w *Workspace) serve(key, alias string) {
+	w.servedMu.Lock()
+	defer w.servedMu.Unlock()
+	if _, taken := w.servedBy[key]; !taken {
+		w.servedBy[key] = alias
+	}
+}
+
+// serverOf reports which repo serves a key.
+func (w *Workspace) serverOf(kind, key string) (string, bool) {
+	w.servedMu.RLock()
+	defer w.servedMu.RUnlock()
+	alias, ok := w.servedBy[declKey(kind, key)]
+	return alias, ok
 }
 
 // engineFor resolves a namespaced id to its repo's engine, loading it if

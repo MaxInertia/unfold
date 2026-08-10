@@ -48,6 +48,16 @@ type Arg struct {
 	// the confidence badge, and the one case where losing it would matter is
 	// a key that gets reassigned, which is exactly when the answer is wrong.
 	Inferred bool
+	// Fields are the strings the argument's fields were initialized with,
+	// when it names a package-level struct variable passed whole:
+	// `Emit(ctx, events.FooEventDefn, nil)` against
+	// `var FooEventDefn = EventDefinition{ID: "foo-happened"}`.
+	//
+	// Value stays empty for such an argument, and rightly — the argument is a
+	// struct, not a string. Which field identifies the thing is a fact about
+	// the library, so a rule names it ("{arg1.ID}") rather than unfold
+	// guessing at a field called ID.
+	Fields map[string]string
 }
 
 // Call is one call site, stripped of syntax.

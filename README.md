@@ -349,7 +349,7 @@ on rather than writing any of this by hand.
 
 ### Where a key can come from
 
-The key is a string, and it is usually not written at the call site. Four
+The key is a string, and it is usually not written at the call site. These
 shapes resolve:
 
 | the call says | resolved from | confidence |
@@ -359,6 +359,22 @@ shapes resolve:
 | `Emit(ctx, "acme."+topics.Order)` | constant folding | exact |
 | `Emit(ctx, topics.PaymentTaken)` | a package-level `var`'s initializer | **inferred** |
 | `Emit(ctx, topics.Topics.Shipped)` | a field of a package-level struct var | **inferred** |
+| `Emit(ctx, events.FooEventDefn)` with key `{arg1.ID}` | a field of the struct var passed whole | **inferred** |
+
+That last row is for an SDK whose calls take a *definition* rather than a name:
+
+```go
+var FooEventDefn = eventdefinition.EventDefinition{ID: "foo-happened"}
+
+client.Emit(ctx, events.FooEventDefn, payload)
+client.Subscribe(events.FooEventDefn, handler)
+```
+
+Nothing in either call site says which member of that value identifies the
+event, so the rule says it — `"key": "{arg1.ID}"` on the emit rule and
+`"key": "{arg0.ID}"` on the subscribe rule. Both ends then resolve to
+`foo-happened` and join. A field read this way is always `inferred`: it is what
+the program starts with, and a later assignment is invisible from here.
 
 The first three are what the program *is*; the last two are what it *starts
 with*. Nothing in the index sees an assignment made later, so those are badged
@@ -471,6 +487,14 @@ state, not an error.
   instantly even in a workspace of fifty repos.
 - **Code** — a full index per repo: seconds and hundreds of megabytes each.
   Needed only to render a frame, so it's deferred until you actually jump.
+
+One asymmetry follows from this. A proto declares which gRPC methods a service
+implements, so that half of the join is free — but **nothing declares a
+subscription**. Only the subscriber's own body says it subscribes, so a pubsub
+edge appears once the subscribing service has been indexed, and not before.
+With both ends indexed (the usual case when you're reading across a publish and
+its consumer) it is drawn like any other edge; until then unfold says the key
+has no *indexed* service serving it, rather than claiming nobody serves it.
 
 `--index` selects when the code layer is built: `eager` up front, `lazy` on
 demand, or `auto` (the default) which is eager for a small workspace and lazy
