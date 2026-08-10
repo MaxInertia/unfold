@@ -114,6 +114,12 @@ type LeafDecision struct {
 	// Key is the emitted key when the same rule also produced a binding, so
 	// the leaf can offer the far end of that edge rather than just naming it.
 	Key string
+	// Kind is that binding's kind, and it travels with the key because the two
+	// are only meaningful together: the far end is looked up by both, and a
+	// key resolved against the wrong kind finds nothing rather than finding
+	// the wrong thing. Without it every leaf was assumed to be gRPC, which is
+	// true of the first one that existed and of nothing else.
+	Kind string
 }
 
 // Leaves returns the reading-time classification for call sites, keyed by the
@@ -157,7 +163,8 @@ func (e *Evaluator) Run() []model.Binding {
 				if r.Leaf != nil {
 					e.leaves[siteLine(c)] = LeafDecision{
 						RuleID: r.ID, Expand: r.Leaf.Expand,
-						Label: r.Leaf.Label, CrossRepo: r.Leaf.CrossRepo, Key: b.Key,
+						Label: r.Leaf.Label, CrossRepo: r.Leaf.CrossRepo,
+						Key: b.Key, Kind: b.Kind,
 					}
 				}
 				// Recorded for every match, including the leaf-only rules that

@@ -390,6 +390,30 @@ local variable, a struct field assigned after construction, a map lookup, a
 value returned from a function. Those are skipped rather than guessed, and the
 call site shows no binding.
 
+### Reading across a publish
+
+Both ends of a pubsub edge can be read in place, from either side:
+
+- **At the `Subscribe`**, the handler is an argument, and a function named as a
+  value is an expandable site — click it and the body opens inline. No rule
+  needed for this.
+- **At the `Emit`**, what you want is the *other repo's* handler, not the SDK's
+  marshalling. Add a `leaf` to the emit rule and the call site offers both
+  **open** and **inline**:
+
+  ```json
+  { "id": "sdk.emit",
+    "match": {"func": "Emit", "minArgs": 1},
+    "emit":  {"role": "outbound", "kind": "sdk.event", "key": "{arg0.ID}"},
+    "leaf":  {"expand": false, "label": "→ subscriber", "crossRepo": true} }
+  ```
+
+  The far end is looked up by the leaf's kind *and* key, so it finds whatever
+  subscribed to that key — provided the subscribing service is indexed, per the
+  asymmetry above. The boundary stays named even with the far side spliced in:
+  execution left the process there, and a trace that reads as one continuous
+  body would be saying otherwise.
+
 ### Seeing which rules are in force
 
 The **⌥ recognizers** panel lists every rule, built-in and configured: whether

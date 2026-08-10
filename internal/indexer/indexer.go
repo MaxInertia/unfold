@@ -1983,7 +1983,10 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 			External:    (c.kind == KindDirect || c.kind == KindRef) && i.isExternal(c.target),
 		}
 		if d, ok := i.leaves[i.siteLineOf(c)]; ok {
-			cs.Leaf = &model.LeafInfo{Rule: d.RuleID, Label: d.Label, Key: d.Key, CrossRepo: d.CrossRepo}
+			cs.Leaf = &model.LeafInfo{
+				Rule: d.RuleID, Label: d.Label,
+				Key: d.Key, Kind: d.Kind, CrossRepo: d.CrossRepo,
+			}
 			if d.Expand != nil {
 				// A rule overrides the stdlib/dependency heuristic in either
 				// direction: rescuing an in-house SDK from being skipped, or
