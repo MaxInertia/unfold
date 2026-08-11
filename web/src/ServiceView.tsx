@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BindingRow, displayKey, type CrossingState } from "./BindingRow";
 import { buildCrossing, crossingSummary } from "./crossing";
+import { AddRepoButton } from "./AddRepo";
 import { ProtoRootPicker } from "./ProtoRootPicker";
 import type { Binding, BindingVisibility, ServiceView as ServiceViewT, TargetID } from "./types";
 import { bindingMatches, type ServiceFilters } from "./ZoomSidebar";
@@ -75,10 +76,15 @@ export function ServiceView({
         )}
       </header>
 
-      {view.repos && view.repos.length > 1 && (
-        <div className="service-repos">
-          <span className="service-repos-label">workspace</span>
-          {view.repos.map((r) => (
+      {/* The strip renders even with nothing to list, because a single-repo
+          session is exactly the one where you need to open another repo — and
+          hiding the control until a workspace already exists would mean you
+          could only add a second repo once you had two. */}
+      <div className="service-repos">
+        {view.repos && view.repos.length > 1 && (
+          <>
+            <span className="service-repos-label">workspace</span>
+            {view.repos.map((r) => (
             <span
               key={r.alias}
               // "primary" is the repo unfold was launched in; "current" is
@@ -96,11 +102,13 @@ export function ServiceView({
                     : `${r.dir} — not indexed yet; opening something here will index it`
               }
             >
-              {r.name}
-            </span>
-          ))}
-        </div>
-      )}
+                {r.name}
+              </span>
+            ))}
+          </>
+        )}
+        <AddRepoButton />
+      </div>
 
       {/* An empty gRPC surface and a misconfigured proto root look identical
           without this, so a missing declared surface says why — and offers

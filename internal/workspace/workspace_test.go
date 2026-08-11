@@ -30,6 +30,10 @@ func open(t *testing.T, mode Mode) *Workspace {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	// Open no longer waits for the repos behind the primary — startup would
+	// otherwise cost the whole workspace. A test asserting on all of them has
+	// to join that work rather than race it.
+	w.WaitIndexed()
 	return w
 }
 
@@ -92,7 +96,7 @@ func TestOutboundResolvesToServingRepo(t *testing.T) {
 // space, which Frame must then be able to open.
 func TestResolveOpensTheOtherRepo(t *testing.T) {
 	w := open(t, ModeEager)
-	res, err := w.Resolve("grpc.method", "conversation.v1.ConversationService/GetConversation")
+	res, err := w.Resolve("grpc.method", "conversation.v1.ConversationService/GetConversation", model.RoleOutbound)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -136,7 +140,7 @@ func TestResolveOpensTheOtherRepo(t *testing.T) {
 
 func TestResolveUnknownKey(t *testing.T) {
 	w := open(t, ModeEager)
-	if _, err := w.Resolve("grpc.method", "nope.v1.Nope/Nope"); err == nil {
+	if _, err := w.Resolve("grpc.method", "nope.v1.Nope/Nope", model.RoleOutbound); err == nil {
 		t.Error("expected an error for a key no repo serves")
 	}
 }
@@ -180,7 +184,7 @@ func TestLazyDefersIndexingUntilResolve(t *testing.T) {
 		t.Error("naming the serving service must not have cost a Go index")
 	}
 
-	if _, err := w.Resolve("grpc.method", "conversation.v1.ConversationService/GetConversation"); err != nil {
+	if _, err := w.Resolve("grpc.method", "conversation.v1.ConversationService/GetConversation", model.RoleOutbound); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if !indexed("conversation") {
@@ -221,6 +225,53 @@ func TestSearchSpansIndexedRepos(t *testing.T) {
 	}
 }
 
+// Which hits come first depends on which service is being read, and above the
+// frame level that need not be the repo unfold was launched in. Selecting
+// conversation at the platform level and then searching has to put
+// conversation's own code first, even though inbox is primary.
+func TestSearchRanksCurrentServiceFirst(t *testing.T) {
+	w := open(t, ModeEager)
+
+	repoOf := func(r model.SearchResult) string {
+		if alias, _ := split(string(r.TargetID)); alias != "" {
+			return alias
+		}
+		return w.primary
+	}
+	firstRepo := func(res []model.SearchResult) string {
+		if len(res) == 0 {
+			t.Fatal("expected results for 'GetConversation'")
+		}
+		return repoOf(res[0])
+	}
+
+	// Default: the repo unfold was launched in.
+	if got := firstRepo(w.Search("GetConversation", 25)); got != "inbox" {
+		t.Errorf("plain Search should rank the primary repo first, got %q", got)
+	}
+
+	res := w.SearchFrom("conversation", "GetConversation", 25)
+	if got := firstRepo(res); got != "conversation" {
+		t.Errorf("search from conversation should rank its own code first, got %q", got)
+	}
+	// Not a filter: the other services' hits are still there, just below.
+	var others int
+	for _, r := range res {
+		if repoOf(r) != "conversation" {
+			others++
+		}
+	}
+	if others == 0 {
+		t.Error("other indexed services' hits should still be returned, only ranked lower")
+	}
+
+	// An alias that isn't in this workspace falls back to the primary rather
+	// than to an empty result: a stale link should still search.
+	if got := firstRepo(w.SearchFrom("nosuchrepo", "GetConversation", 25)); got != "inbox" {
+		t.Errorf("an unknown repo should fall back to the primary, got %q", got)
+	}
+}
+
 func TestAutoModeEagerBelowLimit(t *testing.T) {
 	w := open(t, ModeAuto)
 	for _, r := range w.Repos() {
@@ -228,6 +279,68 @@ func TestAutoModeEagerBelowLimit(t *testing.T) {
 			t.Errorf("a %d-repo workspace should index eagerly under auto; %s is not indexed",
 				len(w.order), r.Alias)
 		}
+	}
+}
+
+// Eager means "without being asked", not "before anything can be seen". Open
+// returns once the repo you're standing in is ready; the rest arrive behind
+// it. Waiting for the whole workspace made startup the sum of every repo in
+// it, paid before the server could even listen.
+//
+// Asserted through Repos() rather than by timing, so it states the property
+// instead of measuring the machine.
+func TestOpenDoesNotWaitForSecondaryRepos(t *testing.T) {
+	dirs, err := Discover(abs(t, "testdata/ws"))
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	w, err := Open(dirs, abs(t, "testdata/ws/inbox"), abs(t, "testdata/protoroot"), ModeEager)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, r := range w.Repos() {
+		if r.Primary && !r.Indexed {
+			t.Error("the primary repo must be indexed when Open returns — nothing can be shown without it")
+		}
+	}
+
+	// And they do all arrive: eager still means the whole workspace, just not
+	// on the startup path.
+	w.WaitIndexed()
+	for _, r := range w.Repos() {
+		if !r.Indexed {
+			t.Errorf("%s should have been indexed in the background", r.Alias)
+		}
+	}
+}
+
+// A lazy workspace still indexes what you explicitly linked, because linking a
+// repo is how you say you're about to go there. Without this, adding one repo
+// to a four-repo workspace made every repo in it lazy — so the cross-repo jump
+// that motivated the link was the slowest it had ever been.
+func TestLinkedReposIndexBehindALazyWorkspace(t *testing.T) {
+	dirs, err := Discover(abs(t, "testdata/ws"))
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	Preload = []string{abs(t, "testdata/ws/conversation")}
+	t.Cleanup(func() { Preload = nil })
+
+	w, err := Open(dirs, abs(t, "testdata/ws/inbox"), abs(t, "testdata/protoroot"), ModeLazy)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	w.WaitIndexed()
+
+	indexed := map[string]bool{}
+	for _, r := range w.Repos() {
+		indexed[r.Alias] = r.Indexed
+	}
+	if !indexed["conversation"] {
+		t.Error("a linked repo should be indexed behind the primary even in lazy mode")
+	}
+	if indexed["gateway"] {
+		t.Error("lazy still means lazy for repos nobody linked or opened")
 	}
 }
 

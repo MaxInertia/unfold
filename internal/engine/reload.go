@@ -41,8 +41,31 @@ func NewReloadable(lang Lang, dir, target string) (*Reloadable, error) {
 // not be the one that started last, leaving a staler engine current. Callers
 // must serialize Reload. The Watcher satisfies this: its single debounce
 // loop invokes onChange one call at a time.
-func (r *Reloadable) Reload() error {
-	eng, err := Load(r.lang, r.dir, r.target)
+func (r *Reloadable) Reload() error { return r.rebuild(nil) }
+
+// ReloadKeeping rebuilds, discarding only the indexes of the named repository
+// directories and carrying the rest over. Naming none keeps everything, which
+// is right for a rebuild caused by something that changed no code at all —
+// a repository being linked.
+//
+// Reload itself keeps nothing, and that is the correct default for the caller
+// that has no idea what changed: a stale index is a wrong answer, where a
+// re-read is only a slow one.
+func (r *Reloadable) ReloadKeeping(rebuild ...string) error {
+	set := make(map[string]bool, len(rebuild))
+	for _, d := range rebuild {
+		if d != "" {
+			set[d] = true
+		}
+	}
+	return r.rebuild(set)
+}
+
+func (r *Reloadable) rebuild(discard map[string]bool) error {
+	r.mu.RLock()
+	prev := r.cur
+	r.mu.RUnlock()
+	eng, err := Rebuild(prev, r.lang, r.dir, r.target, discard)
 	if err != nil {
 		return err
 	}
@@ -50,10 +73,21 @@ func (r *Reloadable) Reload() error {
 	old := r.cur
 	r.cur = eng
 	r.mu.Unlock()
-	if c, ok := old.(io.Closer); ok {
+	// Closing the old engine would close indexes the new one just adopted, so
+	// only an engine that handed nothing over can be closed. A workspace holds
+	// no closable resource of its own; the TS engine's sidecar process is the
+	// case this protects, and it never adopts.
+	if c, ok := old.(io.Closer); ok && eng != old && !adopted(old, eng) {
 		_ = c.Close()
 	}
 	return nil
+}
+
+// adopted reports whether the new engine took anything over from the old one.
+func adopted(old, next model.Engine) bool {
+	_, wasWorkspace := old.(interface{ Repos() []model.RepoInfo })
+	_, isWorkspace := next.(interface{ Repos() []model.RepoInfo })
+	return wasWorkspace && isWorkspace
 }
 
 // Close releases the current engine.
@@ -95,6 +129,18 @@ func (r *Reloadable) FrameForCall(id model.CallID, choice int) (*model.Frame, er
 func (r *Reloadable) Search(query string, limit int) []model.SearchResult {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.cur.Search(query, limit)
+}
+
+// SearchFrom biases search toward one workspace service when the engine held
+// can do that, and is plain Search otherwise — a single repo has exactly one
+// service, so "rank mine first" is already what it does.
+func (r *Reloadable) SearchFrom(repo, query string, limit int) []model.SearchResult {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if ss, ok := r.cur.(model.ServiceSearcher); ok {
+		return ss.SearchFrom(repo, query, limit)
+	}
 	return r.cur.Search(query, limit)
 }
 
@@ -147,14 +193,14 @@ func (r *Reloadable) SetProtoRoot(dir string) error {
 
 // Resolve forwards the cross-repo hop to the current engine when it
 // federates repositories.
-func (r *Reloadable) Resolve(kind, key string) (*model.Resolution, error) {
+func (r *Reloadable) Resolve(kind, key string, role model.BindingRole) (*model.Resolution, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	cr, ok := r.cur.(model.CrossRepoResolver)
 	if !ok {
 		return nil, model.ErrNoWorkspace
 	}
-	return cr.Resolve(kind, key)
+	return cr.Resolve(kind, key, role)
 }
 
 // PlatformView forwards the workspace-level view when one is open.
@@ -188,6 +234,44 @@ func (r *Reloadable) IndexRepo(alias string) error {
 		return model.ErrNoWorkspace
 	}
 	return ir.IndexRepo(alias)
+}
+
+// Channels forwards the key index when the engine holds one. A single repo
+// has channels too — its own bindings — but no other end to name, so the
+// question only means something for a workspace.
+func (r *Reloadable) Channels() []model.Channel {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	lister, ok := r.cur.(model.ChannelLister)
+	if !ok {
+		return nil
+	}
+	return lister.Channels()
+}
+
+// Repos forwards the workspace's repository list. Empty for a single-repo
+// engine, which is the honest answer rather than an error: nothing is wrong,
+// there is simply no workspace yet — and linking a repo is exactly how one
+// comes to exist mid-session.
+func (r *Reloadable) Repos() []model.RepoInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	lister, ok := r.cur.(interface{ Repos() []model.RepoInfo })
+	if !ok {
+		return nil
+	}
+	return lister.Repos()
+}
+
+// RuleReport forwards the recognizer picture for whatever engine is held.
+func (r *Reloadable) RuleReport() model.RuleReport {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rep, ok := r.cur.(interface{ RuleReport() model.RuleReport })
+	if !ok {
+		return model.RuleReport{}
+	}
+	return rep.RuleReport()
 }
 
 // PlatformAvailable reports whether the engine currently held can serve a

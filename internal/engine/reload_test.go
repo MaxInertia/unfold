@@ -173,8 +173,8 @@ func TestWatcherFiresOnSourceChange(t *testing.T) {
 	src := filepath.Join(dir, "a.go")
 	writeFile(t, src, "package a\n")
 
-	fired := make(chan struct{}, 8)
-	w, err := NewWatcher(dir, 30*time.Millisecond, func() { fired <- struct{}{} })
+	fired := make(chan string, 8)
+	w, err := NewWatcher(dir, 30*time.Millisecond, func(cause string) { fired <- cause })
 	if err != nil {
 		t.Fatalf("NewWatcher: %v", err)
 	}
@@ -182,7 +182,12 @@ func TestWatcherFiresOnSourceChange(t *testing.T) {
 
 	writeFile(t, src, "package a\n\nfunc F() {}\n")
 	select {
-	case <-fired:
+	case cause := <-fired:
+		// The path travels with the callback: "why did it reindex, nothing
+		// changed" is a question about one file, and it has to be answerable.
+		if cause != src {
+			t.Errorf("watcher reported %q as the cause, want %s", cause, src)
+		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("watcher did not fire on a .go change")
 	}
@@ -204,7 +209,7 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-func drain(ch <-chan struct{}) {
+func drain[T any](ch <-chan T) {
 	for {
 		select {
 		case <-ch:

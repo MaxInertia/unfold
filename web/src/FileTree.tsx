@@ -5,10 +5,17 @@ import { fetchFiles } from "./api";
 // collapsible folder tree. Clicking a file opens it in the viewer (as a
 // "file:<path>" pseudo-target whose frame is the whole file). The card / tab
 // chrome lives in App.
+//
+// Openness is tracked as the set of *expanded* directories rather than the
+// collapsed ones, which is what makes "everything collapsed" the default at
+// every depth: a directory nobody has opened yet is simply absent from the
+// set, however deep it is. A tree that arrives fully expanded is a wall of
+// paths — the sidebar is narrow, and the point of the files tab is to let you
+// walk down to one file, not to render the whole repo at once.
 export function FileTree({ onOpen }: { onOpen: (targetId: string) => void }) {
   const [files, setFiles] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
@@ -26,18 +33,27 @@ export function FileTree({ onOpen }: { onOpen: (targetId: string) => void }) {
   if (!files || !root) return <p className="tree-note">…</p>;
   if (files.length === 0) return <p className="tree-note">no files</p>;
 
+  // Closing a directory closes what's inside it too, so reopening it shows
+  // one level rather than however deep you happened to be last time. That's
+  // what makes collapsing a way to get back to a small tree instead of only
+  // hiding one.
   function toggle(path: string) {
-    setCollapsed((c) => {
-      const n = new Set(c);
-      if (n.has(path)) n.delete(path);
-      else n.add(path);
+    setExpanded((e) => {
+      const n = new Set(e);
+      if (n.has(path)) {
+        for (const p of n) {
+          if (p === path || p.startsWith(path + "/")) n.delete(p);
+        }
+      } else {
+        n.add(path);
+      }
       return n;
     });
   }
 
   return (
     <ul className="tree-list tree-list--root">
-      <DirChildren node={root} collapsed={collapsed} toggle={toggle} onOpen={onOpen} />
+      <DirChildren node={root} expanded={expanded} toggle={toggle} onOpen={onOpen} />
     </ul>
   );
 }
@@ -52,12 +68,12 @@ interface TreeNode {
 
 function DirChildren({
   node,
-  collapsed,
+  expanded,
   toggle,
   onOpen,
 }: {
   node: TreeNode;
-  collapsed: Set<string>;
+  expanded: Set<string>;
   toggle: (path: string) => void;
   onOpen: (targetId: string) => void;
 }) {
@@ -87,12 +103,12 @@ function DirChildren({
               onClick={() => toggle(k.path)}
               title={k.path}
             >
-              <span className="tree-twisty">{collapsed.has(k.path) ? "▸" : "▾"}</span>
+              <span className="tree-twisty">{expanded.has(k.path) ? "▾" : "▸"}</span>
               <span className="tree-label dir-label">{k.name}/</span>
             </div>
-            {!collapsed.has(k.path) && (
+            {expanded.has(k.path) && (
               <ul className="tree-list">
-                <DirChildren node={k} collapsed={collapsed} toggle={toggle} onOpen={onOpen} />
+                <DirChildren node={k} expanded={expanded} toggle={toggle} onOpen={onOpen} />
               </ul>
             )}
           </li>

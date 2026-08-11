@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/gitbase"
 	"github.com/MaxInertia/unfold/internal/notes"
 	"github.com/MaxInertia/unfold/internal/prefs"
+	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/server"
 	"github.com/MaxInertia/unfold/internal/workspace"
 )
@@ -44,6 +46,7 @@ func main() {
 		lang         = flag.String("lang", "", "force engine language: go|typescript (default: autodetect)")
 		watch        = flag.Bool("watch", true, "reindex automatically when source files change")
 		diffBase     = flag.String("diff-base", "", "git ref to diff against (e.g. main); frames show what this branch changes vs the merge-base. Go only.")
+		recognizers  = flag.String("recognizers", "", "JSON file of recognizer rules describing how your services communicate — in-house HTTP wrappers, custom pub/sub. Shared across a workspace; per-repo and personal files are layered on top.")
 		workspaceDir = flag.String("workspace", "", "directory of sibling repository checkouts to open together, so cross-service calls can be followed into the repo that implements them")
 		indexMode    = flag.String("index", "auto", "when to index each workspace repo's Go code: eager|lazy|auto (auto indexes up front for a small workspace, on demand for a large one)")
 		protoRoot    = flag.String("proto-root", "", "directory of the shared proto repository that microservice.yaml protoPaths are relative to; enables the declared gRPC surface in the service view")
@@ -59,9 +62,23 @@ func main() {
 
 	// Set before the first Load, and read again on every watch-mode rebuild.
 	// Without the flag, fall back to whatever was picked in the UI last time.
+	saved := prefs.Load(projectDir(*dir))
 	engine.ProtoRoot = *protoRoot
 	if engine.ProtoRoot == "" {
-		engine.ProtoRoot = prefs.Load(projectDir(*dir)).ProtoRoot
+		engine.ProtoRoot = saved.ProtoRoot
+	}
+	// Repos linked from the UI in a previous session. Restoring them here is
+	// what makes the link stick: without it, opening a workspace would be
+	// something you had to redo on every start.
+	engine.LinkedRepos = append([]string(nil), saved.LinkedRepos...)
+
+	// Rule files, in precedence order: a shared org file establishes what a
+	// library looks like, the repo overrides it for local reality, and a
+	// personal file is the last word for this one machine.
+	engine.RecognizerFiles = []string{
+		rules.UserPath(),
+		*recognizers,
+		rules.RepoPath(projectDir(*dir)),
 	}
 
 	target := flag.Arg(0)
@@ -107,11 +124,20 @@ func main() {
 	url := fmt.Sprintf("http://%s", listener.Addr().String())
 
 	srv := server.New(eng)
+	// Background indexing is invisible from the browser otherwise: a repo can
+	// start and finish being read with nothing on screen saying so, which is
+	// exactly the wait a reader wants to see.
+	workspace.OnRepoChange = srv.NotifyRepos
 	srv.SetTarget(target)
 	srv.SetDiffer(differ)
 	srv.SetProjectDir(projectDir(*dir))
 	// Notes persist to <dir>/.unfold/notes.json (created on first save).
 	srv.SetNotes(notes.NewStore(*dir))
+	// Linking a repo changes which repositories the engine opens, and that
+	// only takes effect on a rebuild. Reload is the same path watch mode
+	// uses — it swaps atomically and keeps the previous engine on failure.
+	srv.SetReloader(eng.Reload)
+	srv.SetReloaderKeeping(eng.ReloadKeeping)
 	httpServer := &http.Server{Handler: srv.Handler()}
 
 	serverErr := make(chan error, 1)
@@ -121,9 +147,17 @@ func main() {
 
 	// Watch mode: reindex on source changes and push a reload to the browser.
 	if *watch {
-		w, err := engine.NewWatcher(*dir, 250*time.Millisecond, func() {
-			log.Printf("change detected, reindexing...")
-			if err := eng.Reload(); err != nil {
+		w, err := engine.NewWatcher(*dir, 250*time.Millisecond, func(cause string) {
+			log.Printf("change detected in %s, reindexing...", cause)
+			// Through the server, which serializes rebuilds: a save and a
+			// linked repo can arrive at the same moment, and two rebuilds that
+			// each construct an engine and then swap leave whichever finished
+			// last in charge — not whichever started last.
+			// Only the repository the file lives in is re-read. The others
+			// cannot have changed — nothing outside a module is in its index
+			// — and reading them again is the cost that made every save feel
+			// like a restart.
+			if err := srv.ReloadKeeping(engine.ModuleRoot(filepath.Dir(cause))); err != nil {
 				log.Printf("reindex failed (keeping previous index): %v", err)
 				return
 			}

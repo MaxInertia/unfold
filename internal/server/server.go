@@ -19,9 +19,11 @@ import (
 	"time"
 
 	"github.com/MaxInertia/unfold/internal/diff"
+	"github.com/MaxInertia/unfold/internal/engine"
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/notes"
 	"github.com/MaxInertia/unfold/internal/prefs"
+	"github.com/MaxInertia/unfold/internal/rules"
 )
 
 //go:embed all:static/dist
@@ -36,10 +38,26 @@ type Server struct {
 	// projectDir is where per-project prefs are persisted (the proto root a
 	// user picks in the UI). Empty disables persistence.
 	projectDir string
+	// reload rebuilds the engine in place. Nil disables the endpoints that
+	// need one, rather than letting them half-apply a change.
+	reload         func() error
+	reloadKeeping  func(rebuild ...string) error
 
 	// Connected /api/events subscribers, notified when the engine reindexes.
 	mu      sync.Mutex
-	clients map[chan struct{}]struct{}
+	// clients receive event names — "reload" when the index was rebuilt,
+	// "repos" when a repository started or finished indexing. One channel per
+	// subscriber, so a slow reader can't hold up an indexer.
+	clients map[chan string]struct{}
+
+	// reloadMu serializes index rebuilds; see Reload.
+	reloadMu sync.Mutex
+
+	// pending are repositories the user has linked whose index is still being
+	// built, keyed by directory. They are reported alongside the engine's own
+	// repos so a repo doesn't disappear between being added and being ready.
+	pendingMu sync.Mutex
+	pending   map[string]*pendingRepo
 }
 
 // New builds a server backed by any indexing engine (Go or TypeScript).
@@ -48,7 +66,7 @@ func New(engine model.Engine) *Server {
 	if err != nil {
 		panic(err)
 	}
-	return &Server{engine: engine, static: sub, clients: map[chan struct{}]struct{}{}}
+	return &Server{engine: engine, static: sub, clients: map[chan string]struct{}{}}
 }
 
 // SetTarget records the indexer pattern (e.g. "./...") for the /api/health response.
@@ -57,6 +75,15 @@ func (s *Server) SetTarget(target string) { s.target = target }
 // SetDiffer enables diff annotations on returned frames, comparing against the
 // base engine d wraps. Nil leaves diff mode off.
 func (s *Server) SetDiffer(d *diff.Differ) { s.differ = d }
+
+// SetReloaderKeeping supplies a rebuild that can carry indexes over, naming
+// only the repositories that must be read again. Optional: without it every
+// rebuild is a full one, which is correct and merely slower.
+func (s *Server) SetReloaderKeeping(fn func(rebuild ...string) error) { s.reloadKeeping = fn }
+
+// SetReloader supplies the function that rebuilds the engine, enabling the
+// endpoints that change what the engine is built from.
+func (s *Server) SetReloader(fn func() error) { s.reload = fn }
 
 // SetNotes enables the notes API backed by the given store.
 func (s *Server) SetNotes(n *notes.Store) { s.notes = n }
@@ -84,9 +111,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/usages", s.handleUsages)
 	mux.HandleFunc("/api/service", s.handleService)
 	mux.HandleFunc("/api/proto-root", s.handleProtoRoot)
+	mux.HandleFunc("/api/repos", s.handleRepos)
+	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/dirs", s.handleDirs)
 	mux.HandleFunc("/api/resolve", s.handleResolve)
 	mux.HandleFunc("/api/platform", s.handlePlatform)
+	mux.HandleFunc("/api/channels", s.handleChannels)
 	mux.HandleFunc("/api/index-repo", s.handleIndexRepo)
 	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/open", s.handleOpen)
@@ -109,7 +139,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch := make(chan struct{}, 1)
+	// Buffered enough that a burst of repo-state changes — four repos loading
+	// two at a time — isn't dropped while a client is being written to.
+	ch := make(chan string, 8)
 	s.addClient(ch)
 	defer s.removeClient(ch)
 
@@ -123,8 +155,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-ch:
-			fmt.Fprint(w, "event: reload\ndata: {}\n\n")
+		case event := <-ch:
+			fmt.Fprintf(w, "event: %s\ndata: {}\n\n", event)
 			flusher.Flush()
 		case <-ping.C:
 			fmt.Fprint(w, ": ping\n\n")
@@ -133,27 +165,36 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// NotifyReload wakes every connected /api/events subscriber. Non-blocking: a
-// client that hasn't drained its previous notification already has a reload
-// pending, so dropping the duplicate is fine.
-func (s *Server) NotifyReload() {
+// NotifyReload tells every subscriber the index was rebuilt.
+func (s *Server) NotifyReload() { s.notify("reload") }
+
+// NotifyRepos tells every subscriber that a repository started or finished
+// indexing. Separate from a reload because it is not one: nothing about the
+// code on screen changed, and a view that refetched itself every time a
+// background load ticked would be redrawing to report someone else's progress.
+func (s *Server) NotifyRepos() { s.notify("repos") }
+
+// notify wakes every connected /api/events subscriber. Non-blocking: a client
+// whose buffer is full is already behind, and the events are edges on a state
+// it can always re-read.
+func (s *Server) notify(event string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for ch := range s.clients {
 		select {
-		case ch <- struct{}{}:
+		case ch <- event:
 		default:
 		}
 	}
 }
 
-func (s *Server) addClient(ch chan struct{}) {
+func (s *Server) addClient(ch chan string) {
 	s.mu.Lock()
 	s.clients[ch] = struct{}{}
 	s.mu.Unlock()
 }
 
-func (s *Server) removeClient(ch chan struct{}) {
+func (s *Server) removeClient(ch chan string) {
 	s.mu.Lock()
 	delete(s.clients, ch)
 	s.mu.Unlock()
@@ -234,6 +275,342 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// GET  /api/rules — every recognizer, built-in and configured, with whether
+// it's on, where it came from, and how many bindings it actually produced.
+// POST /api/rules {"rule": {...}} — save a rule to the project's own file and
+// rebuild; {"id": "...", "enabled": false} switches one off, built-ins
+// included.
+//
+// A rule changes what the index contains, so applying one is a rebuild — the
+// same path linking a repo takes, and the same reason: what a rule matched is
+// only knowable by running it. That's also why the match count comes back
+// *after* saving rather than as a preview; a dry run would cost a full reindex
+// to answer the same question.
+func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
+	reporter, canReport := s.engine.(interface{ RuleReport() model.RuleReport })
+
+	if r.Method == http.MethodGet {
+		if !canReport {
+			writeJSON(w, http.StatusOK, model.RuleReport{Rules: []model.RuleInfo{}})
+			return
+		}
+		writeJSON(w, http.StatusOK, reporter.RuleReport())
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST only")
+		return
+	}
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if s.reload == nil || s.projectDir == "" {
+		writeError(w, http.StatusNotImplemented, "this session can't save rules")
+		return
+	}
+
+	var body struct {
+		Rule   json.RawMessage `json:"rule"`
+		Delete string          `json:"delete,omitempty"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<18)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+
+	path := rules.RepoPath(s.projectDir)
+	existing := readRuleFile(path)
+
+	if body.Delete != "" {
+		kept := existing.Rules[:0]
+		for _, r := range existing.Rules {
+			if r.ID != body.Delete {
+				kept = append(kept, r)
+			}
+		}
+		existing.Rules = kept
+	} else {
+		var incoming rules.Rule
+		if err := json.Unmarshal(body.Rule, &incoming); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid rule: "+err.Error())
+			return
+		}
+		// Validate before writing. A rule that can never fire, or one that
+		// would match every call site, is refused here rather than saved and
+		// then quietly doing nothing — silence is the failure mode this whole
+		// system exists to avoid.
+		if _, problems, err := rules.Parse(mustJSON(rules.File{Rules: []rules.Rule{incoming}})); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		} else if len(problems) > 0 {
+			writeError(w, http.StatusUnprocessableEntity, problems[0].Error())
+			return
+		}
+		replaced := false
+		for i := range existing.Rules {
+			if existing.Rules[i].ID == incoming.ID {
+				existing.Rules[i] = incoming
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			existing.Rules = append(existing.Rules, incoming)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := os.WriteFile(path, mustJSON(existing), 0o644); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.Reload(); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "rules saved but the index failed to rebuild: "+err.Error())
+		return
+	}
+	s.NotifyReload()
+	if reporter, ok := s.engine.(interface{ RuleReport() model.RuleReport }); ok {
+		writeJSON(w, http.StatusOK, reporter.RuleReport())
+		return
+	}
+	writeJSON(w, http.StatusOK, model.RuleReport{})
+}
+
+func readRuleFile(path string) rules.File {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return rules.File{}
+	}
+	var f rules.File
+	_ = json.Unmarshal(data, &f)
+	return f
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return []byte("{}")
+	}
+	return append(b, '\n')
+}
+
+// POST /api/repos {"path": "<abs dir>"[, "unlink": true]} — open another
+// repository, or stop opening one, without restarting.
+//
+// You find out mid-session that the call you're following lands in a repo you
+// didn't open, and until now the only answer was to quit and relaunch with
+// --workspace pointed somewhere that happened to contain both. A linked repo
+// need not be a sibling of anything.
+//
+// Linking rebuilds the engine rather than mutating the open workspace. The
+// workspace's repo set, alias table and cross-repo declaration join are read
+// without locks by every request path, on the assumption that they're fixed
+// after Open — mutating them live would mean auditing all of it for races,
+// where a rebuild is the mechanism watch mode already uses: it swaps
+// atomically and keeps the previous engine if the new one fails to build. The
+// cost is re-indexing what was eagerly loaded, which is why a large workspace
+// defers to --index lazy anyway.
+//
+// Mutating and filesystem-touching, so it's guarded like /api/open: POST only
+// and same-origin only.
+func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
+	// GET reports what is open and what state each repo is in — cheap, and the
+	// thing a "what is it doing" indicator reads. POST changes the set.
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]any{"repos": s.repoList()})
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, http.StatusMethodNotAllowed, "GET or POST only")
+		return
+	}
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if s.reload == nil {
+		writeError(w, http.StatusNotImplemented, "this session can't rebuild its index")
+		return
+	}
+	var body struct {
+		Path   string `json:"path"`
+		Unlink bool   `json:"unlink"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	abs, err := filepath.Abs(expandHome(strings.TrimSpace(body.Path)))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if body.Unlink {
+		if !engine.UnlinkRepo(abs) {
+			writeError(w, http.StatusBadRequest, abs+" is not a linked repository")
+			return
+		}
+	} else {
+		// Reject a non-module up front. Discovering it after the rebuild would
+		// mean reporting the failure against an engine that had already been
+		// replaced, and the user would have paid the reindex for nothing.
+		if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
+			writeError(w, http.StatusBadRequest, "not a directory: "+abs)
+			return
+		}
+		if fi, err := os.Stat(filepath.Join(abs, "go.mod")); err != nil || fi.IsDir() {
+			writeError(w, http.StatusBadRequest, "not a Go module (no go.mod): "+abs)
+			return
+		}
+		if !engine.LinkRepo(abs) {
+			writeError(w, http.StatusConflict, abs+" is already open")
+			return
+		}
+	}
+
+	// The link is recorded now, and the index is built behind it.
+	//
+	// Rebuilding inline meant the picker sat there for as long as the whole
+	// workspace took to index, which is the wrong thing to wait on: the
+	// decision — this repo is part of my workspace — was already made, and it
+	// is what the user came to the dialog to express. Everything downstream
+	// already copes with a repo that is named but not yet readable, because a
+	// lazy workspace is full of them.
+	if s.projectDir != "" {
+		p := prefs.Load(s.projectDir)
+		p.LinkedRepos = append([]string(nil), engine.LinkedRepos...)
+		if err := prefs.Save(s.projectDir, p); err != nil {
+			log.Printf("unfold: could not persist linked repositories: %v", err)
+		}
+	}
+	if !body.Unlink {
+		s.addPending(abs)
+	}
+	s.NotifyRepos()
+
+	go func() {
+		// Nothing named: linking a repository changes no code, so every index
+		// already built is still exactly right. The new repo has none, and
+		// gets one.
+		err := s.ReloadKeeping()
+		s.clearPending(abs, err)
+		if err != nil {
+			// The engine is unchanged — Reload keeps the previous one on
+			// failure — so the link is rolled back too, or the next rebuild
+			// for any reason would silently apply a repo that failed. The
+			// user has already been answered, so the failure has to reach
+			// them through the repo list instead of this request.
+			if body.Unlink {
+				engine.LinkRepo(abs)
+			} else {
+				engine.UnlinkRepo(abs)
+			}
+			if s.projectDir != "" {
+				p := prefs.Load(s.projectDir)
+				p.LinkedRepos = append([]string(nil), engine.LinkedRepos...)
+				_ = prefs.Save(s.projectDir, p)
+			}
+			log.Printf("unfold: could not open %s: %v", abs, err)
+		}
+		s.NotifyRepos()
+		s.NotifyReload()
+	}()
+
+	writeJSON(w, http.StatusOK, map[string]any{"repos": s.repoList(), "linked": engine.LinkedRepos})
+}
+
+// repoList is what the engine holds, plus anything linked whose index is still
+// being built. A repo the user just added is part of their workspace from the
+// moment they said so — reporting only what the engine has finished loading
+// would make it vanish for the duration of the very wait it is announcing.
+func (s *Server) repoList() []model.RepoInfo {
+	// Unlinking the last repo leaves a plain single-repo engine, whose Repos
+	// is nil — which would marshal to null where the client expects a list.
+	repos := []model.RepoInfo{}
+	if lister, ok := s.engine.(interface{ Repos() []model.RepoInfo }); ok {
+		if got := lister.Repos(); got != nil {
+			repos = got
+		}
+	}
+	have := make(map[string]bool, len(repos))
+	for _, r := range repos {
+		have[r.Dir] = true
+	}
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for dir, p := range s.pending {
+		if have[dir] {
+			continue
+		}
+		repos = append(repos, model.RepoInfo{
+			Alias:    filepath.Base(dir),
+			Name:     filepath.Base(dir),
+			Dir:      dir,
+			Indexing: p.err == "",
+			Error:    p.err,
+		})
+	}
+	sort.Slice(repos, func(a, b int) bool { return repos[a].Alias < repos[b].Alias })
+	return repos
+}
+
+func (s *Server) addPending(dir string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if s.pending == nil {
+		s.pending = map[string]*pendingRepo{}
+	}
+	s.pending[dir] = &pendingRepo{}
+}
+
+// clearPending drops a repo from the pending set once the rebuild that was
+// going to adopt it has finished. A failure is kept, with its reason: the
+// request that asked for this was answered before the answer was known, so
+// this list is the only place left to report it.
+func (s *Server) clearPending(dir string, err error) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if err == nil {
+		delete(s.pending, dir)
+		return
+	}
+	if p := s.pending[dir]; p != nil {
+		p.err = err.Error()
+	}
+}
+
+// Reload rebuilds the index, serialized. Two rebuilds at once each construct
+// an engine and then swap, so the one that wins is whichever finishes last
+// rather than whichever started last — and the callers (a watched file, a
+// saved rule, a linked repo) have no idea about each other.
+func (s *Server) Reload() error {
+	if s.reload == nil {
+		return fmt.Errorf("this session can't rebuild its index")
+	}
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	return s.reload()
+}
+
+// ReloadKeeping rebuilds while carrying over the indexes of every repository
+// except those named. For the rebuilds that changed no code at all — linking a
+// repository — that is all of them.
+func (s *Server) ReloadKeeping(rebuild ...string) error {
+	if s.reloadKeeping == nil {
+		return s.Reload()
+	}
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	return s.reloadKeeping(rebuild...)
 }
 
 // POST /api/proto-root {"path": "<abs dir>"} — point the declared gRPC
@@ -320,7 +697,15 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing required query params: kind, key")
 		return
 	}
-	res, err := cr.Resolve(kind, key)
+	// role is which side the caller is on, so the hop knows which way to
+	// look: an emit asks for subscribers, a subscription asks for publishers.
+	// Absent means inbound, which is what every link made before this
+	// parameter existed meant.
+	role := model.BindingRole(q.Get("role"))
+	if role != model.RoleInbound && role != model.RoleOutbound {
+		role = ""
+	}
+	res, err := cr.Resolve(kind, key, role)
 	if err != nil {
 		if errors.Is(err, model.ErrNoWorkspace) {
 			writeError(w, http.StatusNotImplemented, err.Error())
@@ -335,6 +720,25 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 // GET /api/platform — every service in the workspace and the calls between
 // them. Available only with a workspace open; a single repo has a service
 // view but nothing above it.
+type pendingRepo struct {
+	err string // set when the rebuild that would have adopted it failed
+}
+
+// GET /api/channels — every key the workspace has seen, with the services at
+// each end. Cheap: it reads the join, not any Go index.
+func (s *Server) handleChannels(w http.ResponseWriter, _ *http.Request) {
+	lister, ok := s.engine.(model.ChannelLister)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, model.ErrNoWorkspace.Error())
+		return
+	}
+	channels := lister.Channels()
+	if channels == nil {
+		channels = []model.Channel{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"channels": channels})
+}
+
 func (s *Server) handlePlatform(w http.ResponseWriter, r *http.Request) {
 	we, ok := s.engine.(model.WorkspaceEngine)
 	if !ok {
@@ -674,7 +1078,11 @@ func (s *Server) handleBody(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET /api/search?q=<substr>&limit=<int>
+// GET /api/search?q=<substr>&limit=<int>&repo=<alias>
+//
+// repo names the service the reader is currently in, so its own code ranks
+// first. It's a hint, not a filter: an unknown or absent repo falls back to
+// the primary one rather than returning nothing.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	limit := 50
@@ -683,9 +1091,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"results": s.engine.Search(q, limit),
-	})
+	var results []model.SearchResult
+	if ss, ok := s.engine.(model.ServiceSearcher); ok {
+		results = ss.SearchFrom(r.URL.Query().Get("repo"), q, limit)
+	} else {
+		results = s.engine.Search(q, limit)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

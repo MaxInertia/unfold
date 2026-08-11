@@ -9,6 +9,7 @@
 package indexer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -17,6 +18,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +28,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/manifest"
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/platform"
+	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/protoapi"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/packages"
@@ -86,7 +89,8 @@ func byteOffsetForUTF16(b []byte, u16 int) int {
 // JSON shapes. These aliases keep the indexer's call sites terse and let
 // existing callers/tests continue to reference indexer.Frame etc. For the
 // Go engine, TargetID is *types.Func.FullName (e.g.
-// "github.com/x/y.(*T).Method") and CallID is "<file>:<byte-offset>".
+// "github.com/x/y.(*T).Method") and CallID is "<enclosing function>@<n>",
+// the nth site in source order inside that function (see assignCallIDs).
 type (
 	TargetID     = model.TargetID
 	CallID       = model.CallID
@@ -96,12 +100,14 @@ type (
 	Candidate    = model.Candidate
 	SearchResult = model.SearchResult
 	TypeInfo     = model.TypeInfo
+	CallFacts    = model.CallFacts
 )
 
 const (
 	KindDirect    = model.KindDirect
 	KindInterface = model.KindInterface
 	KindIndirect  = model.KindIndirect
+	KindRef       = model.KindRef
 )
 
 // Indexer implements model.Engine, and the optional platform half of it.
@@ -156,6 +162,26 @@ type Indexer struct {
 	// resolve against. Empty disables proto loading — the paths are relative
 	// to a repo unfold has no way to locate on its own.
 	protoRoot string
+	// ruleSet is the configured recognizers: user-written rules, plus which
+	// built-ins are switched off. Empty by default, so a project with no rules
+	// file behaves exactly as before.
+	ruleSet   rules.Set
+	ruleStats map[string]int
+	// varStrings is the string a package-level variable is initialized with;
+	// varFields the same for the fields of a struct variable. Both are what a
+	// key argument resolves against when it isn't a constant.
+	varStrings map[types.Object]string
+	varFields  map[types.Object]map[string]string
+	// ruleSites is which recognizers claimed each call site, keyed file:line.
+	// Built-ins and configured rules land in the same map: from where a reader
+	// stands, "what already recognizes this call" is one question, and an
+	// answer that silently omitted the built-ins would be worse than none —
+	// they are the majority of matches in most repos.
+	ruleSites map[string][]string
+	// leaves is the reading-time classification rules made for call sites,
+	// keyed file:line.
+	leaves map[string]rules.LeafDecision
+
 	// outboundUnreachable counts outbound call sites excluded because
 	// execution can't reach them from any recognized entrypoint.
 	outboundUnreachable int
@@ -383,6 +409,14 @@ func (i *Indexer) Load(dir, pattern string) error {
 		}
 	})
 
+	// Pass 1c: the string a variable starts out holding.
+	i.indexVarStrings(pkgs)
+
+	// Configured rules run alongside the built-ins: `disabled` switches
+	// built-ins off, and the evaluator collects the facts its two phases need.
+	disabled := i.ruleSet.Disabled()
+	ev := rules.NewEvaluator(i.ruleSet.Rules)
+
 	// Pass 2: walk each function body, resolve call sites. Idents that name
 	// an indexed function but are not a call's name token are recorded as
 	// value references (the function passed around as a value).
@@ -397,6 +431,9 @@ func (i *Indexer) Load(dir, pattern string) error {
 		// same way: a CallExpr is visited before the Ident that names it.
 		goLaunched := make(map[*ast.CallExpr]bool)
 		callNames := make(map[*ast.Ident]bool)
+		// Sel idents already recorded as a reference by the selector case, so
+		// the ident case doesn't record them a second time.
+		selRefs := make(map[*ast.Ident]bool)
 		ast.Inspect(fi.body, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.GoStmt:
@@ -416,12 +453,25 @@ func (i *Indexer) Load(dir, pattern string) error {
 				// invokePath follows chains without a depth limit, admitting
 				// dependency sites would bury the real edges under library
 				// plumbing.
+				ci := i.resolveCall(fi, node)
 				if i.ownsCode(fi) {
 					if facts, ok := i.callFacts(fi, node); ok {
-						i.bindings = append(i.bindings, platform.Extract(facts)...)
+						i.bindings = append(i.bindings, platform.Extract(facts, disabled)...)
+						// Rules need the callee as well as the call site:
+						// phase 1 asks what a function's own body does, which
+						// is a question about the target, not about here.
+						if ev != nil {
+							var targets []TargetID
+							if ci != nil {
+								targets = append(targets, ci.target)
+								for _, cand := range ci.candidates {
+									targets = append(targets, cand.TargetID)
+								}
+							}
+							ev.Observe(facts, targets...)
+						}
 					}
 				}
-				ci := i.resolveCall(fi, node)
 				if ci == nil {
 					return true
 				}
@@ -429,9 +479,56 @@ func (i *Indexer) Load(dir, pattern string) error {
 					ci.goroutine = true
 				}
 				fi.calls = append(fi.calls, ci)
-				i.callsByID[ci.id] = ci
+			case *ast.SelectorExpr:
+				// A method named as a value — `foo.Bar.Handle`. The ident case
+				// below already catches the ones go/types records in Uses: a
+				// package function, and a concrete method. It cannot catch an
+				// *interface* method, because an interface method has no body
+				// and so is not an indexed function — and a handler injected
+				// as an interface is exactly how a subscriber is usually
+				// written, so that was the shape that silently wasn't a site.
+				//
+				// It resolves the way an interface *call* does: not one target
+				// but a set of implementations, offered as candidates.
+				if callNames[node.Sel] {
+					return true
+				}
+				sel, ok := fi.pkg.TypesInfo.Selections[node]
+				if !ok {
+					return true
+				}
+				fnObj, _ := sel.Obj().(*types.Func)
+				if fnObj == nil || !isInterface(sel.Recv()) {
+					return true
+				}
+				cands := i.candidatesFor(sel.Recv(), fnObj.Name())
+				if len(cands) == 0 {
+					return true // nothing implements it; naming a hop to nowhere would be worse
+				}
+				ci := &callInfo{
+					parent:      fi.id,
+					kind:        KindRef,
+					displayName: fnObj.Name(),
+					candidates:  cands,
+					pos:         node.Sel.Pos(),
+					end:         node.Sel.End(),
+				}
+				fi.calls = append(fi.calls, ci)
+				selRefs[node.Sel] = true
+				// One usage per implementation, carrying the choice that
+				// selects it — the same shape an interface call produces, so
+				// the callers list can reproduce this site as an expansion.
+				for j, cand := range cands {
+					i.usagesByTarget[cand.TargetID] = append(i.usagesByTarget[cand.TargetID], &usageInfo{
+						call:   ci,
+						choice: j,
+						parent: fi.id,
+						kind:   model.UsageRef,
+						pos:    node.Sel.Pos(),
+					})
+				}
 			case *ast.Ident:
-				if callNames[node] {
+				if callNames[node] || selRefs[node] {
 					return true
 				}
 				obj, ok := fi.pkg.TypesInfo.Uses[node].(*types.Func)
@@ -440,7 +537,23 @@ func (i *Indexer) Load(dir, pattern string) error {
 				}
 				tid := TargetID(obj.FullName())
 				if _, known := i.funcs[tid]; known {
+					// A reference is a site too. Nothing is invoked here, but
+					// the function it names has a body, and "what does that
+					// do" is the same question as at a call — so it joins
+					// fi.calls and is given an id with the rest, which is what
+					// makes it expandable inline and splice-able from the
+					// callers list.
+					ci := &callInfo{
+						parent:      fi.id,
+						kind:        KindRef,
+						target:      tid,
+						displayName: obj.Name(),
+						pos:         node.Pos(),
+						end:         node.End(),
+					}
+					fi.calls = append(fi.calls, ci)
 					i.usagesByTarget[tid] = append(i.usagesByTarget[tid], &usageInfo{
+						call:   ci,
 						parent: fi.id,
 						kind:   model.UsageRef,
 						pos:    node.Pos(),
@@ -450,6 +563,8 @@ func (i *Indexer) Load(dir, pattern string) error {
 			return true
 		})
 	}
+
+	i.assignCallIDs()
 
 	// Reverse index over call sites: a direct call references its target; an
 	// interface call references every candidate it may dispatch to (Choice
@@ -482,17 +597,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	// Titles for binding endpoints, resolved once the whole function set is
 	// known (a route registered in one package can hand off to a handler
 	// defined in another, so this can't be done during the walk).
-	for n := range i.bindings {
-		b := &i.bindings[n]
-		if fi := i.funcs[b.Target]; fi != nil {
-			b.TargetTitle = fi.title
-		} else {
-			b.Target = "" // handler isn't an indexed function; don't offer a dead link
-		}
-		if fi := i.funcs[b.Site]; fi != nil {
-			b.SiteTitle = fi.title
-		}
-	}
+	i.titleEndpoints(i.bindings)
 	// Declared surface is folded in after the code-derived bindings, so the
 	// publicRoutes cross-check can see what the code actually registered.
 	i.applyVisibility()
@@ -507,10 +612,71 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.bindings = append(i.bindings, grpcOut...)
 	i.outboundUnreachable = unreachable
 
+	// Configured rules produce bindings the same way built-ins do, and are
+	// filtered the same way afterwards. Reachability is a property of the
+	// evaluator rather than of any rule: a rule says what shape counts, and
+	// the engine decides whether execution can get there — so a configured
+	// outbound edge can't claim a call the service never makes, which is the
+	// filter the gRPC pass had to learn.
+	ruleOut, ruleUnreachable := i.filterReachable(ev.Run())
+	// Titled here rather than with the rest: the pass above runs before the
+	// evaluator has produced anything, so a configured rule's binding used to
+	// arrive with no title at all — the cross-repo hop into a subscriber found
+	// the handler and then had nothing to call it.
+	i.titleEndpoints(ruleOut)
+	i.bindings = append(i.bindings, ruleOut...)
+	i.outboundUnreachable += ruleUnreachable
+	i.ruleStats = ev.Stats
+	i.leaves = ev.Leaves()
+	i.indexRuleSites(ev.Matched())
+
 	i.sortBindings()
 	i.computeCrossings()
 
 	return nil
+}
+
+// indexRuleSites records which recognizer claimed each call site, and folds
+// the built-ins' matches into the same per-rule counts the configured rules
+// report.
+//
+// Built-ins had no counts at all: the report exists so a rule that quietly
+// stopped matching says so, and the three rules most likely to break on a
+// library upgrade were the ones exempt from it. They're countable now for the
+// same reason they're attributable — Extract stamps each binding with the rule
+// that produced it.
+func (i *Indexer) indexRuleSites(matched map[string][]string) {
+	sites := make(map[string][]string, len(matched))
+	for site, ids := range matched {
+		sites[site] = append([]string(nil), ids...)
+	}
+	for _, b := range i.bindings {
+		if b.Rule == "" || b.File == "" {
+			continue // the declared surface: a manifest, not a rule
+		}
+		site := b.File + ":" + strconv.Itoa(b.Line)
+		if !slices.Contains(sites[site], b.Rule) {
+			sites[site] = append(sites[site], b.Rule)
+		}
+		// Only the built-ins: a configured rule's matches are already counted
+		// by the evaluator, and counting them here as well would double every
+		// one that emitted a binding.
+		if isBuiltinID(b.Rule) {
+			i.ruleStats[b.Rule]++
+		}
+	}
+	for site := range sites {
+		sort.Strings(sites[site])
+	}
+	i.ruleSites = sites
+}
+
+// RulesAt names the recognizers matching a call site, for "what already claims
+// this" at the point of authoring another one.
+func (i *Indexer) RulesAt(file string, line int) []string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.ruleSites[file+":"+strconv.Itoa(line)]
 }
 
 // SetProtoRoot points the indexer at the shared proto repository that a
@@ -926,7 +1092,19 @@ func isDouble(recv string) bool {
 // immediately-invoked literal, or a call in a package that failed to type
 // check.
 func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool) {
-	info := fi.pkg.TypesInfo
+	return i.callFactsIn(fi.pkg, fi.id, ce)
+}
+
+// callFactsIn is callFacts without a funcInfo, for callers that have the
+// package and position but no enclosing indexed function — the hover card on a
+// whole-file frame, notably. Keeping one extraction matters more than the
+// argument list: what the authoring form offers has to be what the evaluator
+// will actually match.
+func (i *Indexer) callFactsIn(pkg *packages.Package, site TargetID, ce *ast.CallExpr) (platform.Call, bool) {
+	if pkg == nil {
+		return platform.Call{}, false
+	}
+	info := pkg.TypesInfo
 	if info == nil {
 		return platform.Call{}, false
 	}
@@ -946,20 +1124,281 @@ func (i *Indexer) callFacts(fi *funcInfo, ce *ast.CallExpr) (platform.Call, bool
 	}
 
 	pos := i.fset.Position(ce.Pos())
+	// The name token, not the expression start: a chained call and its inner
+	// call begin at the same byte, which is the collision the call id itself
+	// had to be keyed away from for exactly the same reason.
+	offset := pos.Offset
+	if spanPos, _, ok := nameSpan(ce.Fun); ok {
+		offset = i.fset.Position(spanPos).Offset
+	}
 	c := platform.Call{
 		PkgPath: obj.Pkg().Path(),
 		Func:    obj.Name(),
-		Site:    fi.id,
+		Offset:  offset,
+		Site:    site,
 		File:    pos.Filename,
 		Line:    pos.Line,
 	}
-	if sig, ok := obj.Type().(*types.Signature); ok && sig.Recv() != nil {
+	sig, _ := obj.Type().(*types.Signature)
+	if sig != nil && sig.Recv() != nil {
 		c.Recv, c.RecvPkg = namedTypeParts(sig.Recv().Type())
 	}
-	for _, a := range ce.Args {
-		c.Args = append(c.Args, argFacts(info, a))
+	for n, a := range ce.Args {
+		arg := i.argFacts(info, a)
+		arg.ParamType = paramTypeAt(sig, n)
+		c.Args = append(c.Args, arg)
 	}
 	return c, true
+}
+
+// varString resolves an expression that names a variable, or a field of one,
+// to the string it was initialized with.
+//
+// Two shapes, both by lookup rather than by walking: `Topic` (an identifier
+// bound to a var) and `Topics.Shipped` (a field selector on one). A selector
+// through a package qualifier — `topics.Topic` — is an identifier as far as
+// the type checker is concerned, so it needs no separate case; what
+// distinguishes it from a field selector is only whether the base resolves to
+// a package or to a variable.
+func (i *Indexer) varString(info *types.Info, e ast.Expr) (string, bool) {
+	switch v := e.(type) {
+	case *ast.Ident:
+		if obj := info.Uses[v]; obj != nil {
+			s, ok := i.varStrings[obj]
+			return s, ok
+		}
+	case *ast.SelectorExpr:
+		// `pkg.Name` — the selector itself resolves to the variable.
+		if obj := info.Uses[v.Sel]; obj != nil {
+			if s, ok := i.varStrings[obj]; ok {
+				return s, true
+			}
+		}
+		// `Registry.Field` or `pkg.Registry.Field` — the base is the variable
+		// and the selector names one of its fields.
+		if base := i.baseVar(info, v.X); base != nil {
+			if fields, ok := i.varFields[base]; ok {
+				s, ok := fields[v.Sel.Name]
+				return s, ok
+			}
+		}
+	}
+	return "", false
+}
+
+// titleEndpoints fills in the display names for a batch of bindings' endpoints
+// and drops a handler that isn't an indexed function, so the UI never offers a
+// link that goes nowhere. Applied per batch because the batches are produced
+// at different points in the load, and a binding titled from an incomplete
+// function set would be titled wrongly rather than not at all.
+func (i *Indexer) titleEndpoints(bs []model.Binding) {
+	for n := range bs {
+		b := &bs[n]
+		if fi := i.funcs[b.Target]; fi != nil {
+			b.TargetTitle = fi.title
+		} else {
+			b.Target = ""
+		}
+		if fi := i.funcs[b.Site]; fi != nil {
+			b.SiteTitle = fi.title
+		}
+	}
+}
+
+// varFieldsOf resolves an expression naming a package-level struct variable to
+// the strings its fields were initialized with. Nil for anything else, which
+// includes a struct built at the call site: its fields are right there in the
+// source, and reading them would be a different lookup for a case nobody has
+// asked for.
+func (i *Indexer) varFieldsOf(info *types.Info, e ast.Expr) map[string]string {
+	if obj := i.baseVar(info, e); obj != nil {
+		return i.varFields[obj]
+	}
+	return nil
+}
+
+// baseVar resolves the variable an expression denotes, looking through a
+// package qualifier. Nil when the expression is anything else — a call, an
+// index, a field of a field: all of them have an answer, and none of them has
+// one this cheap, so they're left to say "unknown" rather than be guessed at.
+func (i *Indexer) baseVar(info *types.Info, e ast.Expr) types.Object {
+	switch v := e.(type) {
+	case *ast.Ident:
+		if obj, ok := info.Uses[v].(*types.Var); ok {
+			return obj
+		}
+	case *ast.SelectorExpr:
+		if obj, ok := info.Uses[v.Sel].(*types.Var); ok {
+			return obj
+		}
+	}
+	return nil
+}
+
+// indexVarStrings records the string a package-level variable is initialized
+// with, and the strings the fields of a struct variable are initialized with.
+//
+// Keys are frequently not literals at the call site. A constant already
+// resolves — the type checker folds it, across packages and through
+// concatenation — but the two shapes it can't reach are the ones a shared
+// events package usually uses:
+//
+//	var PaymentTaken = "acme.payments.taken"
+//	var Topics = Registry{Shipped: "acme.orders.shipped"}
+//
+// Both are a value the program *starts* with, which is a weaker claim than a
+// constant: nothing here can see an assignment made later. That's what the
+// confidence badge is for, so the value is recorded and marked inferred rather
+// than being declined — declining it leaves the edge missing entirely, and a
+// missing edge is the failure this whole surface exists to avoid.
+//
+// Only strings, and only package scope: a local variable is a different
+// question (it has a flow, and answering it properly means dataflow rather
+// than a lookup), and every other type is irrelevant to a join key.
+func (i *Indexer) indexVarStrings(pkgs []*packages.Package) {
+	i.varStrings = map[types.Object]string{}
+	i.varFields = map[types.Object]map[string]string{}
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		info := pkg.TypesInfo
+		if info == nil {
+			return
+		}
+		for _, file := range pkg.Syntax {
+			for _, d := range file.Decls {
+				gd, ok := d.(*ast.GenDecl)
+				if !ok || gd.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for n, name := range vs.Names {
+						if n >= len(vs.Values) {
+							continue // `var a, b = f()` — nothing per-name to read
+						}
+						obj, _ := info.Defs[name].(*types.Var)
+						if obj == nil {
+							continue
+						}
+						i.recordVarValue(info, obj, vs.Values[n])
+					}
+				}
+			}
+		}
+	})
+}
+
+func (i *Indexer) recordVarValue(info *types.Info, obj types.Object, val ast.Expr) {
+	if s, ok := constStringOf(info, val); ok {
+		i.varStrings[obj] = s
+		return
+	}
+	// `&T{…}` is as common as `T{…}` for a registry, and the pointer makes no
+	// difference to what the fields hold.
+	if u, ok := val.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		val = u.X
+	}
+	cl, ok := val.(*ast.CompositeLit)
+	if !ok {
+		return
+	}
+	fields := map[string]string{}
+	for n, elt := range cl.Elts {
+		switch e := elt.(type) {
+		case *ast.KeyValueExpr:
+			key, ok := e.Key.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			if s, ok := constStringOf(info, e.Value); ok {
+				fields[key.Name] = s
+			}
+		default:
+			// Positional: the field is identified by its index in the struct
+			// type, which is the only place that order is recorded.
+			if name := structFieldName(info.TypeOf(cl), n); name != "" {
+				if s, ok := constStringOf(info, e); ok {
+					fields[name] = s
+				}
+			}
+		}
+	}
+	if len(fields) > 0 {
+		i.varFields[obj] = fields
+	}
+}
+
+// structFieldName is the name of field n of a (possibly pointer, possibly
+// named) struct type.
+func structFieldName(t types.Type, n int) string {
+	if t == nil {
+		return ""
+	}
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	st, ok := t.Underlying().(*types.Struct)
+	if !ok || n >= st.NumFields() {
+		return ""
+	}
+	return st.Field(n).Name()
+}
+
+// constStringOf is the type checker's answer for a constant string
+// expression, which covers named constants in any package and concatenations
+// of them.
+func constStringOf(info *types.Info, e ast.Expr) (string, bool) {
+	tv, ok := info.Types[e]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(tv.Value), true
+}
+
+// paramTypeAt renders the callee's declared parameter type at position n.
+//
+// The declared type is a different fact from the type of the value passed, and
+// a rule may need either: a parameter declared `any` says nothing about what
+// arrives, and a value that is a locally-defined implementation of an SDK
+// interface says nothing about what the callee accepts. Recording both is what
+// lets a rule pick the one that discriminates for a given library.
+func paramTypeAt(sig *types.Signature, n int) string {
+	if sig == nil {
+		return ""
+	}
+	params := sig.Params()
+	if params == nil || params.Len() == 0 {
+		return ""
+	}
+	last := params.Len() - 1
+	switch {
+	case n < last, n == last && !sig.Variadic():
+		if n > last {
+			return ""
+		}
+		return qualifiedType(params.At(n).Type())
+	case sig.Variadic():
+		// Every argument in the variadic tail is an element, not the slice —
+		// matching on "[]T" would never fire for the call that was written.
+		if slice, ok := params.At(last).Type().(*types.Slice); ok {
+			return qualifiedType(slice.Elem())
+		}
+		return qualifiedType(params.At(last).Type())
+	}
+	return ""
+}
+
+// qualifiedType renders a type with full package paths, so a rule names
+// "github.com/acme/events/pb.Event" rather than "pb.Event" — the same
+// discipline as matching on a package path rather than a package name, and
+// for the same reason: short names collide across modules.
+func qualifiedType(t types.Type) string {
+	if t == nil {
+		return ""
+	}
+	return types.TypeString(t, func(p *types.Package) string { return p.Path() })
 }
 
 // namedTypeParts unwraps a receiver type to its bare name and package, so a
@@ -983,11 +1422,27 @@ func namedTypeParts(t types.Type) (name, pkgPath string) {
 // constant string value, and the function it names when it's a function
 // value. Using the type checker's constant folding (rather than looking for
 // *ast.BasicLit) means `"POST " + routePrefix` resolves like a literal.
-func argFacts(info *types.Info, e ast.Expr) platform.Arg {
+func (i *Indexer) argFacts(info *types.Info, e ast.Expr) platform.Arg {
 	var a platform.Arg
-	if tv, ok := info.Types[e]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
-		a.Value = constant.StringVal(tv.Value)
-		a.Known = true
+	if tv, ok := info.Types[e]; ok {
+		if tv.Value != nil && tv.Value.Kind() == constant.String {
+			a.Value = constant.StringVal(tv.Value)
+			a.Known = true
+		}
+		a.Type = qualifiedType(tv.Type)
+	}
+	if !a.Known {
+		// Not a constant, but possibly a variable whose starting value is
+		// known — a shared events package names its topics one of these two
+		// ways about as often as it uses a const.
+		if s, ok := i.varString(info, e); ok {
+			a.Value, a.Known, a.Inferred = s, true, true
+		}
+		// Or the argument is the definition *itself* — a struct var passed
+		// whole, with the identity inside it. There is no Value to take here:
+		// which field is the identity is a fact about the library, so the
+		// fields are carried and a rule says which one it keys off.
+		a.Fields = i.varFieldsOf(info, e)
 	}
 	switch v := e.(type) {
 	case *ast.Ident:
@@ -1006,7 +1461,14 @@ func argFacts(info *types.Info, e ast.Expr) platform.Arg {
 		// A conversion wrapping the real argument, e.g.
 		// http.Handle("/x", http.HandlerFunc(h)) — look through it.
 		if tv, ok := info.Types[v.Fun]; ok && tv.IsType() && len(v.Args) == 1 {
-			return argFacts(info, v.Args[0])
+			inner := i.argFacts(info, v.Args[0])
+			// ...but not for the type. The conversion is what the call site
+			// says the value *is*, and it's the more specific of the two —
+			// http.HandlerFunc, not the bare func type it wraps.
+			if a.Type != "" {
+				inner.Type = a.Type
+			}
+			return inner
 		}
 	}
 	return a
@@ -1263,16 +1725,10 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 	if !ok {
 		return nil
 	}
-	// Key the call by its *name* token, not by the expression start. In a
-	// chained call like `sdk.New().Get(ctx)` the outer CallExpr and the inner
-	// `sdk.New()` begin at the same token, so keying on ce.Pos() gave them
-	// the same id and one silently replaced the other in the index — losing a
-	// usage, and with it the caller edge for whichever lost.
-	pos := i.fset.Position(spanPos)
-	id := CallID(fmt.Sprintf("%s:%d", pos.Filename, pos.Offset))
-
+	// No id yet: ids are assigned per function after the walk (see
+	// assignCallIDs), because a call's identity is its place in its function,
+	// not its byte offset in a file.
 	ci := &callInfo{
-		id:     id,
 		parent: parent.id,
 		pos:    spanPos,
 		end:    spanEnd,
@@ -1282,6 +1738,17 @@ func (i *Indexer) resolveCall(parent *funcInfo, ce *ast.CallExpr) *callInfo {
 	info := parent.pkg.TypesInfo
 	if info == nil {
 		return ci
+	}
+
+	// A conversion is not a call. `[]byte(s)`, `time.Duration(n)`, `(*T)(p)`
+	// all parse as CallExpr, and nameSpan's fallback spans the whole type
+	// expression — so each one became a call site with no name, no target and
+	// nothing to expand: a decoration on `[]byte` that does nothing when
+	// clicked. go/types answers this exactly rather than by shape, which
+	// matters because a conversion to a named type is syntactically identical
+	// to calling a function of that name.
+	if tv, ok := info.Types[ce.Fun]; ok && tv.IsType() {
+		return nil
 	}
 
 	switch fn := ce.Fun.(type) {
@@ -1554,7 +2021,7 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 	for _, c := range fi.calls {
 		byteStart := i.fset.Position(c.pos).Offset - base
 		byteEnd := i.fset.Position(c.end).Offset - base
-		calls = append(calls, CallSite{
+		cs := CallSite{
 			ID:          c.id,
 			SpanStart:   utf16Offset(src, byteStart),
 			SpanEnd:     utf16Offset(src, byteEnd),
@@ -1563,10 +2030,28 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 			TargetID:    c.target,
 			Candidates:  c.candidates,
 			Goroutine:   c.goroutine,
-			External:    c.kind == KindDirect && i.isExternal(c.target),
-		})
+			External:    (c.kind == KindDirect || c.kind == KindRef) && i.isExternal(c.target),
+		}
+		// Leaves are keyed by file:line, and a line holds more than one site
+		// now that a value reference is one: `Subscribe(defn, handleFoo)` is a
+		// call *and* a reference, and both matched the line. A rule matched
+		// the call — the evaluator never sees references — so a reference must
+		// not inherit its boundary, or the card renders once per site on the
+		// line instead of once per boundary.
+		if d, ok := i.leaves[i.siteKeyOf(c)]; ok {
+			cs.Leaf = &model.LeafInfo{
+				Rule: d.RuleID, Label: d.Label,
+				Key: d.Key, Kind: d.Kind, Role: d.Role, CrossRepo: d.CrossRepo,
+			}
+			if d.Expand != nil {
+				// A rule overrides the stdlib/dependency heuristic in either
+				// direction: rescuing an in-house SDK from being skipped, or
+				// marking an expandable-but-pointless call as a boundary.
+				cs.External = !*d.Expand
+			}
+		}
+		calls = append(calls, cs)
 	}
-
 	return &Frame{
 		ID:        id,
 		Title:     fi.title,
@@ -1670,7 +2155,7 @@ func (i *Indexer) fileFrame(path string) (*Frame, error) {
 			TargetID:    c.target,
 			Candidates:  c.candidates,
 			Goroutine:   c.goroutine,
-			External:    c.kind == KindDirect && i.isExternal(c.target),
+			External:    (c.kind == KindDirect || c.kind == KindRef) && i.isExternal(c.target),
 		})
 	}
 
@@ -1789,8 +2274,57 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 			}
 		}
 		i.mu.RUnlock()
+		// What already claims this call site. Keyed by line, which is how the
+		// evaluator records a match, so two calls on one line share an answer
+		// — the same resolution the leaf classification has always used.
+		p := i.fset.Position(ident.Pos())
+		ti.Rules = i.RulesAt(p.Filename, p.Line)
+		// And what a new rule could match on. Only when the hovered identifier
+		// is the *called* function: hovering an argument describes that
+		// argument, and offering to write a rule keyed off it would be
+		// describing a different call site than the one on screen.
+		if ce := calleeCallExpr(enclosing, ident); ce != nil {
+			if c, ok := i.callFactsIn(pkg, "", ce); ok {
+				ti.Call = &CallFacts{
+					Package: c.PkgPath,
+					Recv:    c.Recv,
+					RecvPkg: c.RecvPkg,
+					Func:    c.Func,
+				}
+				for _, a := range c.Args {
+					ti.Call.Args = append(ti.Call.Args, model.ArgFacts{
+						Type: a.Type, ParamType: a.ParamType, Value: a.Value,
+					})
+				}
+			}
+		}
 	}
 	return ti, nil
+}
+
+// calleeCallExpr returns the call whose *callee* is ident, or nil. The
+// enclosing path runs innermost-out, so the first CallExpr encountered is the
+// nearest one; it counts only if ident is what names the function, not if
+// ident merely appears among the arguments.
+func calleeCallExpr(enclosing []ast.Node, ident *ast.Ident) *ast.CallExpr {
+	for _, n := range enclosing {
+		ce, ok := n.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		switch fn := ce.Fun.(type) {
+		case *ast.Ident:
+			if fn == ident {
+				return ce
+			}
+		case *ast.SelectorExpr:
+			if fn.Sel == ident {
+				return ce
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 // typeDefinition expands a type's shape when the name alone isn't telling:
@@ -1965,8 +2499,21 @@ func (i *Indexer) FrameForCall(id CallID, choice int) (*Frame, error) {
 		return nil, fmt.Errorf("unknown call %q", id)
 	}
 	switch c.kind {
-	case KindDirect:
-		return i.Frame(c.target)
+	case KindDirect, KindRef:
+		// A reference to a named function resolves like a direct call: one
+		// target, no dispatch to choose between. A reference to an *interface*
+		// method has the same shape as an interface call — several bodies it
+		// may name — so it falls through to the same choice.
+		if c.target != "" {
+			return i.Frame(c.target)
+		}
+		if len(c.candidates) == 0 {
+			return nil, ErrNoCandidates
+		}
+		if choice < 0 || choice >= len(c.candidates) {
+			choice = 0
+		}
+		return i.Frame(c.candidates[choice].TargetID)
 	case KindInterface:
 		if len(c.candidates) == 0 {
 			return nil, ErrNoCandidates
@@ -2051,6 +2598,50 @@ func (i *Indexer) excerpt(file string, line, bodyStart, bodyEnd int) (string, in
 	return strings.Join(lines[start-1:end], "\n"), start
 }
 
+// assignCallIDs gives every site an id built from the function it is in and
+// its position among that function's sites, in source order.
+//
+// The id used to be the file and the byte offset of the name token. That is
+// unique and cheap, and it changes when anything above it in the file changes
+// — so a watch-mode reindex after any edit invalidated every expansion in the
+// view at once, and the reader's whole trace collapsed to its root frame on
+// save. It also made a shared URL good for exactly one revision of the file.
+//
+// A function's identity is its name, which survives edits elsewhere, and a
+// call's identity within it is its ordinal. Adding a call *inside* a function
+// still renumbers that function's later sites — but that is an edit to the
+// very code being read, where losing your place is expected, rather than one
+// three hundred lines above it.
+//
+// Ordinals are assigned after the walk rather than during it because the
+// walk finds a chained call's inner and outer sites out of source order —
+// `sdk.New().Get(ctx)` yields Get before New — and an ordinal that depended on
+// traversal order would be stable in exactly the way that doesn't matter.
+func (i *Indexer) assignCallIDs() {
+	for _, fi := range i.funcs {
+		sort.Slice(fi.calls, func(a, b int) bool { return fi.calls[a].pos < fi.calls[b].pos })
+		for n, c := range fi.calls {
+			c.id = CallID(fmt.Sprintf("%s@%d", fi.id, n))
+			i.callsByID[c.id] = c
+		}
+	}
+}
+
+// Position reports where a target is defined, without building its frame.
+// Frame reads the source range off disk and highlights it; a caller that only
+// wants to *name* a location — a boundary saying where it leads — shouldn't
+// pay for the body it isn't showing.
+func (i *Indexer) Position(id TargetID) (string, int, bool) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	fi, ok := i.funcs[id]
+	if !ok || fi.node == nil {
+		return "", 0, false
+	}
+	pos := i.fset.Position(fi.node.Pos())
+	return pos.Filename, pos.Line, true
+}
+
 // LookupSymbol resolves a symbol name (qualified or unqualified) to a
 // target. If multiple match, the first lexicographic FullName wins.
 func (i *Indexer) LookupSymbol(name string) (TargetID, error) {
@@ -2099,11 +2690,21 @@ func matchesSymbol(full, query string) bool {
 }
 
 // Search returns up to `limit` symbols whose FullName contains query
-// (case-insensitive). Matches on the leaf name — the method or function name,
-// the part after the last "." — rank above matches that only hit the receiver
-// type or package path, since a search is almost always for the method/function
-// itself. Ranking happens before the limit is applied, so a strong leaf match
-// is never dropped in favor of an alphabetically-earlier receiver match.
+// (case-insensitive).
+//
+// Two things order the hits, in this order:
+//
+//   - This repo's own code before dependency and stdlib code. Deps are indexed
+//     for resolution, not because anyone searches for them, and a name common
+//     enough to appear in a library ("Load", "Get", "New") would otherwise bury
+//     the project's own definition under code the reader can't change.
+//   - Within a tier, matches on the leaf name — the method or function name,
+//     the part after the last "." — above matches that only hit the receiver
+//     type or package path, since a search is almost always for the
+//     method/function itself.
+//
+// Ranking happens before the limit is applied, so a strong match is never
+// dropped in favor of an alphabetically-earlier weak one.
 func (i *Indexer) Search(query string, limit int) []SearchResult {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
@@ -2137,13 +2738,26 @@ func (i *Indexer) Search(query string, limit int) []SearchResult {
 				Label:    string(id),
 				File:     pos.Filename,
 				Line:     pos.Line,
+				External: !i.ownsCode(fi),
 			},
 			leaf: q == "" || strings.Contains(leafName(s), q),
 		})
 	}
 
-	// Stable so the alphabetical order within each tier is preserved.
-	sort.SliceStable(hits, func(a, b int) bool { return hits[a].leaf && !hits[b].leaf })
+	// Stable so the alphabetical order within each tier is preserved. Rank is
+	// computed rather than compared field-by-field so the two criteria stay in
+	// a stated priority: owning the code outranks matching better.
+	rank := func(h hit) int {
+		r := 0
+		if h.res.External {
+			r += 2
+		}
+		if !h.leaf {
+			r++
+		}
+		return r
+	}
+	sort.SliceStable(hits, func(a, b int) bool { return rank(hits[a]) < rank(hits[b]) })
 
 	out := make([]SearchResult, 0, limit)
 	for _, h := range hits {
@@ -2184,4 +2798,62 @@ func (i *Indexer) readRange(filename string, start, end int) ([]byte, error) {
 		return nil, fmt.Errorf("range [%d,%d) out of bounds for %s (len %d)", start, end, filename, len(buf))
 	}
 	return buf[start:end], nil
+}
+
+// SetRules installs the configured recognizers. Like the proto root it's a
+// process-wide choice applied before Load, and it must survive the engine
+// rebuilds watch mode performs.
+func (i *Indexer) SetRules(s rules.Set) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.ruleSet = s
+}
+
+// RuleReport describes what the configured rules did, so a rule that has
+// quietly stopped matching says so instead of contributing nothing in silence.
+func (i *Indexer) RuleReport() model.RuleReport {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	rep := model.RuleReport{Problems: i.ruleSet.Problems}
+	for _, b := range platform.Builtins {
+		rep.Rules = append(rep.Rules, model.RuleInfo{
+			ID: b.ID, Doc: b.Doc, Builtin: true,
+			Enabled: !i.ruleSet.Disabled()[b.ID],
+			Matches: i.ruleStats[b.ID],
+		})
+	}
+	for _, r := range i.ruleSet.Rules {
+		if isBuiltinID(r.ID) {
+			continue // a settings-only entry toggling a built-in, already listed
+		}
+		spec, err := json.Marshal(r)
+		if err != nil {
+			spec = nil // unshowable, not unusable: the rest of the row stands
+		}
+		rep.Rules = append(rep.Rules, model.RuleInfo{
+			ID: r.ID, Doc: r.Comment, Enabled: r.On(),
+			Source:  i.ruleSet.Sources[r.ID],
+			Matches: i.ruleStats[r.ID],
+			Spec:    spec,
+		})
+	}
+	return rep
+}
+
+func isBuiltinID(id string) bool {
+	for _, b := range platform.Builtins {
+		if b.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// siteKeyOf identifies one call site the way the evaluator does: by where its
+// name token starts, not by its line. Two sites can share a line — a chained
+// call, or a call and a value reference beside it — and a boundary keyed by
+// line was a boundary drawn on every one of them.
+func (i *Indexer) siteKeyOf(c *callInfo) string {
+	p := i.fset.Position(c.pos)
+	return p.Filename + ":" + strconv.Itoa(p.Offset)
 }

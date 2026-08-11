@@ -1,4 +1,12 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { Root as HastRoot } from "hast";
 import { fetchBodyByCall, fetchTypeInfo, openInEditor } from "./api";
 import { highlightToHast } from "./highlight";
@@ -13,11 +21,15 @@ import {
   type FramePath,
 } from "./viewState";
 import { useBookmarks } from "./bookmarks";
+import { useReloadRevision } from "./reload";
+import { RecognizeCall } from "./RecognizeCall";
+import { LeafCard } from "./LeafCard";
 import { CallersPanel } from "./Callers";
 import { depthColor } from "./StickyHeaders";
 import { useSettings } from "./settings";
 import { matches } from "./keybindings";
 import { useNotes } from "./notes";
+import { openRules } from "./rules";
 import { NoteCard, NoteComposer } from "./NotesUI";
 
 export interface FoldRange {
@@ -58,9 +70,15 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
   const [callersOpen, setCallersOpen] = useState(false);
   const settings = useSettings();
+  // A rebuilt index is a reason to refetch a body, not to throw the view away.
+  const revision = useReloadRevision();
   const depth = path.length;
   const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
-  const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0 });
+  const [recognizing, setRecognizing] = useState(false);
+  // gen stamps hover lookups so a reply that arrives after the pointer has
+  // moved on can be discarded instead of overwriting what's on screen.
+  const hoverRef = useRef({ offset: -1, showTimer: 0, hideTimer: 0, gen: 0 });
+  const typeCardRef = useRef<HTMLDivElement>(null);
   const allNotes = useNotes();
   const [composing, setComposing] = useState<NoteAnchor | null>(null);
   const isFileFrame = frame.id.startsWith("file:");
@@ -174,6 +192,37 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     return (lineStarts[lineIdx] ?? 0) + measure.toString().length;
   }
 
+  // Every pending hover effect goes through these three, and they always clear
+  // *both* timers before arming one. Assigning a fresh id over an armed one
+  // leaks it: the handle is gone, so nothing can cancel it, and it fires later
+  // into a UI that has moved on. That is how the card kept vanishing under the
+  // pointer — a blank-area move armed a hide, the very next event (leaving the
+  // source for the card) overwrote the handle with its own, and clearing that
+  // one on entry left the first still counting down.
+  function cancelHover() {
+    window.clearTimeout(hoverRef.current.showTimer);
+    window.clearTimeout(hoverRef.current.hideTimer);
+    hoverRef.current.offset = -1;
+    // Also abandon a lookup already in flight: clearTimeout can't reach a
+    // fetch that has left, and its reply would otherwise land on a card the
+    // pointer is now inside.
+    hoverRef.current.gen++;
+  }
+
+  function scheduleHide() {
+    cancelHover();
+    hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+  }
+
+  // Dismissing the card also drops the authoring form. Without this the flag
+  // outlives the card that owned it, and the *next* symbol you hover opens
+  // straight into a half-filled rule for something else.
+  function closeTypeCard() {
+    cancelHover();
+    setRecognizing(false);
+    setTypeCard(null);
+  }
+
   function onSourceMouseMove(e: React.MouseEvent) {
     // Child frames render inside this frame's `.frame-source`, so a mousemove
     // over a nested frame bubbles up here too. Left unchecked, every ancestor
@@ -182,35 +231,43 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     // top, masking the correct one. Stop at the innermost frame under the cursor.
     e.stopPropagation();
     if (selection) return; // don't fight a line selection
+    // Once the form is open the card is no longer a hover affordance: it's
+    // something being filled in, and code passing under the pointer must not
+    // replace or dismiss it.
+    if (recognizing) return;
     const off = offsetAtPoint(e.clientX, e.clientY);
     if (off == null) {
       // Not over text (blank area beside/below a line): cancel any pending
       // lookup and fade the card, same as leaving the source entirely.
-      window.clearTimeout(hoverRef.current.showTimer);
-      hoverRef.current.offset = -1;
-      hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+      scheduleHide();
       return;
     }
     if (off === hoverRef.current.offset) return;
+    window.clearTimeout(hoverRef.current.showTimer);
+    window.clearTimeout(hoverRef.current.hideTimer);
     hoverRef.current.offset = off;
     const x = e.clientX;
     const y = e.clientY;
-    window.clearTimeout(hoverRef.current.showTimer);
+    const gen = ++hoverRef.current.gen;
     hoverRef.current.showTimer = window.setTimeout(() => {
       fetchTypeInfo(frame.id, off)
-        .then((info) => setTypeCard(info ? { x, y, info } : null))
-        .catch(() => setTypeCard(null));
+        .then((info) => {
+          if (hoverRef.current.gen !== gen) return;
+          setTypeCard(info ? { x, y, info } : null);
+        })
+        .catch(() => {
+          if (hoverRef.current.gen === gen) setTypeCard(null);
+        });
     }, 250);
   }
 
   function onSourceMouseLeave() {
-    window.clearTimeout(hoverRef.current.showTimer);
-    hoverRef.current.offset = -1;
-    hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+    if (recognizing) return;
+    scheduleHide();
   }
 
   function openDefinition(info: TypeInfo) {
-    setTypeCard(null);
+    closeTypeCard();
     if (info.targetId) {
       store.setSymbol(info.targetId);
       return;
@@ -239,19 +296,34 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     });
 
     let alive = true;
+    // Only this frame's own call sites can be fetched here. A slice can carry
+    // entries this frame has no call for — a leaf's spliced remote body, whose
+    // slot exists to give that subtree a path in the store, and a stale id
+    // from a shared URL. Both used to be fetched by call id and fail.
+    const own = new Set(frame.calls.map((c) => c.id));
     for (const cid of wantedIds) {
       const want = slice.expansions[cid];
-      if (!want) continue;
-      const loaded = loadedChildren.get(cid);
-      // Need to (re)fetch if not loaded OR loaded with stale choice.
-      if (loaded && (loaded as { __choice?: number }).__choice === want.choice) continue;
+      if (!want || !own.has(cid)) continue;
+      const loaded = loadedChildren.get(cid) as
+        | (FrameT & { __choice?: number; __rev?: number })
+        | undefined;
+      // Refetch when it isn't loaded, when the chosen implementation changed,
+      // or when the index has been rebuilt under it. The old body stays on
+      // screen until the new one arrives: a reindex used to remount the whole
+      // tree, so every open frame vanished and came back seconds later, which
+      // is a redraw the reader has to recover from rather than a refresh.
+      if (loaded && loaded.__choice === want.choice && loaded.__rev === revision) continue;
       if (loading.has(cid)) continue;
       setLoading((s) => new Set(s).add(cid));
       fetchBodyByCall(cid, want.choice)
         .then((child) => {
           if (!alive) return;
-          // Tag with the choice so we can detect choice changes.
-          (child as { __choice?: number }).__choice = want.choice;
+          // Tag with the choice and the index revision it came from, so both
+          // a switched implementation and a rebuilt index are detectable.
+          Object.assign(child as FrameT & { __choice?: number; __rev?: number }, {
+            __choice: want.choice,
+            __rev: revision,
+          });
           setLoading((s) => {
             const n = new Set(s);
             n.delete(cid);
@@ -278,7 +350,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slice.expansions]);
+  }, [slice.expansions, revision]);
 
   // Fetch the body of each expanded fan-out receiver, and prune frames for
   // receivers that have since been collapsed. Each receiver resolves to its
@@ -369,34 +441,74 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     return () => window.removeEventListener("keydown", onKey);
   }, [selection]);
 
+  // The card hangs below-right of the pointer, which is fine for a few lines
+  // of type info and not fine once the authoring form roughly doubles its
+  // height: hover anything in the lower half of the window and the save and
+  // cancel buttons land past the bottom edge. It's `position: fixed`, so
+  // there is nothing to scroll to reach them — the form is simply unusable
+  // down there.
+  //
+  // Clamped after layout rather than guessed before it: the height depends on
+  // the doc string, the warning, and whether the form is open. Written
+  // straight to the node instead of through state — this runs after every
+  // render that could change the height, and feeding a measurement back into
+  // the state it measures is how a layout loop starts.
+  useLayoutEffect(() => {
+    const el = typeCardRef.current;
+    if (!el || !typeCard) return;
+    el.style.top = `${typeCard.y + 16}px`;
+    const h = el.getBoundingClientRect().height;
+    const top = Math.max(8, Math.min(typeCard.y + 16, window.innerHeight - h - 8));
+    el.style.top = `${top}px`;
+  }, [typeCard, recognizing]);
+
+  // Esc closes the authoring form. Now that moving the mouse away no longer
+  // dismisses it, it needs a way out that isn't hunting for the cancel button.
+  useEffect(() => {
+    if (!recognizing) return;
+    function onKey(e: KeyboardEvent) {
+      if (matches("ui.dismiss", e)) setRecognizing(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [recognizing]);
+
   // The recursion chain for calls inside this frame: every frame above
   // plus this one. A call resolving back into it is marked ↻.
   const chainIds = useMemo(() => new Set([...ancestors, frame.id]), [ancestors, frame.id]);
 
   function isRecursive(call: CallSite): boolean {
-    if (call.kind === "direct") return !!call.targetId && chainIds.has(call.targetId);
-    if (call.kind === "interface") {
+    if (call.kind === "direct" || call.kind === "ref") {
+      if (call.targetId) return chainIds.has(call.targetId);
+    }
+    if (call.kind === "interface" || call.kind === "ref") {
       return (call.candidates ?? []).some((c) => chainIds.has(c.targetId));
     }
     return false;
   }
 
   function isExpandableCall(call: CallSite): boolean {
+    // A reference names either one function or, when it goes through an
+    // interface, any of its implementations — the same two shapes a call has.
+    if (call.kind === "ref") return !!call.targetId || (call.candidates?.length ?? 0) > 0;
     if (call.kind === "direct") return !!call.targetId;
     if (call.kind === "interface") return (call.candidates?.length ?? 0) > 0;
     return false; // indirect never; fanout has its own receiver semantics
   }
 
   // "+1 level": expand every project call in this frame that isn't already
-  // expanded — skipping recursive ones (they'd re-open an ancestor) and
-  // external ones (a trace shouldn't drown in stdlib/dependency bodies).
-  // Both stay individually clickable.
+  // expanded — skipping recursive ones (they'd re-open an ancestor), external
+  // ones (a trace shouldn't drown in stdlib/dependency bodies), and value
+  // references (nothing runs there, so opening them in bulk would pad the
+  // trace with bodies that execution never reaches from here). All three stay
+  // individually clickable.
   const expandableNow = useMemo(
     () =>
       frame.calls
         .filter(
           (c) =>
             isExpandableCall(c) &&
+            c.kind !== "ref" &&
             !c.external &&
             !isRecursive(c) &&
             !slice.expansions[c.id],
@@ -421,7 +533,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     }
     if (call.kind === "indirect") return;
     if (call.kind === "interface" && (call.candidates?.length ?? 0) === 0) return;
-    if (call.kind === "direct" && !call.targetId) return;
+    if (!isExpandableCall(call)) return;
 
     if (slice.expansions[call.id]) {
       store.collapse(path, call.id);
@@ -525,6 +637,15 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             ⚡
           </span>
         )}
+        {call.kind === "ref" && (
+          <span
+            className="ref-badge"
+            title="named here as a value, not called — expand to read it, but execution doesn't arrive here"
+            aria-label="value reference, not a call"
+          >
+            ⤳
+          </span>
+        )}
         {recursive && (
           <span
             className="recursive-badge"
@@ -626,6 +747,34 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   function renderChildren(calls: CallSite[]): ReactNode[] {
     const extras: ReactNode[] = [];
     for (const call of calls) {
+      // A rule-marked boundary renders instead of an expansion: the point is
+      // that expanding into the transport is not what you wanted.
+      if (call.leaf) {
+        // The spliced body gets its own slot in the slice rather than sharing
+        // the call's. They are different subtrees: expanding the call opens
+        // the callee here, and the leaf opens the implementation in another
+        // repo. Sharing the id would make one collapse the other — and
+        // without a slot at all the remote frame sat at a path the store had
+        // no entry for, so every expansion inside it was silently dropped.
+        const slot = leafSlot(call.id);
+        extras.push(
+          <LeafCard
+            key={`leaf:${call.id}`}
+            leaf={call.leaf}
+            open={!!slice.expansions[slot]}
+            onInline={() => store.expand(path, slot, 0)}
+            onHide={() => store.collapse(path, slot)}
+            onOpen={(id) => store.setSymbol(id)}
+            renderFrame={(f) => (
+              <Frame
+                frame={f}
+                path={[...path, { callId: slot, choice: 0 }]}
+                ancestors={[...ancestors, frame.id]}
+              />
+            )}
+          />,
+        );
+      }
       if (call.kind === "fanout") {
         if (isFanoutOpen(slice, call.id)) {
           extras.push(renderFanout(call));
@@ -833,7 +982,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       data-frame-key={pathKey(path)}
       // Read by StickyHeaders to render the pinned call-chain stack.
       data-frame-title={frameTitle(frame)}
-      data-frame-loc={`${shortPath(frame.file)}:${frame.startLine}`}
+      data-frame-loc={`${frameLoc(frame)}:${frame.startLine}`}
     >
       <header className="frame-header">
         <button
@@ -948,7 +1097,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
           title="open in editor"
           onClick={() => openInEditor(frame.file, frame.startLine).catch(() => {})}
         >
-          {shortPath(frame.file)}:{frame.startLine}
+          {frameLoc(frame)}:{frame.startLine}
         </button>
         {onClose && (
           <button className="frame-close" onClick={onClose} aria-label="collapse">
@@ -1004,10 +1153,20 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       )}
       {typeCard && (
         <div
+          ref={typeCardRef}
           className="type-card"
           style={{ left: typeCard.x + 12, top: typeCard.y + 16 }}
-          onMouseEnter={() => window.clearTimeout(hoverRef.current.hideTimer)}
-          onMouseLeave={() => setTypeCard(null)}
+          // Reaching the card means crossing a strip of code, and everything
+          // crossed on the way armed something. Arriving cancels all of it.
+          onMouseEnter={cancelHover}
+          // Leaving gets the same grace period as leaving the source, so
+          // clipping a corner on the way to a button doesn't cost the card.
+          // While the form is open, nothing here closes it: it holds typed
+          // input, and mouse position is not consent to discard that.
+          onMouseLeave={() => {
+            if (recognizing) return;
+            scheduleHide();
+          }}
         >
           <div className="type-card-head">
             <span className="type-card-kind">{typeCard.info.kind}</span>
@@ -1026,6 +1185,51 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               title={typeCard.info.targetId ? "open as root frame" : "open in editor"}
             >
               {shortDefined(typeCard.info.definedAt)}
+            </button>
+          )}
+          {/* What already claims this call. Offering to recognize a call that
+              three rules match, without saying so, invites a fourth rule that
+              duplicates one you have — and leaves "why is there an edge here"
+              unanswerable at the one place you're looking. Clicking a rule
+              opens it in the recognizers panel. */}
+          {typeCard.info.rules && typeCard.info.rules.length > 0 && (
+            <div className="type-card-rules">
+              <span className="type-card-rules-label">recognized by</span>
+              {typeCard.info.rules.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className="type-card-rule"
+                  onClick={() => {
+                    closeTypeCard();
+                    openRules(id);
+                  }}
+                  title={`show ${id} in the recognizers panel`}
+                >
+                  {id}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Author a recognizer from the call you're looking at. The package
+              and receiver are already resolved to render this card, so the
+              match writes itself — only which argument holds the key has to
+              be asked, because that's the part nobody else knows. */}
+          {recognizing ? (
+            <RecognizeCall
+              info={typeCard.info}
+              displayName={typeCard.info.name}
+              onDone={closeTypeCard}
+              onCancel={() => setRecognizing(false)}
+            />
+          ) : (
+            <button
+              type="button"
+              className="type-card-recognize"
+              onClick={() => setRecognizing(true)}
+              title="teach unfold that this call shape is a platform edge"
+            >
+              {typeCard.info.rules?.length ? "recognize as something else…" : "recognize as…"}
             </button>
           )}
         </div>
@@ -1054,7 +1258,10 @@ function InlineChild({
   ancestors,
 }: InlineChildProps) {
   const candidates = call.candidates ?? [];
-  const showSwitcher = call.kind === "interface" && candidates.length > 1;
+  // A reference through an interface picks among implementations exactly as a
+  // call through one does, so it gets the same switcher.
+  const showSwitcher =
+    (call.kind === "interface" || call.kind === "ref") && candidates.length > 1;
   return (
     <div className="inline-child">
       {showSwitcher && (
@@ -1089,6 +1296,14 @@ function mergeRange(current: [number, number][], add: [number, number]): [number
     }
   }
   return out;
+}
+
+// leafSlot is the slice key for a leaf's spliced remote body. It is deliberately
+// not a call id any engine emits: the frame that owns this slot has no call
+// site for the far end — that body was resolved by key, not by call — so
+// nothing may try to fetch it as one.
+function leafSlot(callId: CallID): CallID {
+  return `${callId}#leaf` as CallID;
 }
 
 function buildLineCalls(frame: FrameT): Map<number, CallSite[]> {
@@ -1143,6 +1358,14 @@ function prettyName(id: string): string {
   const parts = id.split("/");
   if (parts.length <= 2) return id;
   return ".../" + parts.slice(-2).join("/");
+}
+
+// Where the frame is, as short as it can be while still answering "which
+// service". In a workspace the engine supplies a service-qualified path; a
+// single repo has no services to distinguish, so the tail of the path is
+// enough and stays as it was.
+function frameLoc(frame: FrameT): string {
+  return frame.relPath || shortPath(frame.file);
 }
 
 function shortPath(p: string): string {

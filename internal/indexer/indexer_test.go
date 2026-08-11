@@ -1,7 +1,9 @@
 package indexer
 
 import (
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -44,11 +46,16 @@ func TestLoadSelf(t *testing.T) {
 	// ranges). The span text should be a function-name token — i.e. the
 	// last segment of the call's display name.
 	for i, c := range frame.Calls {
-		if c.SpanStart < 0 || c.SpanEnd > len(frame.Source) || c.SpanStart >= c.SpanEnd {
+		if c.SpanStart < 0 || c.SpanEnd > utf16Len(frame.Source) || c.SpanStart >= c.SpanEnd {
 			t.Errorf("bad span for %q: [%d,%d) (source len %d)", c.DisplayName, c.SpanStart, c.SpanEnd, len(frame.Source))
 			continue
 		}
-		got := frame.Source[c.SpanStart:c.SpanEnd]
+		// Spans are UTF-16 code-unit offsets, because the frontend indexes
+		// the source as a JavaScript string. Slicing Source by them as if
+		// they were bytes only works while every frame happens to be pure
+		// ASCII — one em dash in a comment above the call and the assertion
+		// starts comparing garbage, which is what it did.
+		got := utf16Slice(frame.Source, c.SpanStart, c.SpanEnd)
 		// Name-only span means the span text equals either the full display
 		// name (for plain identifiers) or the trailing segment after the
 		// final "." (for selector calls like fmt.Println).
@@ -266,8 +273,20 @@ func TestUsages(t *testing.T) {
 			}
 		case "ref":
 			refs++
-			if u.CallID != "" {
-				t.Errorf("ref usage should have no callId, got %s", u.CallID)
+			// A reference is a site you can expand from, so it carries a
+			// CallID like any other — that id is what lets the callers list
+			// splice the referring function above this one instead of
+			// opening it bare, and what makes the reference expandable
+			// inline where it appears.
+			if u.CallID == "" {
+				t.Error("ref usage missing callId")
+				break
+			}
+			fr, err := idx.FrameForCall(u.CallID, u.Choice)
+			if err != nil {
+				t.Errorf("FrameForCall(%s): %v", u.CallID, err)
+			} else if fr.ID != runID {
+				t.Errorf("ref round-trip: got %s, want %s", fr.ID, runID)
 			}
 		default:
 			t.Errorf("unexpected usage kind %q", u.Kind)
@@ -326,6 +345,136 @@ func TestUsages(t *testing.T) {
 	// Unknown target errors.
 	if _, err := idx.Usages(TargetID("nope")); err == nil {
 		t.Error("Usages(unknown) should error")
+	}
+}
+
+// A function named as a value is a site in the referring frame, not only an
+// entry in the reverse index: `apply(RunGreeter, ...)` must come back as a
+// span the reader can expand, spanning the name alone so it can't overlap the
+// enclosing call's own decoration.
+// A call id must survive an edit to a different part of the file. It used to
+// be the byte offset of the name token, so every save moved every id below the
+// change — and a watch-mode reindex then invalidated the whole expanded view
+// at once, collapsing the reader's trace to its root frame.
+func TestCallIDsSurviveEditsElsewhereInTheFile(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) {
+		t.Helper()
+		src := "package p\n\n" + body
+		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/p\n\ngo 1.21\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const target = `
+func target() {
+	helper()
+	other()
+}
+
+func helper() {}
+func other()  {}
+`
+
+	write(target)
+	before := New()
+	if err := before.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ids := callIDsOf(t, before, "target")
+
+	// An edit above the function: comments, a new declaration, anything that
+	// moves every byte after it.
+	write("// a new comment\n\nfunc untouched() {}\n" + target)
+	after := New()
+	if err := after.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load after edit: %v", err)
+	}
+	if got := callIDsOf(t, after, "target"); !reflect.DeepEqual(got, ids) {
+		t.Errorf("ids moved when code above them changed:\n before %v\n  after %v", ids, got)
+	}
+
+	// And they still identify one site each: expanding the first must land on
+	// helper, not on whatever now sits at that offset.
+	fr, err := after.FrameForCall(ids[0], 0)
+	if err != nil {
+		t.Fatalf("FrameForCall(%s): %v", ids[0], err)
+	}
+	if fr.Title != "helper" {
+		t.Errorf("first site expands to %q, want helper", fr.Title)
+	}
+}
+
+func callIDsOf(t *testing.T, idx *Indexer, symbol string) []CallID {
+	t.Helper()
+	id, err := idx.LookupSymbol(symbol)
+	if err != nil {
+		t.Fatalf("LookupSymbol(%s): %v", symbol, err)
+	}
+	frame, err := idx.Frame(id)
+	if err != nil {
+		t.Fatalf("Frame(%s): %v", symbol, err)
+	}
+	out := make([]CallID, 0, len(frame.Calls))
+	for _, c := range frame.Calls {
+		out = append(out, c.ID)
+	}
+	return out
+}
+
+func TestFrameCarriesValueReferences(t *testing.T) {
+	idx := New()
+	if err := idx.Load("testdata/diapp", "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	mainID, err := idx.LookupSymbol("main")
+	if err != nil {
+		t.Fatalf("LookupSymbol(main): %v", err)
+	}
+	runID, err := idx.LookupSymbol("RunGreeter")
+	if err != nil {
+		t.Fatalf("LookupSymbol(RunGreeter): %v", err)
+	}
+	frame, err := idx.Frame(mainID)
+	if err != nil {
+		t.Fatalf("Frame(main): %v", err)
+	}
+
+	var refs []CallSite
+	for _, c := range frame.Calls {
+		if c.Kind == KindRef {
+			refs = append(refs, c)
+		}
+	}
+	if len(refs) != 1 {
+		t.Fatalf("ref sites in main: got %d, want the one in apply(RunGreeter, ...) (%+v)", len(refs), frame.Calls)
+	}
+	ref := refs[0]
+	if ref.TargetID != runID {
+		t.Errorf("ref target: got %s, want %s", ref.TargetID, runID)
+	}
+	if got := frame.Source[ref.SpanStart:ref.SpanEnd]; got != "RunGreeter" {
+		t.Errorf("ref span covers %q, want the name alone", got)
+	}
+
+	// Spans must stay disjoint: the highlighter rejects overlapping
+	// decorations, and a reference always sits inside some other expression.
+	sites := append([]CallSite(nil), frame.Calls...)
+	for n := 1; n < len(sites); n++ {
+		if sites[n].SpanStart < sites[n-1].SpanEnd {
+			t.Errorf("sites %q and %q overlap", sites[n-1].DisplayName, sites[n].DisplayName)
+		}
+	}
+
+	// And the site expands to the referenced body, the whole point of it.
+	got, err := idx.FrameForCall(ref.ID, 0)
+	if err != nil {
+		t.Fatalf("FrameForCall(ref): %v", err)
+	}
+	if got.ID != runID {
+		t.Errorf("ref expands to %s, want %s", got.ID, runID)
 	}
 }
 
@@ -685,19 +834,26 @@ func TestLeafName(t *testing.T) {
 // match on the receiver type or package path (e.g. every method of the
 // Reloadable type, whose name contains "load"). Indexes the unfold module
 // itself, which contains both for the query "load".
+//
+// Leaf ranking applies *within* a tier, so this looks only at the module's own
+// code — a dependency's leaf match deliberately ranks below the project's
+// receiver-only one. TestSearchRanksOwnCodeAboveDeps covers that half.
 func TestSearchRanksLeafMatchesFirst(t *testing.T) {
 	idx := New()
 	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	res := idx.Search("load", 100)
+	res := idx.Search("load", 500)
 	if len(res) == 0 {
 		t.Fatal("expected results for 'load'")
 	}
 
 	sawLeaf, seenNonLeaf := false, false
 	for _, r := range res {
+		if r.External {
+			continue
+		}
 		isLeaf := strings.Contains(strings.ToLower(leafName(string(r.TargetID))), "load")
 		if isLeaf {
 			sawLeaf = true
@@ -710,5 +866,113 @@ func TestSearchRanksLeafMatchesFirst(t *testing.T) {
 	}
 	if !sawLeaf {
 		t.Fatal("expected at least one leaf match for 'load' (e.g. Indexer.Load)")
+	}
+}
+
+// TestSearchRanksOwnCodeAboveDeps pins the stronger of the two criteria: the
+// project's own code outranks stdlib and dependency code even when the
+// dependency hit is the better textual match. "load" finds far more in
+// protobuf's internals than in unfold, and a picker that offers those first is
+// answering a question nobody asked.
+func TestSearchRanksOwnCodeAboveDeps(t *testing.T) {
+	idx := New()
+	if err := idx.Load("", "github.com/MaxInertia/unfold/..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	res := idx.Search("load", 500)
+	sawOwn, sawDep := false, false
+	for _, r := range res {
+		if r.External {
+			sawDep = true
+			continue
+		}
+		sawOwn = true
+		if sawDep {
+			t.Errorf("own-code match %q ranked after a dependency match", r.TargetID)
+		}
+	}
+	if !sawOwn {
+		t.Fatal("expected unfold's own matches for 'load'")
+	}
+	if !sawDep {
+		t.Fatal("expected dependency matches for 'load' (deps are indexed for resolution)")
+	}
+}
+
+// utf16Slice extracts [start,end) in UTF-16 code units, which is the unit
+// CallSite spans are reported in.
+func utf16Slice(s string, start, end int) string {
+	u := utf16.Encode([]rune(s))
+	if start < 0 || end > len(u) || start > end {
+		return ""
+	}
+	return string(utf16.Decode(u[start:end]))
+}
+
+func utf16Len(s string) int { return len(utf16.Encode([]rune(s))) }
+
+// A conversion is not a call. `[]byte(s)` and friends parse as CallExpr, and
+// the name-span fallback covers the whole type expression — so each one used
+// to become a call site with no name, no target and nothing to expand: a
+// decoration painted over `[]byte` that did nothing when clicked. Since
+// `[]byte(...)` is everywhere in Go, so was the phantom.
+//
+// It stayed hidden because the self-test only sampled main(), which happened
+// to contain no conversions until one was added.
+func TestConversionsAreNotCallSites(t *testing.T) {
+	dir, err := filepath.Abs("testdata/initvar")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	idx := New()
+	if err := idx.Load(dir, "./..."); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Every recorded call in this project's own code must name something. An
+	// empty display name is a span the UI paints but the user can't act on.
+	//
+	// Scoped to owned code deliberately. Dependency bodies still produce a
+	// few unnamed spans from two *other* shapes — a generic call
+	// (`abi.TypeFor[T]()`, an IndexExpr the display-name switch doesn't
+	// handle) and a call of a returned function (`fd.addrFunc()(x)`). Both
+	// are real calls rather than conversions, so they're a different fix, and
+	// asserting on stdlib here would tie this test to the Go version.
+	for id, fi := range idx.funcs {
+		if !idx.ownsCode(fi) {
+			continue
+		}
+		for _, c := range fi.calls {
+			if c.displayName == "" {
+				t.Errorf("%s: call site with no name at %s", id, idx.fset.Position(c.pos))
+			}
+		}
+	}
+
+	// The conversion itself must be gone: initvar's registry initializer holds
+	// no conversion, but pullOrders' `[]byte`-shaped neighbours in the wider
+	// index did. Assert directly on a conversion-bearing frame instead.
+	conv, err := idx.Frame("example.com/initvar.syncCmd")
+	if err == nil {
+		for _, c := range conv.Calls {
+			if c.DisplayName == "" {
+				t.Errorf("unnamed span in an initializer frame: %+v", c)
+			}
+		}
+	}
+
+	// And the real calls in the same function survive — the check must not be
+	// so eager that it drops ordinary calls.
+	fr, err := idx.Frame("example.com/initvar.pullOrders")
+	if err != nil {
+		t.Fatalf("Frame: %v", err)
+	}
+	var names []string
+	for _, c := range fr.Calls {
+		names = append(names, c.DisplayName)
+	}
+	if len(names) == 0 {
+		t.Errorf("pullOrders should still carry its call sites, got %v", names)
 	}
 }

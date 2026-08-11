@@ -1,9 +1,13 @@
 import type {
   CallID,
+  Channel,
   PlatformView,
   Resolution,
   Frame,
   Note,
+  RepoInfo,
+  RuleReport,
+  RuleSpec,
   SearchResult,
   ServiceView,
   TargetID,
@@ -40,9 +44,16 @@ export function fetchBodyByCall(id: CallID, choice = 0): Promise<Frame> {
   return getJSON<Frame>(`/api/body?${params.toString()}`);
 }
 
-export async function search(q: string, limit = 25): Promise<SearchResult[]> {
-  const url = `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`;
-  const res = await getJSON<{ results: SearchResult[] }>(url);
+// repo is the service the reader is currently in, which ranks first in the
+// results. Null (a plain repo, or nothing open yet) means the primary one.
+export async function search(
+  q: string,
+  limit = 25,
+  repo?: string | null,
+): Promise<SearchResult[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  if (repo) params.set("repo", repo);
+  const res = await getJSON<{ results: SearchResult[] }>(`/api/search?${params.toString()}`);
   return res.results ?? [];
 }
 
@@ -101,9 +112,33 @@ export async function indexRepo(alias: string): Promise<void> {
 // Open the implementation of an outbound edge in whichever workspace repo
 // serves it. Separate from the service view because this is where a lazily
 // indexed repo's Go code actually gets built — it can take seconds.
-export function resolveBinding(kind: string, key: string): Promise<Resolution> {
+// role is the side the *caller* is on, because the far end is a direction
+// rather than a place: an emit resolves to the subscribers, a subscription to
+// the publishers.
+export function resolveBinding(
+  kind: string,
+  key: string,
+  role?: string,
+): Promise<Resolution> {
   const qs = new URLSearchParams({ kind, key });
+  if (role) qs.set("role", role);
   return getJSON<Resolution>(`/api/resolve?${qs.toString()}`);
+}
+
+// What repositories are open and what each is doing. Cheap and read-only —
+// the "what is it working on" indicator polls nothing, it re-reads this when
+// the server says something changed.
+export async function fetchRepos(): Promise<RepoInfo[]> {
+  const res = await getJSON<{ repos: RepoInfo[] }>("/api/repos");
+  return res.repos ?? [];
+}
+
+// Every key the workspace has seen, with the services at each end. Cheap: it
+// reads the join, not any index, so it answers for the whole workspace
+// whatever has been opened.
+export async function fetchChannels(): Promise<Channel[]> {
+  const res = await getJSON<{ channels: Channel[] }>("/api/channels");
+  return res.channels ?? [];
 }
 
 // The subdirectories of a path, for the proto-root picker. A browser can't
@@ -185,4 +220,48 @@ export async function openInEditor(file: string, line: number): Promise<void> {
     }
     throw new Error(msg);
   }
+}
+
+// Open another repository, or stop opening one, without restarting. The
+// server rebuilds the engine and pushes a reload over /api/events, so the
+// views refresh themselves — there's nothing to return but the new repo list.
+export async function linkRepo(path: string, unlink = false): Promise<{ repos: RepoInfo[] }> {
+  const res = await fetch("/api/repos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, unlink }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `link failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export function fetchRules(): Promise<RuleReport> {
+  return getJSON<RuleReport>("/api/rules");
+}
+
+// Saving a rule rebuilds the index — what a rule matched is only knowable by
+// running it, which is also why the match count comes back after saving rather
+// than as a preview.
+export async function saveRule(rule: RuleSpec): Promise<RuleReport> {
+  return postRules({ rule });
+}
+
+export async function deleteRule(id: string): Promise<RuleReport> {
+  return postRules({ delete: id });
+}
+
+async function postRules(body: unknown): Promise<RuleReport> {
+  const res = await fetch("/api/rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `rules failed: ${res.status}`);
+  }
+  return res.json();
 }

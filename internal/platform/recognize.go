@@ -18,15 +18,46 @@ import (
 	"github.com/MaxInertia/unfold/internal/model"
 )
 
-// Arg is one argument at a call site, reduced to the two things a recognizer
-// can use: its constant string value (Go folds `"POST " + routeConst` for us,
-// so this covers more than bare literals) and, when the argument is a
-// function value, the target it names — that's how a route registration finds
-// its handler.
+// Arg is one argument at a call site, reduced to what a recognizer can use:
+// its constant string value (Go folds `"POST " + routeConst` for us, so this
+// covers more than bare literals); the target it names when the argument is a
+// function value — that's how a route registration finds its handler; and its
+// types.
+//
+// Two types, because they answer different questions and a call can make them
+// differ. Type is what the caller passed; ParamType is what the callee's
+// signature declares at that position. When a parameter is `any` or an
+// interface, only the first is informative; when the value is nil or a
+// locally-defined implementation of an SDK interface, only the second is.
 type Arg struct {
 	Value  string
 	Known  bool
 	Target model.TargetID
+	// Type is the static type of the argument expression, fully qualified
+	// ("*github.com/acme/events/pb.Event").
+	Type string
+	// ParamType is the callee's declared parameter type at this position,
+	// same rendering. For a variadic parameter it is the element type, since
+	// that's what each argument in that position actually is.
+	ParamType string
+	// Inferred marks a Value that came from a variable's initializer rather
+	// than from constant folding: `var Topic = "orders-v1"`, or a field of a
+	// package-level struct. The string is what the program starts with, and
+	// nothing in this index can see a later assignment — so a binding keyed
+	// off it is `inferred`, not `exact`. The distinction is the whole point of
+	// the confidence badge, and the one case where losing it would matter is
+	// a key that gets reassigned, which is exactly when the answer is wrong.
+	Inferred bool
+	// Fields are the strings the argument's fields were initialized with,
+	// when it names a package-level struct variable passed whole:
+	// `Emit(ctx, events.FooEventDefn, nil)` against
+	// `var FooEventDefn = EventDefinition{ID: "foo-happened"}`.
+	//
+	// Value stays empty for such an argument, and rightly — the argument is a
+	// struct, not a string. Which field identifies the thing is a fact about
+	// the library, so a rule names it ("{arg1.ID}") rather than unfold
+	// guessing at a field called ID.
+	Fields map[string]string
 }
 
 // Call is one call site, stripped of syntax.
@@ -45,27 +76,57 @@ type Call struct {
 	Site model.TargetID
 	File string
 	Line int
+	// Offset is the byte offset of the call in its file — the one thing here
+	// that identifies *this* call rather than the line it sits on. A line can
+	// hold several sites (`broker.Topic(t).Subscribe(h)`, or a call and a
+	// handler named as a value beside it), and a decision keyed by line is a
+	// decision applied to all of them.
+	Offset int
 }
 
 // A Recognizer returns the bindings a call site implies, or nil.
 type Recognizer func(Call) []model.Binding
 
-// Recognizers is the active rule set. Which rules *should* be active is
-// ultimately a per-project question (detected from go.mod / package.json —
-// there's no point running Kafka rules against a repo that doesn't import
-// it), but with a handful of stdlib-and-GCP rules the cost of running them
-// all is a few string comparisons per call site.
-var Recognizers = []Recognizer{
-	HTTPRoutes,
-	PubSub,
-	HTTPClientCalls,
+// Builtin is a recognizer written in Go, addressed by a stable id.
+//
+// The id is what lets a built-in be switched off from configuration the same
+// way a configured rule is: without one they were an anonymous slice, and
+// "turn off the net/http rule" had nowhere to point. The functions stay Go —
+// they are pinned by named tests and some of them encode rules that took real
+// effort to get right — they just stop being unaddressable.
+type Builtin struct {
+	ID   string
+	Doc  string
+	Fn   Recognizer
 }
 
-// Extract runs every recognizer over one call site.
-func Extract(c Call) []model.Binding {
+// Builtins is the rule set shipped with unfold. Which rules *should* be active
+// is ultimately a per-project question (there's no point running Kafka rules
+// against a repo that doesn't import it), but with a handful of stdlib-and-GCP
+// rules the cost of running them all is a few string comparisons per call site.
+var Builtins = []Builtin{
+	{ID: "builtin.http.routes", Doc: "net/http route registration (inbound)", Fn: HTTPRoutes},
+	{ID: "builtin.pubsub", Doc: "GCP Pub/Sub topics and subscriptions", Fn: PubSub},
+	{ID: "builtin.http.calls", Doc: "http.Get/Post with a statically known URL (outbound)", Fn: HTTPClientCalls},
+}
+
+// Extract runs every enabled built-in over one call site. A disabled built-in
+// contributes nothing, which is a user choice and reported as such elsewhere —
+// an empty surface because a rule was switched off must not look like one
+// nothing was found in.
+func Extract(c Call, disabled map[string]bool) []model.Binding {
 	var out []model.Binding
-	for _, r := range Recognizers {
-		out = append(out, r(c)...)
+	for _, b := range Builtins {
+		if disabled[b.ID] {
+			continue
+		}
+		// Stamped here rather than in each recognizer: a rule that has to
+		// remember to name itself is a rule that eventually forgets, and the
+		// caller is the only place that knows which one is running.
+		for _, bind := range b.Fn(c) {
+			bind.Rule = b.ID
+			out = append(out, bind)
+		}
 	}
 	return out
 }
@@ -99,7 +160,7 @@ func HTTPRoutes(c Call) []model.Binding {
 		Site:       c.Site,
 		File:       c.File,
 		Line:       c.Line,
-		Confidence: model.ConfExact,
+		Confidence: keyConfidence(c.Args[0]),
 	}
 	// The handler is the second argument. Naming it is what makes a route
 	// clickable straight into its implementation.
@@ -152,7 +213,7 @@ func PubSub(c Call) []model.Binding {
 		Site:       c.Site,
 		File:       c.File,
 		Line:       c.Line,
-		Confidence: confidence,
+		Confidence: weakest(confidence, keyConfidence(c.Args[argIdx])),
 	}}
 }
 
@@ -193,8 +254,32 @@ func HTTPClientCalls(c Call) []model.Binding {
 		Site:       c.Site,
 		File:       c.File,
 		Line:       c.Line,
-		Confidence: model.ConfExact,
+		Confidence: keyConfidence(c.Args[0]),
 	}}
+}
+
+// keyConfidence is what a binding may claim, given where its key came from.
+// A constant is the literal itself; a variable's initializer is only what the
+// program started with, and an assignment made anywhere else is invisible from
+// here. Each recognizer names the argument it keyed off rather than this being
+// applied to whole calls, because a call can carry both kinds and only the one
+// that became the key affects what the key is worth.
+func keyConfidence(a Arg) model.BindingConfidence {
+	if a.Inferred {
+		return model.ConfInferred
+	}
+	return model.ConfExact
+}
+
+// weakest keeps the more cautious of two claims.
+func weakest(a, b model.BindingConfidence) model.BindingConfidence {
+	if a == model.ConfInferred || b == model.ConfInferred {
+		return model.ConfInferred
+	}
+	if a == model.ConfDeclared || b == model.ConfDeclared {
+		return model.ConfDeclared
+	}
+	return model.ConfExact
 }
 
 // IsMethodPath matches "/package.Service/Method" (and "/Service/Method" for

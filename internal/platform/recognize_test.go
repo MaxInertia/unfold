@@ -245,7 +245,7 @@ func TestExtractRunsEveryRecognizer(t *testing.T) {
 	got := Extract(Call{
 		PkgPath: netHTTP, Recv: "ServeMux", RecvPkg: netHTTP, Func: "HandleFunc",
 		Args: []Arg{lit("/api/health")},
-	})
+	}, nil)
 	if len(got) != 1 || got[0].Kind != "http.route" {
 		t.Fatalf("Extract: got %+v, want one http.route binding", got)
 	}
@@ -311,5 +311,31 @@ func TestIsMethodPath(t *testing.T) {
 		if got := IsMethodPath(tt.in); got != tt.want {
 			t.Errorf("IsMethodPath(%q) = %v, want %v", tt.in, got, tt.want)
 		}
+	}
+}
+
+// A built-in can be switched off by id, which is the whole reason built-ins
+// gained ids. Every one must be addressable, or "turn that rule off" has
+// somewhere it can't point.
+func TestBuiltinsAreAddressableAndDisablable(t *testing.T) {
+	route := Call{
+		PkgPath: netHTTP, Recv: "ServeMux", RecvPkg: netHTTP, Func: "HandleFunc",
+		Args: []Arg{lit("/api/health")},
+	}
+	if got := Extract(route, map[string]bool{"builtin.http.routes": true}); len(got) != 0 {
+		t.Errorf("a disabled built-in must contribute nothing, got %+v", got)
+	}
+	if got := Extract(route, map[string]bool{"builtin.pubsub": true}); len(got) != 1 {
+		t.Errorf("disabling an unrelated rule must not affect this one, got %+v", got)
+	}
+	seen := map[string]bool{}
+	for _, b := range Builtins {
+		if b.ID == "" || b.Fn == nil {
+			t.Errorf("built-in needs an id and a function: %+v", b)
+		}
+		if seen[b.ID] {
+			t.Errorf("duplicate built-in id %q", b.ID)
+		}
+		seen[b.ID] = true
 	}
 }

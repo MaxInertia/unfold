@@ -5,7 +5,10 @@
 // to know which language a frame came from.
 package model
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+)
 
 // TargetID uniquely identifies a function/method within one loaded
 // project. Its internal format is engine-specific and opaque to the
@@ -16,7 +19,10 @@ type TargetID string
 // CallID uniquely identifies a single call site. Opaque to the frontend.
 type CallID string
 
-// CallKind classifies a call site by how its target is resolved.
+// CallKind classifies a call site by how its target is resolved. "Call site"
+// is the older word for it: KindRef is a site where a function is named but
+// not invoked, which is a place you can still expand from even though nothing
+// runs there.
 type CallKind string
 
 const (
@@ -24,6 +30,12 @@ const (
 	KindInterface CallKind = "interface" // dispatched through an interface; Candidates enumerates impls
 	KindIndirect  CallKind = "indirect"  // through a function value, builtin, or otherwise unresolvable
 	KindFanout    CallKind = "fanout"    // one site reaches many receivers (all run); Receivers enumerates them
+	// KindRef is a value reference: the function named as a value rather than
+	// called — passed as a callback, stored in a field, registered as a
+	// handler. Expandable, because "what does that do" is the same question
+	// you ask at a call; it just isn't answered by control flow arriving here,
+	// so the UI must not let it read as a step in the trace.
+	KindRef CallKind = "ref"
 )
 
 // Frame is the unit the frontend renders: a function's source plus the
@@ -38,8 +50,15 @@ type Frame struct {
 	// or "English.greet"), used for the frame header and bookmark labels. The
 	// ID is engine-specific and often not display-friendly (the TS engine's is
 	// "<file>#<pos>"), so engines supply a clean Title.
-	Title     string     `json:"title,omitempty"`
-	File      string     `json:"file"`
+	Title string `json:"title,omitempty"`
+	File  string `json:"file"`
+	// RelPath is where this body lives said the way the platform says it:
+	// "<service>/<path within that service>". Set only in a workspace, where
+	// the last couple of segments of an absolute path are the one thing that
+	// can't tell you which service you're reading — and reading across
+	// services is the entire point of splicing a remote frame in. Empty for a
+	// single repo, and for a file that belongs to no repo in the workspace.
+	RelPath   string     `json:"relPath,omitempty"`
 	Language  string     `json:"language"` // "go", "typescript", "tsx", ...
 	StartLine int        `json:"startLine"`
 	EndLine   int        `json:"endLine"`
@@ -91,11 +110,59 @@ type CallSite struct {
 	// buried under library bodies.
 	External bool `json:"external,omitempty"`
 
+	// Leaf, when set, is a rule's answer to "is expanding into this worth
+	// doing" — replacing a single stdlib/dependency heuristic that couldn't
+	// distinguish an in-house SDK you always want to expand from a logging
+	// call you never do. It also makes "why can't I expand this?" answerable,
+	// which the boolean never was.
+	Leaf *LeafInfo `json:"leaf,omitempty"`
+
 	// Receivers lists the targets a fan-out call reaches (all of them run,
 	// unlike Candidates where one is chosen). Set only for kind="fanout".
 	// FrameForCall(id, choice) selects Receivers[choice].
 	Receivers  []Receiver `json:"receivers,omitempty"`
 	FanoutKind string     `json:"fanoutKind,omitempty"` // e.g. "subscribers"
+}
+
+// LeafInfo marks a call site a rule classified as a boundary worth stopping
+// at, and names what lies on the other side.
+type LeafInfo struct {
+	// Rule is the id that decided this, so "why is this a leaf" has an answer.
+	Rule string `json:"rule"`
+	// Label stands in for the callee's name — "→ orders" rather than the
+	// generated method it happens to call.
+	Label string `json:"label,omitempty"`
+	// Key is the platform key the same rule emitted, which is what the far
+	// end resolves against.
+	Key  string `json:"key,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// Service, TargetTitle and TargetPath describe the far end when it is
+	// already known — the service comes from the join, which costs nothing,
+	// and the function comes from that service's index, so it is filled only
+	// when that service happens to be indexed already. Resolving it here
+	// otherwise would index another repository as a side effect of drawing a
+	// frame, which is the cost the whole lazy workspace exists to avoid.
+	//
+	// TargetPath is "<service>/<path within it>:<line>", because a bare file
+	// path is the one thing that can't say which service you'd be going to.
+	Service     string `json:"service,omitempty"`
+	TargetTitle string `json:"targetTitle,omitempty"`
+	TargetPath  string `json:"targetPath,omitempty"`
+	// Role is which side of the channel *this* site is on, which is what says
+	// which side to go looking for: an emit leads to subscribers, a subscribe
+	// leads to publishers. Without it the direction was assumed, and the
+	// assumption only held because the first leaf was a gRPC call.
+	Role BindingRole `json:"role,omitempty"`
+	// Ends names every service on the far side, in a fixed order. Cheap: the
+	// names come from the join, where the *code* at each end would cost that
+	// service's index. That split is what lets a boundary offer a choice
+	// without paying for the thing being chosen between until one is picked.
+	//
+	// The single-end fields above describe Ends[0] when there is exactly one.
+	Ends []string `json:"ends,omitempty"`
+	// CrossRepo offers the implementation in another repository: navigate to
+	// it, or splice it in the way an ordinary call expands.
+	CrossRepo bool `json:"crossRepo,omitempty"`
 }
 
 // Receiver is one target reached by a fan-out call (e.g. a subscriber of an
@@ -130,6 +197,47 @@ type TypeInfo struct {
 	// methods, or a named alias's underlying type. Multi-line, rendered
 	// preformatted by the frontend. Empty when Type already says it all.
 	Definition string `json:"definition,omitempty"`
+	// Rules are the recognizers already matching the call site under the
+	// pointer, built-in and configured alike. The hover card offers to author
+	// a rule from this call; without knowing what already claims it, that
+	// offer reads as "nothing recognizes this" even when three things do, and
+	// the rule you write duplicates one you have.
+	Rules []string `json:"rules,omitempty"`
+	// Call describes the call site when the hovered symbol is the function
+	// being called: the facts a rule can match on, as the evaluator will see
+	// them.
+	//
+	// The authoring form used to derive the package from TargetID, which is
+	// only set for functions this index holds — so a call through an
+	// interface declared in a dependency yielded nothing, and the form fell
+	// back to matching on the name alone. That is the case most in need of a
+	// precise rule, since "Emit" or "Publish" names half the methods in the
+	// ecosystem.
+	Call *CallFacts `json:"call,omitempty"`
+}
+
+// CallFacts is what a rule can match on at one call site. It mirrors
+// platform.Call, and is produced by the same extraction the evaluator uses —
+// so a form built from it offers exactly the constraints that will hold.
+type CallFacts struct {
+	Package string     `json:"package,omitempty"`
+	Recv    string     `json:"recv,omitempty"`
+	RecvPkg string     `json:"recvPkg,omitempty"`
+	Func    string     `json:"func,omitempty"`
+	Args    []ArgFacts `json:"args,omitempty"`
+}
+
+// ArgFacts is one argument's matchable facts.
+type ArgFacts struct {
+	// Type is the static type of the value passed; ParamType the callee's
+	// declared parameter type. They differ when a parameter is an interface
+	// or `any`, which is exactly when one of them is the useful one.
+	Type      string `json:"type,omitempty"`
+	ParamType string `json:"paramType,omitempty"`
+	// Value is the constant-folded string, when the argument has one. It's
+	// what {argN} would expand to, so the form can show the key it's about to
+	// produce rather than describing it.
+	Value string `json:"value,omitempty"`
 }
 
 // SearchResult is one hit returned from an engine's Search.
@@ -138,6 +246,11 @@ type SearchResult struct {
 	Label    string   `json:"label"`
 	File     string   `json:"file"`
 	Line     int      `json:"line"`
+	// External marks a hit that lives outside the repo that produced it —
+	// stdlib or a dependency. Dependency code is loaded for resolution, so it
+	// is searchable and worth keeping, but it is never what someone typing a
+	// name is looking for first: it ranks below every service's own code.
+	External bool `json:"external,omitempty"`
 }
 
 // UsageKind classifies how a target is referenced at a usage site.
@@ -247,6 +360,13 @@ type Binding struct {
 	// Detail is human-readable provenance ("mux.HandleFunc"), shown so a
 	// surprising binding can be traced back to the call that produced it.
 	Detail string `json:"detail,omitempty"`
+	// Rule is the recognizer that produced this binding, built-in or
+	// configured. Detail says what the call looked like; this says what
+	// decided it *was* one — the difference between "surprising edge" and
+	// "surprising edge, and here is the rule to switch off". Empty for
+	// bindings no rule claims: the declared proto surface, which comes from a
+	// manifest rather than from code.
+	Rule string `json:"rule,omitempty"`
 
 	// Target is the function the binding hands off to — an inbound route's
 	// handler. Empty when the far end isn't in this index (every outbound
@@ -361,9 +481,14 @@ type RepoInfo struct {
 	Alias   string `json:"alias"` // stable key used to namespace ids
 	Name    string `json:"name"`  // display name (the manifest's, usually)
 	Dir     string `json:"dir"`
-	Primary bool   `json:"primary,omitempty"` // the repo unfold was pointed at
-	Indexed bool   `json:"indexed,omitempty"` // its Go code is loaded
-	Error   string `json:"error,omitempty"`
+	Primary bool `json:"primary,omitempty"` // the repo unfold was pointed at
+	Indexed bool `json:"indexed,omitempty"` // its Go code is loaded
+	// Indexing is true while its Go code is being read. Distinct from
+	// !Indexed, which is the resting state of a repo nobody has opened: one
+	// is "not yet", the other is "not unless you ask", and a reader waiting on
+	// a service needs to know which of those they are looking at.
+	Indexing bool   `json:"indexing,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // Resolution is the answer to "open the implementation of this key". Target
@@ -379,6 +504,71 @@ type Resolution struct {
 	// Candidates is set instead of Target when the serving repo has several
 	// implementations of the key and none is unambiguous.
 	Candidates []Candidate `json:"candidates,omitempty"`
+	// Ends is every service on the far side of this key, in a fixed order.
+	// A topic may have several subscribers and several publishers — the
+	// single-answer fields above describe Ends[0] and exist because a gRPC
+	// method has exactly one implementer, which made "the far end" look
+	// singular for as long as gRPC was the only case.
+	Ends []Endpoint `json:"ends,omitempty"`
+}
+
+// Endpoint is one end of a platform edge: a service, and the code in it that
+// answers for the key.
+type Endpoint struct {
+	Repo    string      `json:"repo"`
+	Service string      `json:"service"`
+	Role    BindingRole `json:"role"`
+	// Target is the function to open: a handler for an inbound end, the
+	// function containing the call for an outbound one. Empty when the
+	// service is known but its code has not been read.
+	Target TargetID `json:"target,omitempty"`
+	Title  string   `json:"title,omitempty"`
+	// Path is "<service>/<path within it>:<line>", so a location says which
+	// service it is in.
+	Path string `json:"path,omitempty"`
+	// Indexed is false when this service is known to be an end of the key but
+	// its Go code hasn't been indexed, so there is nothing to open yet. Only
+	// possible for a declared end; a code-derived one is known *because* the
+	// code was read.
+	Indexed bool `json:"indexed"`
+}
+
+// Channel is one key and the services standing at each end of it: who sends,
+// who receives. The platform view answers "what talks to what"; this answers
+// the question underneath it — "what is this event, and who is on it" —
+// without having to find a call site that mentions it first.
+//
+// Ends are named, not described: knowing *which* function subscribes means
+// having indexed that service, and this is meant to be readable for a whole
+// workspace at once. Following one is what /api/resolve is for.
+type Channel struct {
+	// Channel is what the key lives in, and it is deliberately not a Kind: the
+	// two sides of one channel are named differently — a publish is a
+	// "pubsub.topic" and a subscribe a "pubsub.subscription" — so the index is
+	// keyed by the thing they share. Calling this a kind would put a value in
+	// it that no rule ever wrote.
+	Channel string `json:"channel"`
+	Key     string `json:"key"`
+	// Inbound receives (subscribers, route handlers, RPC implementers);
+	// Outbound sends. Either may be empty: a topic nobody listens to and a
+	// subscription nobody feeds are both real, and both worth seeing.
+	Inbound  []ChannelEnd `json:"inbound"`
+	Outbound []ChannelEnd `json:"outbound"`
+}
+
+// ChannelEnd is one service on one side of a channel.
+type ChannelEnd struct {
+	Repo    string `json:"repo"`
+	Service string `json:"service"`
+	// Indexed is false when this end is known from a declaration and the
+	// service's code hasn't been read, so it can be named but not opened.
+	Indexed bool `json:"indexed"`
+}
+
+// ChannelLister is implemented by engines that can enumerate every key they
+// have seen, on both sides.
+type ChannelLister interface {
+	Channels() []Channel
 }
 
 // PlatformView is the L0 picture: every service in the workspace and the
@@ -464,8 +654,21 @@ func HasWorkspace(e Engine) bool {
 }
 
 // CrossRepoResolver is implemented by engines that federate repositories.
+//
+// role is the side the caller is standing on, because "the far end" is a
+// direction, not a place: an emit resolves to the subscribers, a subscription
+// to the publishers. An empty role asks for the inbound side.
 type CrossRepoResolver interface {
-	Resolve(kind, key string) (*Resolution, error)
+	Resolve(kind, key string, role BindingRole) (*Resolution, error)
+}
+
+// ServiceSearcher is implemented by engines that can bias search toward one
+// service. Which service is "current" is a property of what's on screen, not
+// of the engine — you can zoom into any service in the workspace — so it
+// arrives per request rather than being fixed at load. An empty repo means
+// the primary one, which is what plain Search assumes.
+type ServiceSearcher interface {
+	SearchFrom(repo, query string, limit int) []SearchResult
 }
 
 // PlatformEngine is the optional half of Engine: engines that can describe
@@ -527,4 +730,33 @@ type Engine interface {
 	// function bodies: direct calls, interface-dispatched calls that may
 	// reach it, and value references. Sorted by file then line.
 	Usages(id TargetID) ([]Usage, error)
+}
+
+// RuleInfo describes one recognizer for display: what it is, whether it's on,
+// where it came from, and how much it actually matched.
+type RuleInfo struct {
+	ID      string `json:"id"`
+	Doc     string `json:"doc,omitempty"`
+	Builtin bool   `json:"builtin,omitempty"`
+	Enabled bool   `json:"enabled"`
+	// Source is the file a configured rule came from, so "why is this edge
+	// here" is answerable down to the file someone else committed.
+	Source string `json:"source,omitempty"`
+	// Matches is how many bindings it produced. Zero on a rule that is
+	// supposed to be doing something is the signal that a library moved.
+	Matches int `json:"matches"`
+	// Spec is the rule as written, so it can be read and edited where it is
+	// seen. A list of ids and counts can tell you a rule stopped matching; it
+	// can't tell you what it was looking for, which is the next thing anyone
+	// asks. Empty for built-ins — their body is Go, and the only thing about
+	// them that is editable is Enabled.
+	Spec json.RawMessage `json:"spec,omitempty"`
+}
+
+// RuleReport is the whole recognizer picture, including what went wrong
+// assembling it — a dropped rule that nobody is told about is exactly the
+// failure the rule system exists to avoid.
+type RuleReport struct {
+	Rules    []RuleInfo `json:"rules"`
+	Problems []string   `json:"problems,omitempty"`
 }

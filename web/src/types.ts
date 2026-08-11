@@ -2,7 +2,10 @@
 
 export type TargetID = string;
 export type CallID = string;
-export type CallKind = "direct" | "interface" | "indirect" | "fanout";
+// "ref" is a site where the function is named but not called — a callback
+// passed, a handler registered. Expandable like the rest; it just isn't a step
+// in the trace, so it never joins bulk expansion and says so where it renders.
+export type CallKind = "direct" | "interface" | "indirect" | "fanout" | "ref";
 
 export interface CallSite {
   id: CallID;
@@ -14,8 +17,35 @@ export interface CallSite {
   candidates?: Candidate[]; // present for interface calls with known impls
   goroutine?: boolean; // call is launched with the `go` keyword
   external?: boolean; // target is stdlib/dependency; bulk expansion skips it
+  // A rule's answer to "is expanding into this worth doing", replacing a
+  // single stdlib/dependency heuristic that couldn't tell an in-house SDK you
+  // always want to expand from a logging call you never do.
+  leaf?: LeafInfo;
   receivers?: Receiver[]; // present for fan-out calls (all of them run)
   fanoutKind?: string; // e.g. "subscribers"
+}
+
+export interface LeafInfo {
+  rule: string; // which rule decided, so "why is this a leaf" has an answer
+  label?: string;
+  key?: string;
+  kind?: string;
+  crossRepo?: boolean;
+  // Where the boundary leads, when that's already known. `service` comes from
+  // the join and is always there for a resolvable key; the function is only
+  // filled when the far service is already indexed (see LeafInfo in the Go
+  // model — resolving it eagerly would index another repo to draw a frame).
+  service?: string;
+  targetTitle?: string;
+  targetPath?: string; // "<service>/<path within it>:<line>"
+  // Which side of the channel this site is on — an emit leads to subscribers,
+  // a subscribe leads to publishers. Empty means the inbound side is wanted.
+  role?: "inbound" | "outbound";
+  // Every service on the far side, named. Cheap — the names come from the
+  // join, where the code at each end costs that service's index — which is
+  // what lets the card offer a choice without paying for it until one is
+  // picked. The fields above describe ends[0] when there is exactly one.
+  ends?: string[];
 }
 
 export interface Candidate {
@@ -34,6 +64,9 @@ export interface Frame {
   id: TargetID;
   title?: string; // display-friendly name; falls back to a prettified id
   file: string;
+  // "<service>/<path within it>" — set only in a workspace, where the tail of
+  // an absolute path can't say which service the body belongs to.
+  relPath?: string;
   language: string; // "go"
   startLine: number;
   endLine: number;
@@ -53,6 +86,9 @@ export interface SearchResult {
   label: string;
   file: string;
   line: number;
+  // A hit in stdlib or a dependency rather than a service's own code. Already
+  // ranked last by the server; the flag lets the picker say so.
+  external?: boolean;
 }
 
 // One place a target is referenced (mirrors model.Usage). callId + choice
@@ -151,6 +187,10 @@ export interface RepoInfo {
   dir: string;
   primary?: boolean;
   indexed?: boolean; // its Go code is loaded; lazy repos start false
+  // Being read right now. Distinct from !indexed, which is the resting state
+  // of a repo nobody has opened: one is "not yet", the other "not unless you
+  // ask".
+  indexing?: boolean;
   error?: string;
 }
 
@@ -164,6 +204,41 @@ export interface Resolution {
   stale?: boolean;
   note?: string;
   candidates?: Candidate[];
+  // Every service on the far side. The fields above describe ends[0] and stay
+  // for the callers that only ever wanted one — a gRPC method has a single
+  // implementer, which is what made "the far end" look singular.
+  ends?: Endpoint[];
+}
+
+// One end of a platform edge: a service, and the code in it that answers.
+export interface Endpoint {
+  repo: string;
+  service: string;
+  role: BindingRole;
+  target?: TargetID; // the handler, or the function making the call
+  title?: string;
+  path?: string; // "<service>/<path within it>:<line>"
+  indexed: boolean; // false: known to be an end, code not read yet
+}
+
+// One key and the services at each end of it — the index behind "what events
+// are there, and who is on them". Named, not described: knowing which function
+// subscribes means indexing that service, and this is meant to be readable for
+// a whole workspace at once.
+export interface Channel {
+  // What the key lives in — "pubsub", "grpc.method". Not a kind: the two sides
+  // of a channel are named differently, so the index is keyed by what they
+  // share.
+  channel: string;
+  key: string;
+  inbound: ChannelEnd[]; // receives: subscribers, handlers, implementers
+  outbound: ChannelEnd[]; // sends
+}
+
+export interface ChannelEnd {
+  repo: string;
+  service: string;
+  indexed: boolean; // known from a declaration, code not read: nameable, not openable
 }
 
 // The L0 view. Services come from declarations so all are listed; edges need
@@ -214,6 +289,34 @@ export interface TypeInfo {
   doc?: string;
   targetId?: TargetID; // present when the symbol is a function we can open
   definition?: string; // expanded type shape (fields/methods), multi-line
+  // Recognizers already matching this call site, built-in and configured.
+  // The card offers to author a rule from the call; without these, that offer
+  // reads as "nothing recognizes this" even when something does.
+  rules?: string[];
+  // The call under the pointer, as the rule evaluator sees it. Present when
+  // the hovered symbol is the function being called.
+  call?: CallFacts;
+}
+
+// What a rule can match on at one call site (mirrors model.CallFacts).
+// Resolved by the type checker, so it's available for a callee this index
+// doesn't hold — an interface method from a dependency, which is exactly the
+// case the old "derive it from targetId" approach came up empty on.
+export interface CallFacts {
+  package?: string;
+  recv?: string;
+  recvPkg?: string;
+  func?: string;
+  args?: ArgFacts[];
+}
+
+export interface ArgFacts {
+  // What the caller passed, and what the callee declares. They differ when a
+  // parameter is an interface or `any` — which is when one of them is the
+  // only useful one.
+  type?: string;
+  paramType?: string;
+  value?: string; // constant-folded, when the argument has one
 }
 
 // A note anchored to a source location (mirrors internal/notes). Anchors
@@ -233,4 +336,50 @@ export interface Note {
   text: string; // may contain [[SymbolName]] / [[file:path]] references
   createdAt?: string;
   updatedAt?: string;
+}
+
+// One recognizer, built-in or configured — what it is, whether it's on, where
+// it came from, and how much it actually matched.
+export interface RuleInfo {
+  id: string;
+  doc?: string;
+  builtin?: boolean;
+  enabled: boolean;
+  source?: string;
+  matches: number;
+  // The rule as written. Absent for built-ins — their body is Go, and the
+  // only editable thing about them is `enabled`.
+  spec?: RuleSpec;
+}
+
+export interface RuleReport {
+  rules: RuleInfo[];
+  // Rules that were dropped or can never fire. Surfaced rather than swallowed:
+  // a rule nobody is told about is exactly the failure the system avoids.
+  problems?: string[];
+}
+
+// A configured rule, as saved. Mirrors internal/rules.Rule.
+export interface RuleSpec {
+  id: string;
+  "//"?: string;
+  enabled?: boolean;
+  classifier?: boolean;
+  match?: {
+    args?: { index: number; type?: string; paramType?: string }[];
+    package?: string;
+    recv?: string;
+    recvPkg?: string;
+    recvOnly?: boolean;
+    func?: string;
+    minArgs?: number;
+    calleeMatches?: { rule: string; depth?: number };
+  };
+  emit?: {
+    role: "inbound" | "outbound";
+    kind: string;
+    key: string;
+    handler?: string;
+    confidence?: "declared" | "inferred";
+  };
 }

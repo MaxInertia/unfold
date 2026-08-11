@@ -10,6 +10,7 @@ import (
 
 	"github.com/MaxInertia/unfold/internal/indexer"
 	"github.com/MaxInertia/unfold/internal/model"
+	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/tsengine"
 	"github.com/MaxInertia/unfold/internal/workspace"
 )
@@ -68,20 +69,162 @@ var (
 	IndexMode = workspace.ModeAuto
 )
 
+// LinkedRepos are repositories added after launch, from the UI. A workspace
+// discovered under --workspace is a directory of checkouts; these need not be
+// siblings of anything, which is the point — you find out mid-session that
+// the call you're following lands in a repo you didn't open.
+//
+// Package-level for the same reason ProtoRoot is: it has to survive the
+// engine rebuilds watch mode performs, and it is what turns a single-repo
+// session into a workspace on the next load.
+var LinkedRepos []string
+
+// RecognizerFiles are the rule files to load, in precedence order — later
+// files win. Process-wide for the same reason ProtoRoot is: it must survive
+// the engine rebuilds watch mode performs.
+var RecognizerFiles []string
+
+// LinkRepo adds a repository to the set opened on the next load, reporting
+// whether it was new. Nothing is re-indexed here — the caller reloads the
+// engine, which is the same path watch mode uses and the only one that
+// rebuilds the cross-repo declaration join consistently.
+func LinkRepo(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	for _, d := range LinkedRepos {
+		if d == abs {
+			return false
+		}
+	}
+	LinkedRepos = append(LinkedRepos, abs)
+	return true
+}
+
+// UnlinkRepo removes a linked repository, reporting whether it was present.
+func UnlinkRepo(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	for i, d := range LinkedRepos {
+		if d == abs {
+			LinkedRepos = append(LinkedRepos[:i], LinkedRepos[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// goDirs is the full set of repositories to open: whatever --workspace
+// discovers, plus anything linked from the UI, plus the module the session
+// was launched in — which has to be in the set explicitly, because linking a
+// repo from a plain single-repo session is exactly the case where nothing
+// else names it.
+//
+// Returns nil when there is only the launch module and nothing linked, which
+// is the signal to stay a plain single-repo index rather than paying for
+// workspace machinery to federate one thing. That signal is the reason a
+// discovery failure must be an error and not an empty result: the two are
+// indistinguishable downstream, and the quiet one comes up as a session with
+// no platform level, no zoom-out, and nothing said about why.
+func goDirs(dir string) ([]string, error) {
+	var dirs []string
+	seen := map[string]bool{}
+	add := func(d string) {
+		if d == "" {
+			return
+		}
+		abs, err := filepath.Abs(d)
+		if err != nil || seen[abs] {
+			return
+		}
+		seen[abs] = true
+		dirs = append(dirs, abs)
+	}
+
+	if Workspace != "" {
+		found, err := workspace.Discover(Workspace)
+		if err != nil {
+			return nil, fmt.Errorf("--workspace: %w", err)
+		}
+		for _, d := range found {
+			add(d)
+		}
+	}
+	if len(LinkedRepos) > 0 {
+		add(moduleRoot(projectDir(dir)))
+		for _, d := range LinkedRepos {
+			add(d)
+		}
+	}
+	if Workspace == "" && len(LinkedRepos) == 0 {
+		return nil, nil
+	}
+	return dirs, nil
+}
+
+// ModuleRoot is the repository directory a path belongs to — the directory
+// holding its go.mod. Exported because a caller that knows *what* changed has
+// to name the repository it changed in, and a watched file is a path inside
+// one rather than its root.
+func ModuleRoot(dir string) string { return moduleRoot(dir) }
+
+// moduleRoot walks up from dir to the directory holding its go.mod. unfold is
+// routinely started from a package inside a module, and a workspace's repos
+// are module roots — handing it a subdirectory would make the launch repo
+// look like a different, nameless one.
+func moduleRoot(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(abs, "go.mod")); err == nil {
+			return abs
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return dir // no go.mod anywhere above; leave it alone
+		}
+		abs = parent
+	}
+}
+
 // Load constructs the engine for lang and loads the project rooted at dir.
 // target is the engine-specific scope (a Go package pattern like "./..."
 // for Go; ignored by the TS engine, which loads the whole tsconfig project).
 func Load(lang Lang, dir, target string) (model.Engine, error) {
+	return Rebuild(nil, lang, dir, target, nil)
+}
+
+// Rebuild is Load, carrying over what prev already read.
+//
+// rebuild names repository directories whose index must be discarded — the one
+// whose file changed. A nil map keeps every index prev holds, which is what a
+// reload caused by something other than an edit wants: linking a repository
+// changed no code, so re-reading the repositories already open is work that
+// can only produce what they already said.
+func Rebuild(prev model.Engine, lang Lang, dir, target string, rebuild map[string]bool) (model.Engine, error) {
 	switch lang {
 	case LangGo:
-		if Workspace != "" {
-			dirs, err := workspace.Discover(Workspace)
-			if err != nil {
-				return nil, err
-			}
-			return workspace.Open(dirs, projectDir(dir), ProtoRoot, IndexMode)
+		dirs, err := goDirs(dir)
+		if err != nil {
+			return nil, err
+		}
+		if len(dirs) > 0 {
+			workspace.RulePaths = RecognizerFiles
+			// A repo you linked by hand is one you mean to walk into, so it is
+			// indexed behind the primary even when the workspace is too large
+			// to be eager — which is the state linking one more repo can
+			// itself produce.
+			workspace.Preload = append([]string(nil), LinkedRepos...)
+			prevWs, _ := prev.(*workspace.Workspace)
+			return workspace.Reopen(prevWs, dirs, projectDir(dir), ProtoRoot, IndexMode, rebuild)
 		}
 		idx := indexer.New()
+		idx.SetRules(rules.Load(RecognizerFiles...))
 		_ = idx.SetProtoRoot(ProtoRoot)
 		if err := idx.Load(dir, target); err != nil {
 			return nil, err

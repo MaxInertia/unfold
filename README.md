@@ -43,7 +43,7 @@ Unfolding follows execution *downward*; the usages feature is the reverse
 direction. **▲ callers** in any frame header lists where that function is
 referenced; picking one re-roots the view so the caller reads as spliced
 above (the frame you clicked from keeps its expansion state, nested at the
-picked call site). The **callers** sidebar tab is the same data as an
+picked call site). The **callers** tab in the left sidebar is the same data as an
 inverted tree: expand to walk toward entry points, click a node to load the
 whole chain as one pre-unfolded view.
 
@@ -181,10 +181,15 @@ you're currently on is marked.
 You usually want to know what reaches a function *while reading it*, not after
 zooming away. So the two anchor walks also render beside the frame:
 
-- **entrypoints** — a sidebar tab at the frame level, listing the inbound
+- **entrypoints** — a left sidebar tab at the frame level, listing the inbound
   bindings that reach the anchor.
-- **outbounds** — a panel on the right, listing the outbound calls the anchor
-  reaches. Collapsed by default; the rail on the right edge opens it.
+- **outbounds** — a right panel tab, beside the call tree, listing the outbound
+  calls the anchor reaches.
+
+Each side opens on its own, since with a recognized surface these are the
+platform-level answers: entrypoints on the left, outbounds on the right.
+Without one — a TypeScript project today — the left falls back to **callers**
+and the right holds only the call tree, so it starts collapsed behind its rail.
 
 Neither fetches anything new. They're the same `/api/service` response the
 service level renders in columns, filtered by the reachability flags already
@@ -340,7 +345,129 @@ Recognizers currently cover `net/http` route registration (including Go 1.22
 `net/http` client calls. A URL assembled at runtime is skipped rather than
 guessed. Adding a router or broker means adding a rule in
 `internal/platform` — recognizers see a neutral `Call` (package, receiver,
-function, constant-folded args), never an AST.
+function, constant-folded args), never an AST — or writing one as
+configuration, below.
+
+### Writing a rule that means one library
+
+A method name is rarely the thing you mean. `Emit`, `Publish` and `Send` name
+half the messaging libraries ever written, and the usual narrowing doesn't
+always reach: a call through an *interface* carries the package that declared
+the interface, and nothing stops a repo from declaring its own with the same
+method. What doesn't move is the types crossing the call, so a match can pin
+them:
+
+```json
+{ "id": "events.emit",
+  "match": {
+    "func": "Emit",
+    "args": [{"index": 2, "type": "*github.com/acme/events/pb.Event"}]
+  },
+  "emit": {"role": "outbound", "kind": "pubsub.topic", "key": "{arg1}"} }
+```
+
+`type` is what the caller passed; `paramType` is what the callee's signature
+declares at that position (its element type, for a variadic parameter). They
+differ exactly when one of them is useless — a parameter typed `any` says
+nothing about what arrives, and a locally-defined implementation of an SDK
+interface says nothing about what the callee accepts. Both take `*` and `**`
+wildcards, and both are written fully qualified, because short type names
+collide across modules. The pointer is part of the pattern.
+
+The **recognize as…** form on a hover card offers these as checkboxes over the
+call's own resolved types, so the usual path is picking which facts to insist
+on rather than writing any of this by hand.
+
+### Where a key can come from
+
+The key is a string, and it is usually not written at the call site. These
+shapes resolve:
+
+| the call says | resolved from | confidence |
+| --- | --- | --- |
+| `Emit(ctx, "orders.created")` | the literal | exact |
+| `Emit(ctx, topics.OrderCreated)` | a constant, in any package | exact |
+| `Emit(ctx, "acme."+topics.Order)` | constant folding | exact |
+| `Emit(ctx, topics.PaymentTaken)` | a package-level `var`'s initializer | **inferred** |
+| `Emit(ctx, topics.Topics.Shipped)` | a field of a package-level struct var | **inferred** |
+| `Emit(ctx, events.FooEventDefn)` with key `{arg1.ID}` | a field of the struct var passed whole | **inferred** |
+
+That last row is for an SDK whose calls take a *definition* rather than a name:
+
+```go
+var FooEventDefn = eventdefinition.EventDefinition{ID: "foo-happened"}
+
+client.Emit(ctx, events.FooEventDefn, payload)
+client.Subscribe(events.FooEventDefn, handler)
+```
+
+Nothing in either call site says which member of that value identifies the
+event, so the rule says it — `"key": "{arg1.ID}"` on the emit rule and
+`"key": "{arg0.ID}"` on the subscribe rule. Both ends then resolve to
+`foo-happened` and join. A field read this way is always `inferred`: it is what
+the program starts with, and a later assignment is invisible from here.
+
+The first three are what the program *is*; the last two are what it *starts
+with*. Nothing in the index sees an assignment made later, so those are badged
+`inferred` rather than `exact` — including when a built-in recognizer keys off
+one, e.g. a route registered with a pattern held in a var.
+
+Both ends of an edge resolve the same way, so a publisher and a subscriber that
+share a constant — or share the events package that declares the var — join on
+the same key without either side writing the string.
+
+What still doesn't resolve is a value with a flow rather than a definition: a
+local variable, a struct field assigned after construction, a map lookup, a
+value returned from a function. Those are skipped rather than guessed, and the
+call site shows no binding.
+
+### Reading across a publish
+
+Both ends of a pubsub edge can be read in place, from either side:
+
+- **At the `Subscribe`**, the handler is an argument, and a function named as a
+  value is an expandable site — click it and the body opens inline. No rule
+  needed for this.
+- **At the `Emit`**, what you want is the *other repo's* handler, not the SDK's
+  marshalling. Add a `leaf` to the emit rule and the call site offers both
+  **open** and **inline**:
+
+  ```json
+  { "id": "sdk.emit",
+    "match": {"func": "Emit", "minArgs": 1},
+    "emit":  {"role": "outbound", "kind": "sdk.event", "key": "{arg0.ID}"},
+    "leaf":  {"expand": false, "label": "→ subscriber", "crossRepo": true} }
+  ```
+
+  The far end is looked up by the leaf's kind *and* key, so it finds whatever
+  subscribed to that key — provided the subscribing service is indexed, per the
+  asymmetry above. The boundary stays named even with the far side spliced in:
+  execution left the process there, and a trace that reads as one continuous
+  body would be saying otherwise.
+
+The two ends of a channel don't have to share a kind, and for pub/sub they
+shouldn't: `pubsub.topic` is a publish and `pubsub.subscription` is a
+subscribe, because they are different roles. They join as one channel. Any
+other pair of kinds joins only if they're identical, so a custom vocabulary
+should either use the `pubsub.*` pair or use one kind on both sides.
+
+### Seeing which rules are in force
+
+The **⌥ recognizers** panel lists every rule, built-in and configured: whether
+it's on, how much it matched, where it came from, and — for the ones you wrote
+— the rule body, editable in place. Toggling a built-in off writes a
+settings-only entry (an id and `enabled: false`), which is why a built-in needs
+no body to switch off.
+
+The match count is the point of the list. A rule that quietly stopped matching
+after a library upgrade contributes nothing, and an empty surface looks exactly
+like one nothing was found in.
+
+Per call site, the hover card names the rules **already** matching it. Offering
+to recognize a call that three rules match, without saying so, invites a fourth
+that duplicates one you have — and it makes "why is there an edge here"
+answerable where you're looking rather than by reading rule files. Clicking one
+opens it in the panel.
 
 ### Limitations
 
@@ -368,6 +495,35 @@ implements it:
 unfold --workspace ~/src --proto-root ~/src/platform-protos ./...
 ```
 
+### Linking a repo after launch
+
+You usually find out mid-session — the call you're following lands somewhere
+you didn't open. **+ link repo…** in the workspace strip (and in the platform
+header) opens another repository without restarting, and it need not be a
+sibling of anything: a linked repo is an arbitrary path.
+
+This also works from a plain single-repo session, which is the common case:
+link one repo and the session *becomes* a workspace, with the repo you
+launched in as the primary. The link persists to `.unfold/config.json`, so it
+survives a restart rather than being something you redo each morning.
+Unlinking the last one drops back to a single-repo index.
+
+Linking rebuilds the engine rather than mutating the open workspace. The repo
+set, alias table and cross-repo declaration join are read without locks by
+every request path on the assumption that they're fixed after startup;
+mutating them live would mean auditing all of that for races, where a rebuild
+is the mechanism watch mode already uses — it swaps atomically and keeps the
+previous engine if the new one fails to build. The cost is re-indexing what
+was eagerly loaded, which is the same reason a large workspace defers with
+`--index lazy`.
+
+A directory with no `go.mod`, one that doesn't exist, or one already open is
+rejected *before* the rebuild — discovering it afterwards would mean reporting
+a failure against an engine that had already been replaced, having paid the
+reindex for nothing. And a rebuild that fails rolls the link back, so the next
+rebuild for any other reason can't silently apply a repo you were told had
+failed.
+
 The repo you're standing in is the **primary**: the service view is about it,
 and its ids stay unprefixed so existing URLs and bookmarks keep working. Other
 repos are namespaced `<repo>::<id>`. Running from a subdirectory of a repo
@@ -392,6 +548,14 @@ state, not an error.
   instantly even in a workspace of fifty repos.
 - **Code** — a full index per repo: seconds and hundreds of megabytes each.
   Needed only to render a frame, so it's deferred until you actually jump.
+
+One asymmetry follows from this. A proto declares which gRPC methods a service
+implements, so that half of the join is free — but **nothing declares a
+subscription**. Only the subscriber's own body says it subscribes, so a pubsub
+edge appears once the subscribing service has been indexed, and not before.
+With both ends indexed (the usual case when you're reading across a publish and
+its consumer) it is drawn like any other edge; until then unfold says the key
+has no *indexed* service serving it, rather than claiming nobody serves it.
 
 `--index` selects when the code layer is built: `eager` up front, `lazy` on
 demand, or `auto` (the default) which is eager for a small workspace and lazy
@@ -478,11 +642,13 @@ destination doesn't.
 
 ### The sidebar follows the level
 
-Above the frame there is no call tree to show, so the sidebar stops being
-files/calls/callers/entrypoints/notes and becomes the **filter panel** — text,
-reach (public/platform/internal) and "only entrypoints reaching the anchor" at
-the service level, a service filter at the platform level. Filtering is one
-mechanism across both upper levels rather than two bolted onto each view.
+Above the frame there is nothing frame-shaped to show, so the left sidebar
+stops being entrypoints/callers/files/notes and becomes the **filter panel** —
+text, reach (public/platform/internal) and "only entrypoints reaching the
+anchor" at the service level, a service filter at the platform level. Filtering
+is one mechanism across both upper levels rather than two bolted onto each
+view. The right panel is frame-only for the same reason: the service columns
+already show both directions up there.
 
 ### The URL carries the level, and history carries the moves
 

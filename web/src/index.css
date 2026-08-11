@@ -256,6 +256,19 @@ body.resizing {
   color: var(--muted);
 }
 
+/* A dependency hit. It ranks below every service's own code, and says why —
+   otherwise a result sitting at the bottom just looks like a worse match. */
+.picker-dep {
+  color: var(--muted);
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  margin-right: 0.4rem;
+}
+
 /* Frame */
 .frame {
   background: var(--card-bg);
@@ -512,6 +525,19 @@ body.resizing {
   border-bottom-width: 3px;
 }
 
+.call-site--ref.call-site--resolvable {
+  /* A value reference is expandable but nothing runs here, so it must not
+     read like the calls around it: no fill, and a dashed rule that says
+     "named, not invoked". The frame it opens carries the same marker. */
+  background: none;
+  border-bottom-style: dashed;
+  border-bottom-color: var(--ref-border, rgba(120, 113, 108, 0.7));
+}
+
+.call-site--ref.call-site--resolvable:hover {
+  background: var(--call-bg-hover);
+}
+
 .call-site.loading {
   opacity: 0.6;
 }
@@ -529,6 +555,17 @@ body.resizing {
   font-size: 0.8em;
   vertical-align: baseline;
   color: var(--goroutine-fg, #0f766e);
+  cursor: help;
+  user-select: none;
+}
+
+/* Value reference (`apply(RunGreeter, …)`): the same shape the callers list
+   uses for a ref, so "named, not called" reads the same in both places. */
+.ref-badge {
+  margin-right: 2px;
+  font-size: 0.8em;
+  vertical-align: baseline;
+  color: var(--ref-fg, #78716c);
   cursor: help;
   user-select: none;
 }
@@ -811,10 +848,11 @@ body.resizing {
   flex-basis: 2rem;
 }
 
-/* The outbounds panel. Same shape as the left sidebar — it's the mirror of
-   it, so it shares .tree-inner/.tree-header/.tree-body rather than growing a
-   parallel set of rules that would drift. */
-.out-panel {
+/* The right panel: the call tree, and the outbound edges beside it. Same
+   shape as the left sidebar — it's the mirror of it, so it shares
+   .tree-inner/.tree-header/.tree-body rather than growing a parallel set of
+   rules that would drift. */
+.right-panel {
   flex: 0 0 280px;
   position: sticky;
   top: 1rem;
@@ -825,7 +863,7 @@ body.resizing {
   min-width: 0;
 }
 
-.out-panel--collapsed {
+.right-panel--collapsed {
   flex-basis: 2rem;
 }
 
@@ -1577,11 +1615,16 @@ body.resizing {
   position: relative;
 }
 
+/* The header's controls, grouped at the right edge. Each used to pin itself
+   there absolutely, which works for exactly one of them. */
+.app-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
 .app-settings {
-  position: absolute;
-  right: 1rem;
-  top: 50%;
-  transform: translateY(-50%);
   font: inherit;
   font-size: 1.05rem;
   line-height: 1;
@@ -3181,4 +3224,701 @@ body.resizing {
   margin: 0 0 0.5rem;
   font-size: 0.72rem;
   color: var(--goroutine-fg);
+}
+
+/* Linking a repository sits with the workspace strip it extends, so it reads
+   as "and one more" rather than as a separate piece of chrome. */
+.link-repo-open {
+  margin-left: 0.25rem;
+}
+
+/* ===== Recognizers ===== */
+.rules-panel {
+  margin: 0.5rem 1rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.rules-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.rules-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.rules-warn {
+  margin: 0.3rem 0;
+  font-size: 0.75rem;
+  color: var(--goroutine-border, var(--muted));
+}
+
+.rules-error {
+  margin: 0.3rem 0;
+  font-size: 0.75rem;
+  color: var(--error);
+}
+
+.rules-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rule {
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.rule:last-child {
+  border-bottom: 0;
+}
+
+.rule--off {
+  opacity: 0.55;
+}
+
+.rule-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.rule-id {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.rule-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-left: 1.4rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.rule-badge {
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 0 0.3rem;
+}
+
+/* A rule matching nothing is the signal that a library moved, so it reads as
+   a warning rather than as a neutral zero. */
+.rule-matches--zero {
+  color: var(--error);
+}
+
+.rule-delete,
+.rule-edit,
+.type-card-recognize {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.7rem;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+
+.rule-delete:hover,
+.rule-edit:hover,
+.type-card-recognize:hover {
+  color: var(--fg);
+}
+
+.type-card-recognize {
+  display: block;
+  margin-top: 0.35rem;
+}
+
+/* What already claims the call under the pointer. Sits directly above the
+   offer to write another rule, because that's the claim it qualifies. */
+.type-card-rules {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--card-border);
+}
+
+.type-card-rules-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.type-card-rule {
+  background: var(--call-bg);
+  border: 1px solid var(--call-border);
+  border-radius: 999px;
+  color: inherit;
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0 0.4rem;
+  cursor: pointer;
+}
+
+.type-card-rule:hover {
+  background: var(--call-bg-hover);
+}
+
+/* The rule body, editable in place. Monospace because it is JSON and reads as
+   the file it came from. */
+.rule-editor {
+  margin: 0.35rem 0 0 1.4rem;
+}
+
+.rule-spec {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.35rem 0.45rem;
+  resize: vertical;
+}
+
+.recognize-pins {
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem 0.4rem;
+  margin: 0.4rem 0 0;
+}
+
+.recognize-pins legend {
+  font-size: 0.7rem;
+  color: var(--muted);
+  padding: 0 0.25rem;
+}
+
+.recognize-pin {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+}
+
+.recognize-pin code {
+  font-size: 0.95em;
+  word-break: break-all;
+}
+
+.recognize-pin-pkg {
+  color: var(--muted);
+}
+
+.rule--open {
+  background: var(--call-bg);
+  border-radius: 4px;
+}
+
+.rule-doc,
+.rule-source {
+  margin: 0.15rem 0 0 1.4rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.recognize {
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--card-border);
+}
+
+.recognize-head {
+  font-size: 0.78rem;
+  margin-bottom: 0.35rem;
+}
+
+.recognize-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.2rem 0;
+  font-size: 0.72rem;
+}
+
+.recognize-field > span {
+  flex: 0 0 5rem;
+  color: var(--muted);
+}
+
+.recognize-field input,
+.recognize-field select {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.72rem;
+}
+
+.recognize-note {
+  margin: 0.35rem 0;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+/* ===== Leaf boundaries ===== */
+.leaf-card {
+  margin: 0.25rem 0 0.4rem;
+}
+
+.leaf-bar {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px dashed var(--call-border);
+  border-radius: 6px;
+  background: var(--call-bg);
+  font-size: 0.72rem;
+}
+
+.leaf-label {
+  font-weight: 600;
+}
+
+/* Several far ends are one boundary with a choice, so they get a picker on the
+   bar rather than a row each — the same shape the impl switcher uses. */
+.leaf-pick {
+  font: inherit;
+  font-size: 0.68rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0 0.2rem;
+}
+
+.leaf-count {
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+/* Where the boundary leads, and the only thing at the end of the bar: the
+   key it used to sit beside is already in the line above it. */
+.leaf-dest {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-left: auto;
+}
+
+.leaf-action {
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.68rem;
+  padding: 0 0.3rem;
+  cursor: pointer;
+}
+
+.leaf-action:hover {
+  color: var(--fg);
+  border-color: var(--call-border);
+}
+
+/* Even inlined, the hop stays named: execution left the process, and a
+   continuous-looking body would say otherwise. */
+.leaf-hop {
+  font-size: 0.66rem;
+  color: var(--muted);
+  padding: 0.15rem 0.45rem;
+  border-left: 2px dashed var(--goroutine-border, var(--card-border));
+}
+
+.leaf-inlined {
+  margin-top: 0.2rem;
+}
+
+/* ----- the key index: every channel, and who is on each side ----- */
+
+/* Two readings of one level, so the toggle sits above both rather than
+   inside either. */
+.platform-modes {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.platform-mode {
+  font: inherit;
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+
+.platform-mode--on {
+  color: var(--fg);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.channels-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.channels-filter {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  flex: 1 1 auto;
+  max-width: 24rem;
+}
+
+.channels-count,
+.channels-note {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.channels-note--error {
+  color: var(--error-fg, #b91c1c);
+}
+
+.channels-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.channel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.75rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+}
+
+.channel-key-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.channel-kind {
+  color: var(--muted);
+  font-size: 0.68rem;
+  margin-left: 0.4rem;
+}
+
+.channel-ends {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.channel-side {
+  display: inline-flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+/* An empty side is a finding, not a gap in the rendering. */
+.channel-side--empty {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
+.channel-arrow {
+  color: var(--muted);
+}
+
+.channel-service {
+  font: inherit;
+  font-size: 0.72rem;
+  background: var(--call-bg);
+  border: 1px solid var(--call-border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 0 0.35rem;
+  cursor: pointer;
+}
+
+/* Nameable but not openable: its code hasn't been read. */
+.channel-service--unindexed {
+  background: none;
+  border-style: dashed;
+  color: var(--muted);
+}
+
+/* ----- workspace status: what is open, and what it is doing ----- */
+
+.ws-status {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Shares the header button shape with settings and recognizers. */
+.ws-status-button {
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.15rem 0.35rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.ws-status-button:hover {
+  color: var(--fg);
+  border-color: var(--card-border);
+}
+
+/* Working, and still a button: the reason to show progress is that someone is
+   waiting on it, and they should be able to see what for. */
+.ws-status-button--working {
+  color: var(--fg);
+}
+
+.spinner {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  border: 2px solid var(--card-border);
+  border-top-color: var(--fg);
+  border-radius: 50%;
+  animation: ws-spin 0.8s linear infinite;
+}
+
+.spinner--small {
+  width: 0.7em;
+  height: 0.7em;
+  border-width: 1.5px;
+}
+
+@keyframes ws-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Motion is decoration here; the state is in the panel and the tooltip. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+}
+
+.ws-status-dot {
+  width: 0.4em;
+  height: 0.4em;
+  border-radius: 50%;
+  background: var(--error-fg, #b91c1c);
+}
+
+.ws-panel {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 40;
+  min-width: 17rem;
+  padding: 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+}
+
+.ws-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.ws-panel-title {
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.ws-panel-count,
+.ws-panel-note {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.ws-panel-note {
+  margin: 0.4rem 0 0;
+}
+
+.ws-panel-error {
+  color: var(--error-fg, #b91c1c);
+  font-size: 0.72rem;
+  margin-bottom: 0.3rem;
+}
+
+.ws-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ws-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+}
+
+.ws-item-state {
+  display: inline-flex;
+  width: 1em;
+  justify-content: center;
+}
+
+.ws-glyph--ready {
+  color: var(--ok-fg, #15803d);
+}
+
+.ws-glyph--idle {
+  color: var(--muted);
+}
+
+.ws-glyph--error {
+  color: var(--error-fg, #b91c1c);
+}
+
+.ws-item-name {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.ws-item-primary {
+  color: var(--muted);
+  font-size: 0.62rem;
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+  padding: 0 0.2rem;
+}
+
+.ws-item-action {
+  font: inherit;
+  font-size: 0.68rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0 0.3rem;
+  cursor: pointer;
+}
+
+.ws-item-action:hover {
+  color: var(--fg);
+}
+
+.ws-item-error {
+  color: var(--error-fg, #b91c1c);
+  font-size: 0.68rem;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The workspace button is text, not a glyph: it names a thing you can open,
+   and it has room to append what that thing is doing. */
+.ws-status-button {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+}
+
+.ws-panel-add {
+  font: inherit;
+  font-size: 0.72rem;
+  margin-top: 0.4rem;
+  width: 100%;
+  background: none;
+  border: 1px dashed var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0.2rem 0.3rem;
+  cursor: pointer;
+}
+
+.ws-panel-add:hover {
+  color: var(--fg);
+  border-color: var(--call-border);
+}
+
+/* One question asked from three places, so one dialog rather than a picker
+   unfolding inside whichever surface happened to ask. */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(0 0 0 / 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 1rem 1rem;
+}
+
+.modal {
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.3);
+  padding: 0.75rem;
+  width: min(38rem, 100%);
+  max-height: 80vh;
+  overflow: auto;
+}
+
+/* A boundary with nothing on the other side, or nothing openable at it. Said
+   on the bar, where a button used to be — pressing one that can't work and
+   reading the failure afterwards is a worse way to learn the same thing. */
+.leaf-nowhere {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-style: italic;
+  cursor: help;
 }

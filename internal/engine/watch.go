@@ -45,19 +45,19 @@ func isReindexTrigger(path string) bool {
 }
 
 // Watcher invokes onChange (debounced) whenever a source file under root
-// changes. fsnotify watches single directories, not trees, so we walk the
+// changes, passing the path that triggered it. fsnotify watches single directories, not trees, so we walk the
 // project and add a watch per directory, skipping the usual noise, and add
 // newly-created directories as they appear.
 type Watcher struct {
 	w        *fsnotify.Watcher
 	debounce time.Duration
-	onChange func()
+	onChange func(cause string)
 	done     chan struct{}
 }
 
 // NewWatcher starts watching root (defaulting to the working directory) and
 // fires onChange after a quiet period following each relevant change.
-func NewWatcher(root string, debounce time.Duration, onChange func()) (*Watcher, error) {
+func NewWatcher(root string, debounce time.Duration, onChange func(cause string)) (*Watcher, error) {
 	if root == "" {
 		wd, err := os.Getwd()
 		if err != nil {
@@ -127,6 +127,7 @@ func (w *Watcher) loop() {
 	// A single debounce timer: editors emit bursts (write, chmod, rename) and
 	// a save may touch many files at once. We coalesce them into one reindex.
 	var timer *time.Timer
+	var cause string
 	fire := make(chan struct{}, 1)
 	schedule := func() {
 		if timer != nil {
@@ -163,6 +164,11 @@ func (w *Watcher) loop() {
 			if !isReindexTrigger(ev.Name) {
 				continue
 			}
+			// Remember what started it. "Why did it reindex — nothing
+			// changed" is a question about one file, and the answer was
+			// nowhere: the log said a change was detected and never said to
+			// what, so a stray generated file looked identical to a bug.
+			cause = ev.Name
 			schedule()
 		case <-fire:
 			// A debounce timer may fire concurrently with Close(); don't run a
@@ -172,7 +178,7 @@ func (w *Watcher) loop() {
 				return
 			default:
 			}
-			w.onChange()
+			w.onChange(cause)
 		case err, ok := <-w.w.Errors:
 			if !ok {
 				return
