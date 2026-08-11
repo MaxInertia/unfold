@@ -31,21 +31,22 @@ export interface LeafInfo {
   key?: string;
   kind?: string;
   crossRepo?: boolean;
-  // Where the boundary leads, when that's already known. `service` comes from
-  // the join and is always there for a resolvable key; the function is only
-  // filled when the far service is already indexed (see LeafInfo in the Go
-  // model — resolving it eagerly would index another repo to draw a frame).
-  service?: string;
-  targetTitle?: string;
-  targetPath?: string; // "<service>/<path within it>:<line>"
   // Which side of the channel this site is on — an emit leads to subscribers,
   // a subscribe leads to publishers. Empty means the inbound side is wanted.
   role?: "inbound" | "outbound";
-  // Every service on the far side, named. Cheap — the names come from the
-  // join, where the code at each end costs that service's index — which is
-  // what lets the card offer a choice without paying for it until one is
-  // picked. The fields above describe ends[0] when there is exactly one.
-  ends?: string[];
+  // Every service on the far side. The services come from the join and cost
+  // nothing; the code at an end lives in that service's index, so it is filled
+  // in only for services already indexed — reading one to draw a frame would
+  // index a whole repository as a side effect.
+  ends?: LeafEnd[];
+}
+
+// One service on the far side of a boundary, as much as can be said for free.
+export interface LeafEnd {
+  service: string;
+  title?: string; // the handler, or the function making the call
+  path?: string; // "<service>/<path within it>:<line>"
+  indexed: boolean; // false: known to be an end, code not read yet
 }
 
 export interface Candidate {

@@ -33,7 +33,7 @@ export function BoundaryPicker({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const names = leaf.ends ?? [];
+  const ends = leaf.ends ?? [];
 
   async function endFor(service: string): Promise<Endpoint | null> {
     const res = await resolveBinding(leaf.kind ?? "grpc.method", leaf.key ?? "", leaf.role);
@@ -82,10 +82,10 @@ export function BoundaryPicker({
       <div className="boundary-head">
         <span className="boundary-title">
           {leaf.label || leaf.key || "boundary"}
-          {names.length > 1 && ` · ${names.length}`}
+          {ends.length > 1 && ` · ${ends.length}`}
         </span>
         <span className="boundary-hint">
-          {names.length > 1 ? "pick one to splice it in" : "splice it in where the call is"}
+          {ends.length > 1 ? "pick one to splice it in" : "splice it in where the call is"}
         </span>
         <button type="button" className="boundary-close" onClick={onClose} aria-label="close">
           ✕
@@ -93,35 +93,36 @@ export function BoundaryPicker({
       </div>
       {error && <div className="boundary-note boundary-note--error">{error}</div>}
       <ul className="boundary-list">
-        {names.map((service) => (
-          <li key={service} className="boundary-end">
+        {ends.map((end) => (
+          <li key={end.service} className="boundary-end">
             <button
               type="button"
               className="boundary-pick"
               disabled={!!busy}
-              onClick={() => void act(service, "inline")}
-              title={`splice ${service}'s side of ${leaf.key ?? "this key"} in here`}
+              onClick={() => void act(end.service, "inline")}
+              title={`splice ${end.service}'s side of ${leaf.key ?? "this key"} in here`}
             >
-              <span className="boundary-service">{service}</span>
-              {/* Known for a single end without resolving; naming the code at
-                  every end would mean indexing every service just to draw a
-                  list of them. */}
-              {names.length === 1 && leaf.targetTitle && (
-                <span className="boundary-target">{leaf.targetTitle}</span>
+              <span className="boundary-service">{end.service}</span>
+              {/* The code at the end, for the services already read. Filling
+                  this for the rest would mean indexing every service on the
+                  other side just to draw a list of them. */}
+              {end.title && <span className="boundary-target">{end.title}</span>}
+              {end.path && <span className="boundary-loc">{end.path}</span>}
+              {!end.indexed && (
+                <span className="boundary-loc" title="this service hasn't been indexed yet — picking it will read it first">
+                  not indexed
+                </span>
               )}
-              {names.length === 1 && leaf.targetPath && (
-                <span className="boundary-loc">{leaf.targetPath}</span>
-              )}
-              {busy === `inline:${service}` && <span className="boundary-loc">indexing…</span>}
+              {busy === `inline:${end.service}` && <span className="boundary-loc">indexing…</span>}
             </button>
             <button
               type="button"
               className="boundary-alt"
               disabled={!!busy}
-              onClick={() => void act(service, "open")}
+              onClick={() => void act(end.service, "open")}
               title="open it as the root frame instead"
             >
-              {busy === `open:${service}` ? "…" : "open"}
+              {busy === `open:${end.service}` ? "…" : "open"}
             </button>
           </li>
         ))}

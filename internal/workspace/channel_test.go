@@ -44,6 +44,14 @@ func bothWays(t *testing.T, primary string) *Workspace {
 	return w
 }
 
+func leafServices(ends []model.LeafEnd) []string {
+	out := make([]string, 0, len(ends))
+	for _, e := range ends {
+		out = append(out, e.Service)
+	}
+	return out
+}
+
 func endServices(ends []model.Endpoint) []string {
 	out := make([]string, 0, len(ends))
 	for _, e := range ends {
@@ -155,25 +163,25 @@ func TestSubscribeLeafPointsAtThePublishers(t *testing.T) {
 	if foo.Role != model.RoleInbound {
 		t.Errorf("subscribe leaf role %q, want inbound", foo.Role)
 	}
-	// Named, not just counted: the card offers a choice between them, and it
-	// can do that from the join without indexing either.
-	if !equalStrings(foo.Ends, []string{"publisher", "publisher2"}) {
-		t.Errorf("foo-happened publishers: got %v, want both named", foo.Ends)
+	// Named, and — for the services already indexed — located, which costs
+	// nothing more: the code is in an index that has already been read.
+	if !equalStrings(leafServices(foo.Ends), []string{"publisher", "publisher2"}) {
+		t.Errorf("foo-happened publishers: got %v, want both named", leafServices(foo.Ends))
 	}
-	// With several ends, the single-end fields stay empty rather than naming
-	// one of them as though it were the answer.
-	if foo.Service != "" || foo.TargetTitle != "" || foo.TargetPath != "" {
-		t.Errorf("a boundary with 2 ends named one anyway: %+v", foo)
+	for _, e := range foo.Ends {
+		if !e.Indexed {
+			t.Errorf("%s is indexed in this workspace but the end says otherwise", e.Service)
+		}
+		if e.Title == "" || e.Path == "" {
+			t.Errorf("%s: an indexed end should name its code, got %+v", e.Service, e)
+		}
 	}
-	// bar-happened has exactly one publisher, so it does name it.
-	if !equalStrings(bar.Ends, []string{"publisher"}) {
-		t.Fatalf("bar-happened publishers: got %v, want [publisher]", bar.Ends)
+	// Every end is described the same way, whether there is one or five.
+	if !equalStrings(leafServices(bar.Ends), []string{"publisher"}) {
+		t.Fatalf("bar-happened publishers: got %v, want [publisher]", leafServices(bar.Ends))
 	}
-	if bar.Service != "publisher" || bar.TargetTitle != "publishBar" {
-		t.Errorf("bar's publisher is %s/%s, want publisher/publishBar", bar.Service, bar.TargetTitle)
-	}
-	if bar.TargetPath != "publisher/main.go:9" {
-		t.Errorf("bar's publisher path %q, want publisher/main.go:9", bar.TargetPath)
+	if bar.Ends[0].Title != "publishBar" || bar.Ends[0].Path != "publisher/main.go:9" {
+		t.Errorf("bar's publisher is %+v, want publishBar at publisher/main.go:9", bar.Ends[0])
 	}
 }
 
@@ -311,5 +319,85 @@ func TestChainedRegistrationDrawsOneBoundary(t *testing.T) {
 	// The line still holds three sites; they just don't all claim the boundary.
 	if len(fr.Calls) < 3 {
 		t.Errorf("expected the chain's sites to still be sites, got %d", len(fr.Calls))
+	}
+}
+
+// What a boundary can say about an end, and when.
+//
+// For pubsub there is no middle state: nothing declares a subscription, so a
+// service is only an end once its code has been read — before that the
+// boundary has no ends at all and says so, rather than naming a service it
+// cannot know about. Once read, the end arrives complete, because the code
+// that made it an end is the same code that locates it.
+//
+// (The middle state exists for gRPC, where a proto declares an implementer
+// without anyone reading it — that is what LeafEnd.Indexed distinguishes.)
+func TestPubsubEndAppearsOnlyWhenItsServiceIsRead(t *testing.T) {
+	rulesFile := filepath.Join(t.TempDir(), "recognizers.json")
+	err := os.WriteFile(rulesFile, []byte(`{"rules":[
+	  {"id":"sdk.emit",
+	   "match":{"func":"Emit","minArgs":1},
+	   "emit":{"role":"outbound","kind":"pubsub.topic","key":"{arg0.ID}"},
+	   "leaf":{"expand":false,"label":"→ subscribers","crossRepo":true}},
+	  {"id":"sdk.subscribe",
+	   "match":{"func":"Subscribe","minArgs":2},
+	   "emit":{"role":"inbound","kind":"pubsub.subscription","key":"{arg0.ID}","handler":"arg1"}}
+	]}`), 0o644)
+	if err != nil {
+		t.Fatalf("write rules: %v", err)
+	}
+	prev := RulePaths
+	RulePaths = []string{rulesFile}
+	t.Cleanup(func() { RulePaths = prev })
+
+	dirs, err := Discover(abs(t, "testdata/pubsub"))
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	// Lazy: only the repo we stand in is read.
+	w, err := Open(dirs, abs(t, "testdata/pubsub/publisher"), "", ModeLazy)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	leafOn := func(symbol string) *model.LeafInfo {
+		t.Helper()
+		id, err := w.LookupSymbol(symbol)
+		if err != nil {
+			t.Fatalf("LookupSymbol(%s): %v", symbol, err)
+		}
+		fr, err := w.Frame(id)
+		if err != nil {
+			t.Fatalf("Frame(%s): %v", symbol, err)
+		}
+		for _, c := range fr.Calls {
+			if c.Leaf != nil {
+				return c.Leaf
+			}
+		}
+		t.Fatalf("no boundary in %s", symbol)
+		return nil
+	}
+
+	if ends := leafOn("publish").Ends; len(ends) != 0 {
+		t.Errorf("a subscriber nobody has read is not a known end; got %+v", ends)
+	}
+
+	// Reading it is what makes it one — and it arrives already located, since
+	// the index that revealed it is the index that holds its code.
+	if err := w.IndexRepo("subscriber"); err != nil {
+		t.Fatalf("IndexRepo: %v", err)
+	}
+	ends := leafOn("publish").Ends
+	if len(ends) == 0 {
+		t.Fatal("after reading the subscriber, it should be an end")
+	}
+	for _, e := range ends {
+		if !e.Indexed {
+			t.Errorf("%s was read, so the end must say so: %+v", e.Service, e)
+		}
+		if e.Title == "" || e.Path == "" {
+			t.Errorf("%s: an end from an indexed service should name and locate its code: %+v", e.Service, e)
+		}
 	}
 }

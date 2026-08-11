@@ -269,46 +269,50 @@ func (w *Workspace) describeFarEnd(leaf *model.LeafInfo) {
 		return
 	}
 	want := oppositeOf(leaf.Role)
-	aliases := w.endsOf(leaf.Kind, leaf.Key, want)
-	for _, alias := range aliases {
-		if r, ok := w.repos[alias]; ok {
-			leaf.Ends = append(leaf.Ends, r.name)
+	for _, alias := range w.endsOf(leaf.Kind, leaf.Key, want) {
+		r, ok := w.repos[alias]
+		if !ok {
+			continue
 		}
+		leaf.Ends = append(leaf.Ends, w.describeEnd(r, leaf.Kind, leaf.Key, want))
 	}
-	if len(aliases) != 1 {
-		return
-	}
+}
 
-	alias := aliases[0]
-	r := w.repos[alias]
-	leaf.Service = r.name
+// describeEnd says as much about one end as can be said for free: its service
+// always, and the code at it only if that service is already indexed. Reading
+// an unindexed one here would index a whole repository as a side effect of
+// drawing a frame.
+func (w *Workspace) describeEnd(r *repo, kind, key string, role model.BindingRole) model.LeafEnd {
+	end := model.LeafEnd{Service: r.name}
 
 	r.mu.Lock()
 	idx, loaded := r.idx, r.loaded
 	r.mu.Unlock()
 	if !loaded || idx == nil {
-		return
+		return end
 	}
+	end.Indexed = true
+
 	sv, err := idx.ServiceView("")
 	if err != nil {
-		return
+		return end
 	}
 	bindings := sv.Inbound
-	if want == model.RoleOutbound {
+	if role == model.RoleOutbound {
 		bindings = sv.Outbound
 	}
 	for _, b := range bindings {
-		if channelOf(b.Kind) != channelOf(leaf.Kind) || b.Key != leaf.Key {
+		if channelOf(b.Kind) != channelOf(kind) || b.Key != key {
 			continue
 		}
 		// What this end *is* depends on the side: an inbound end hands off to
 		// a handler, an outbound end is the call itself, so the function
 		// containing it is what there is to name.
 		target, title, file, line := b.Target, b.TargetTitle, b.File, b.Line
-		if want == model.RoleOutbound {
+		if role == model.RoleOutbound {
 			target, title = b.Site, b.SiteTitle
 		}
-		leaf.TargetTitle = title
+		end.Title = title
 		// The definition, not the registration that named it: what the
 		// boundary leads to is the function that runs. Falls back to the
 		// registration when it isn't an indexed function, which is what the
@@ -317,10 +321,11 @@ func (w *Workspace) describeFarEnd(leaf *model.LeafInfo) {
 			file, line = f, l
 		}
 		if rel := w.repoRelative(file); rel != "" {
-			leaf.TargetPath = fmt.Sprintf("%s:%d", rel, line)
+			end.Path = fmt.Sprintf("%s:%d", rel, line)
 		}
-		return
+		return end
 	}
+	return end
 }
 
 // SetProtoRoot re-points every repo's declared surface, and rebuilds the

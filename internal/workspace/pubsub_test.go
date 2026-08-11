@@ -155,20 +155,14 @@ func TestEmitLeafOffersTheSubscribersHandler(t *testing.T) {
 	if leaf.Key != "bar-happened" || leaf.Kind != "sdk.event" {
 		t.Fatalf("leaf identifies the far end as %s/%s, want sdk.event/bar-happened", leaf.Kind, leaf.Key)
 	}
-	if len(leaf.Ends) != 1 || leaf.Ends[0] != "subscriber" {
-		t.Errorf("leaf names ends %v, want [subscriber]", leaf.Ends)
+	if len(leaf.Ends) != 1 || leaf.Ends[0].Service != "subscriber" {
+		t.Errorf("leaf names ends %+v, want one, subscriber", leaf.Ends)
 	}
 
 	// A boundary should say where it goes before anyone clicks it, and say it
 	// in terms that name the service — "main.go:11" is true of every repo.
-	if leaf.Service != "subscriber" {
-		t.Errorf("leaf names service %q, want subscriber", leaf.Service)
-	}
-	if leaf.TargetTitle != "handleBar" {
-		t.Errorf("leaf names target %q, want handleBar", leaf.TargetTitle)
-	}
-	if leaf.TargetPath != "subscriber/main.go:10" {
-		t.Errorf("leaf target path %q, want subscriber/main.go:10 — the handler, service-qualified", leaf.TargetPath)
+	if got := leaf.Ends[0]; got.Title != "handleBar" || got.Path != "subscriber/main.go:10" {
+		t.Errorf("the end is %+v, want handleBar at subscriber/main.go:10 — the handler, service-qualified", got)
 	}
 	// The frame carries the same, for its own header.
 	if fr.RelPath != "publisher/main.go" {

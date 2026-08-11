@@ -977,7 +977,7 @@ export function Frame({
           const where =
             ends.length > 1
               ? `${ends.length} services`
-              : leaf.targetPath || leaf.service || "";
+              : (ends[0]?.path ?? ends[0]?.service ?? "");
           // Nothing on the other side — or nothing indexed yet, which looks
           // the same from here and is the weaker claim. It stays a hint rather
           // than becoming a control, since there is nothing to pick.

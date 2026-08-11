@@ -136,30 +136,20 @@ type LeafInfo struct {
 	// end resolves against.
 	Key  string `json:"key,omitempty"`
 	Kind string `json:"kind,omitempty"`
-	// Service, TargetTitle and TargetPath describe the far end when it is
-	// already known — the service comes from the join, which costs nothing,
-	// and the function comes from that service's index, so it is filled only
-	// when that service happens to be indexed already. Resolving it here
-	// otherwise would index another repository as a side effect of drawing a
-	// frame, which is the cost the whole lazy workspace exists to avoid.
-	//
-	// TargetPath is "<service>/<path within it>:<line>", because a bare file
-	// path is the one thing that can't say which service you'd be going to.
-	Service     string `json:"service,omitempty"`
-	TargetTitle string `json:"targetTitle,omitempty"`
-	TargetPath  string `json:"targetPath,omitempty"`
 	// Role is which side of the channel *this* site is on, which is what says
 	// which side to go looking for: an emit leads to subscribers, a subscribe
 	// leads to publishers. Without it the direction was assumed, and the
 	// assumption only held because the first leaf was a gRPC call.
 	Role BindingRole `json:"role,omitempty"`
-	// Ends names every service on the far side, in a fixed order. Cheap: the
-	// names come from the join, where the *code* at each end would cost that
-	// service's index. That split is what lets a boundary offer a choice
-	// without paying for the thing being chosen between until one is picked.
+	// Ends is every service on the far side, in a fixed order.
 	//
-	// The single-end fields above describe Ends[0] when there is exactly one.
-	Ends []string `json:"ends,omitempty"`
+	// The services come from the join and cost nothing. The *code* at an end
+	// lives in that service's index, so it is filled in only for the services
+	// already indexed — reading one here would mean indexing a whole
+	// repository as a side effect of drawing a frame, which is the cost the
+	// lazy workspace exists to avoid. An end with no code named is not a
+	// broken end; it is one nobody has opened yet, and it says so.
+	Ends []LeafEnd `json:"ends,omitempty"`
 	// CrossRepo offers the implementation in another repository: navigate to
 	// it, or splice it in the way an ordinary call expands.
 	CrossRepo bool `json:"crossRepo,omitempty"`
@@ -510,6 +500,21 @@ type Resolution struct {
 	// method has exactly one implementer, which made "the far end" look
 	// singular for as long as gRPC was the only case.
 	Ends []Endpoint `json:"ends,omitempty"`
+}
+
+// LeafEnd is one service on the far side of a boundary, as much as can be said
+// about it for free.
+type LeafEnd struct {
+	Service string `json:"service"`
+	// Title and Path are the code at this end — the handler that runs, or the
+	// function that makes the call. Empty when this service has not been
+	// indexed, which Indexed distinguishes from a service that was read and
+	// had nothing linkable.
+	Title string `json:"title,omitempty"`
+	// Path is "<service>/<path within it>:<line>", so a location says which
+	// service it is in.
+	Path    string `json:"path,omitempty"`
+	Indexed bool   `json:"indexed"`
 }
 
 // Endpoint is one end of a platform edge: a service, and the code in it that
