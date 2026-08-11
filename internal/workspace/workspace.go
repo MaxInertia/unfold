@@ -331,6 +331,21 @@ func (w *Workspace) loadBehind(aliases []string) {
 	if len(aliases) == 0 {
 		return
 	}
+	// Marked as soon as the workspace decides to read them, not when each
+	// goroutine gets its turn. Only BackgroundLoaders run at once, so the rest
+	// are waiting — and a repo that is going to be read reported itself as
+	// idle, with a button offering to do the thing already scheduled. "Not
+	// indexed" has to mean "not unless you ask", or it means nothing.
+	marked := false
+	for _, alias := range aliases {
+		if w.repos[alias].setLoading(true) {
+			marked = true
+		}
+	}
+	if marked {
+		repoChanged()
+	}
+
 	w.bg.Add(1)
 	go func() {
 		defer w.bg.Done()
@@ -343,6 +358,13 @@ func (w *Workspace) loadBehind(aliases []string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				_ = w.load(a)
+				// load clears the mark on every path it takes, but it returns
+				// early for a repo already loaded or already failed — which is
+				// reachable here, since being queued and being loaded by
+				// someone else are not exclusive.
+				if w.repos[a].setLoading(false) {
+					repoChanged()
+				}
 			}(alias)
 		}
 		wg.Wait()
@@ -480,15 +502,13 @@ func (w *Workspace) load(alias string) error {
 	if prevErr != nil {
 		return prevErr // don't retry a repo that already failed to build
 	}
-	r.mu.Lock()
-	r.loading = true
-	r.mu.Unlock()
-	repoChanged()
-	defer func() {
-		r.mu.Lock()
-		r.loading = false
-		r.mu.Unlock()
+	if r.setLoading(true) {
 		repoChanged()
+	}
+	defer func() {
+		if r.setLoading(false) {
+			repoChanged()
+		}
 	}()
 
 	idx := indexer.New()
@@ -522,6 +542,21 @@ func (w *Workspace) load(alias string) error {
 		w.publishBindings(alias, sv)
 	}
 	return nil
+}
+
+// setLoading records whether this repo is being read or waiting to be read,
+// reporting whether that changed. One state for both, because the reader's
+// question is "is something going to happen without me asking" and the answer
+// is yes either way — the difference between queued and running is unfold's
+// business, not theirs.
+func (r *repo) setLoading(v bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.loading == v {
+		return false
+	}
+	r.loading = v
+	return true
 }
 
 // adopt takes over prev's indexes for repositories at the same directory,

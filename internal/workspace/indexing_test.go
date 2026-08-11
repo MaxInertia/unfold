@@ -76,23 +76,41 @@ func TestReposReportIndexingWhileItHappens(t *testing.T) {
 // The hook is what lets the UI show progress without polling for it, so it has
 // to fire on both edges — a start nobody hears about is a spinner that never
 // appears, and an end nobody hears about is one that never stops.
+//
+// Not a count: repos scheduled together are marked together, so how many times
+// it fires is an implementation detail. What must hold is that it fires while
+// work is pending and again once none is.
 func TestRepoChangeFiresOnBothEdges(t *testing.T) {
 	prev := OnRepoChange
 	t.Cleanup(func() { OnRepoChange = prev })
 
 	var mu sync.Mutex
-	calls := 0
+	var sawWork, sawIdle bool
+	var w *Workspace
 	OnRepoChange = func() {
 		mu.Lock()
-		calls++
-		mu.Unlock()
+		defer mu.Unlock()
+		if w == nil {
+			return
+		}
+		busy := false
+		for _, r := range w.Repos() {
+			if r.Indexing {
+				busy = true
+			}
+		}
+		if busy {
+			sawWork = true
+		} else {
+			sawIdle = true
+		}
 	}
 
 	dirs, err := Discover(abs(t, "testdata/ws"))
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	w, err := Open(dirs, abs(t, "testdata/ws/inbox"), abs(t, "testdata/protoroot"), ModeEager)
+	w, err = Open(dirs, abs(t, "testdata/ws/inbox"), abs(t, "testdata/protoroot"), ModeEager)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -100,9 +118,47 @@ func TestRepoChangeFiresOnBothEdges(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// Three repos, each starting and finishing.
-	if want := 2 * len(dirs); calls != want {
-		t.Errorf("hook fired %d times, want %d (start and end for each of %d repos)", calls, want, len(dirs))
+	if !sawWork {
+		t.Error("the hook never fired while work was pending")
+	}
+	if !sawIdle {
+		t.Error("the hook never fired once the work was done")
+	}
+}
+
+// No repository is ever "neither indexed nor being indexed" while it is going
+// to be indexed.
+//
+// Only two repos are read at once, so the others are *waiting* — and a waiting
+// repo reported itself as idle, with a button offering to do the thing already
+// scheduled. It is the state the reader is most likely to see in a big
+// workspace, because it lasts as long as the queue does.
+func TestNoRepoLooksIdleWhileItIsQueued(t *testing.T) {
+	dirs, err := Discover(abs(t, "testdata/pubsub"))
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(dirs) <= BackgroundLoaders+1 {
+		t.Skipf("need more than %d repos to have a queue", BackgroundLoaders+1)
+	}
+
+	w, err := Open(dirs, abs(t, "testdata/pubsub/publisher"), "", ModeEager)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Immediately: the queue is at its longest and nothing behind the first
+	// two loaders has started.
+	for _, r := range w.Repos() {
+		if !r.Indexed && !r.Indexing && r.Error == "" {
+			t.Errorf("%s is queued but reports itself as idle", r.Alias)
+		}
+	}
+
+	w.WaitIndexed()
+	for _, r := range w.Repos() {
+		if r.Indexing {
+			t.Errorf("%s still reports indexing after the work finished", r.Alias)
+		}
 	}
 }
 
