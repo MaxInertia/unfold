@@ -30,3 +30,8 @@ chain.crt
 *.p12
 *.key
 publish-token*
+
+# Per-project state unfold writes where it is run: a picked proto root, the
+# repositories linked by hand. Machine-specific by design, and a run against a
+# fixture leaves one behind — which is how one came to be committed.
+.unfold/
