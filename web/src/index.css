@@ -3484,10 +3484,19 @@ body.resizing {
    level down: something asks, candidates appear, picking one changes the view
    and the list goes away. */
 .boundary {
-  margin: 0.2rem 0 0.35rem;
+  /* Left-aligned with the *code*, not with the gutter. A line's extras start
+     where the line number does, so a block one reaches further left than the
+     text above it — which reads as the picker sitting outside the function
+     rather than inside it.
+     3.2em width + 0.9em padding, the line-number column. */
+  margin: 0.2rem 0 0.35rem 4.1em;
   border-left: 2px solid var(--call-border);
   background: rgba(127, 127, 127, 0.04);
   font-size: 0.75rem;
+  /* And no wider than it needs to be: this is a short list of names, and a
+     band across the frame claims the importance of a frame. */
+  max-width: 32rem;
+  border-radius: 0 4px 4px 0;
 }
 
 .boundary-head {
@@ -3600,6 +3609,12 @@ body.resizing {
 
 .leaf-inlined {
   margin-top: 0.2rem;
+}
+
+/* The hop marker sits with the body it introduces, at the body's own offset —
+   both are one level deeper than the call that led here. */
+.leaf-inlined > .leaf-hop {
+  margin-left: 4.1em;
 }
 
 /* ----- the key index: every channel, and who is on each side ----- */
