@@ -25,7 +25,7 @@ func TestReposReportIndexingWhileItHappens(t *testing.T) {
 	}
 
 	var w *Workspace
-	OnRepoChange = func() {
+	OnRepoChange = func(bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		if w == nil {
@@ -86,8 +86,14 @@ func TestRepoChangeFiresOnBothEdges(t *testing.T) {
 
 	var mu sync.Mutex
 	var sawWork, sawIdle bool
+	var sawFinish bool
 	var w *Workspace
-	OnRepoChange = func() {
+	OnRepoChange = func(finished bool) {
+		if finished {
+			mu.Lock()
+			sawFinish = true
+			mu.Unlock()
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if w == nil {
@@ -123,6 +129,12 @@ func TestRepoChangeFiresOnBothEdges(t *testing.T) {
 	}
 	if !sawIdle {
 		t.Error("the hook never fired once the work was done")
+	}
+	// The finished edge is its own signal: it is what tells a view that the
+	// index can now answer something it couldn't, where a start only says the
+	// workspace is busy.
+	if !sawFinish {
+		t.Error("no finish was reported, so nothing would know to ask again")
 	}
 }
 

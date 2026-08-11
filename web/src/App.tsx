@@ -26,7 +26,7 @@ import { matches } from "./keybindings";
 import { fetchServiceView, fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult, ServiceView as ServiceViewT } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
-import { ReloadProvider, useReloadRevision } from "./reload";
+import { ReloadProvider, useIndexRevision, useReloadRevision } from "./reload";
 import { setBookmarkProject, useBookmarks } from "./bookmarks";
 import { closeRules, toggleRules, useRulesPanel } from "./rules";
 
@@ -50,6 +50,8 @@ function AppShell() {
   const store = useViewStore();
   const symbol = store.symbol;
   const revision = useReloadRevision();
+  // What the index can answer, which a background load finishing also changes.
+  const indexRevision = useIndexRevision();
   const [target, setTarget] = useState<string | null>(null);
   const [rootFrame, setRootFrame] = useState<FrameT | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -215,7 +217,7 @@ function AppShell() {
       });
     // `revision` re-runs this after a watch-mode reindex so the root frame
     // (and, via the remount below, its expanded children) refetch.
-  }, [symbol, revision]);
+  }, [symbol, indexRevision]);
 
   // Health is what tells the UI a platform and a workspace exist, so a single
   // dropped response cost the whole page its zoom levels: it was fetched once,

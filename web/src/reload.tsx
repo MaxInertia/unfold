@@ -12,9 +12,14 @@ const ReloadContext = createContext(0);
 // ticked would be redrawing to report someone else's progress.
 const ReposContext = createContext(0);
 
+// Bumped when a repository finishes indexing — a change in what the index can
+// answer, as opposed to a change in what it is busy with.
+const IndexedContext = createContext(0);
+
 export function ReloadProvider({ children }: { children: ReactNode }) {
   const [revision, setRevision] = useState(0);
   const [repos, setRepos] = useState(0);
+  const [indexed, setIndexed] = useState(0);
   useEffect(() => {
     let es: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -24,6 +29,10 @@ export function ReloadProvider({ children }: { children: ReactNode }) {
       es = new EventSource("/api/events");
       es.addEventListener("reload", () => setRevision((n) => n + 1));
       es.addEventListener("repos", () => setRepos((n) => n + 1));
+      // A repository finished being read, so the index can now say things it
+      // couldn't a moment ago — a boundary whose far service was still
+      // loading reported no far end at all.
+      es.addEventListener("index", () => setIndexed((n) => n + 1));
       es.onerror = () => {
         // The stream dropped (e.g. server restart). Reconnect after a short
         // delay; EventSource also retries on its own, but closing avoids a
@@ -42,7 +51,9 @@ export function ReloadProvider({ children }: { children: ReactNode }) {
   }, []);
   return (
     <ReloadContext.Provider value={revision}>
-      <ReposContext.Provider value={repos}>{children}</ReposContext.Provider>
+      <ReposContext.Provider value={repos}>
+        <IndexedContext.Provider value={indexed}>{children}</IndexedContext.Provider>
+      </ReposContext.Provider>
     </ReloadContext.Provider>
   );
 }
@@ -54,4 +65,11 @@ export function useReloadRevision(): number {
 // Bumped when a repository starts or finishes indexing.
 export function useReposRevision(): number {
   return useContext(ReposContext);
+}
+
+// Everything that can change what the index says: a rebuild, and a repository
+// finishing its own. A view that refetches on this stays honest without
+// redrawing to report someone else's progress.
+export function useIndexRevision(): number {
+  return useContext(ReloadContext) + useContext(IndexedContext);
 }

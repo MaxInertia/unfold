@@ -172,7 +172,17 @@ func (s *Server) NotifyReload() { s.notify("reload") }
 // indexing. Separate from a reload because it is not one: nothing about the
 // code on screen changed, and a view that refetched itself every time a
 // background load ticked would be redrawing to report someone else's progress.
-func (s *Server) NotifyRepos() { s.notify("repos") }
+//
+// A finish is different, though. It changes what the index can *say* — a
+// boundary drawn while a service was still being read reports no far end, and
+// would go on reporting that until something asked again — so it also carries
+// "index", which the views listen to and the progress indicator doesn't.
+func (s *Server) NotifyRepos(finished bool) {
+	s.notify("repos")
+	if finished {
+		s.notify("index")
+	}
+}
 
 // notify wakes every connected /api/events subscriber. Non-blocking: a client
 // whose buffer is full is already behind, and the events are edges on a state
@@ -495,7 +505,7 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 	if !body.Unlink {
 		s.addPending(abs)
 	}
-	s.NotifyRepos()
+	s.NotifyRepos(true)
 
 	go func() {
 		// Nothing named: linking a repository changes no code, so every index
@@ -521,7 +531,7 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 			}
 			log.Printf("unfold: could not open %s: %v", abs, err)
 		}
-		s.NotifyRepos()
+		s.NotifyRepos(true)
 		s.NotifyReload()
 	}()
 

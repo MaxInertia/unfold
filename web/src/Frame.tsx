@@ -29,7 +29,7 @@ import {
   type FramePath,
 } from "./viewState";
 import { useBookmarks } from "./bookmarks";
-import { useReloadRevision } from "./reload";
+import { useIndexRevision } from "./reload";
 import { RecognizeCall } from "./RecognizeCall";
 import { BoundaryPicker } from "./LeafCard";
 import { CallersPanel } from "./Callers";
@@ -103,8 +103,9 @@ export function Frame({
   // and the body is fetched to satisfy it.
   const [leafBodies, setLeafBodies] = useState<Map<CallID, FrameT>>(new Map());
   const settings = useSettings();
-  // A rebuilt index is a reason to refetch a body, not to throw the view away.
-  const revision = useReloadRevision();
+  // A rebuilt index — or a repository finishing its own — is a reason to
+  // refetch a body, not to throw the view away.
+  const revision = useIndexRevision();
   const depth = path.length;
   const [typeCard, setTypeCard] = useState<{
     x: number;

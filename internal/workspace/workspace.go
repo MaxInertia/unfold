@@ -123,13 +123,19 @@ type Workspace struct {
 // a UI can show what is happening without polling for it. Package-level for the
 // same reason RulePaths is: it is a process-wide wiring, set once at startup.
 //
+// finished distinguishes the two edges, because they mean different things to
+// a reader. A start changes only what the workspace is *doing*; a finish
+// changes what it can *say* — a boundary drawn while a service was still being
+// read reports no end at all, and would keep reporting that forever if nothing
+// told the view to ask again.
+//
 // Called from whichever goroutine changed the state, including background
 // loaders, so it must not block.
-var OnRepoChange func()
+var OnRepoChange func(finished bool)
 
-func repoChanged() {
+func repoChanged(finished bool) {
 	if OnRepoChange != nil {
-		OnRepoChange()
+		OnRepoChange(finished)
 	}
 }
 
@@ -343,7 +349,7 @@ func (w *Workspace) loadBehind(aliases []string) {
 		}
 	}
 	if marked {
-		repoChanged()
+		repoChanged(false)
 	}
 
 	w.bg.Add(1)
@@ -363,7 +369,7 @@ func (w *Workspace) loadBehind(aliases []string) {
 				// reachable here, since being queued and being loaded by
 				// someone else are not exclusive.
 				if w.repos[a].setLoading(false) {
-					repoChanged()
+					repoChanged(true)
 				}
 			}(alias)
 		}
@@ -503,11 +509,11 @@ func (w *Workspace) load(alias string) error {
 		return prevErr // don't retry a repo that already failed to build
 	}
 	if r.setLoading(true) {
-		repoChanged()
+		repoChanged(false)
 	}
 	defer func() {
 		if r.setLoading(false) {
-			repoChanged()
+			repoChanged(true)
 		}
 	}()
 
