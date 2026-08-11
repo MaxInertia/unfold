@@ -23,7 +23,7 @@ import {
 import { useBookmarks } from "./bookmarks";
 import { useReloadRevision } from "./reload";
 import { RecognizeCall } from "./RecognizeCall";
-import { LeafCard } from "./LeafCard";
+import { BoundaryPicker } from "./LeafCard";
 import { CallersPanel } from "./Callers";
 import { depthColor } from "./StickyHeaders";
 import { useSettings } from "./settings";
@@ -74,7 +74,11 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   // affordance here is on demand (a type card on hover, callers on click, the
   // impl switcher once expanded), and a band of chrome between two lines of
   // code was the one that wasn't.
-  const [boundariesOpen, setBoundariesOpen] = useState<Set<CallID>>(new Set());
+  const [picking, setPicking] = useState<Set<CallID>>(new Set());
+  // Far-side bodies, held here rather than in the slice for the same reason
+  // loaded children are: the slice carries the intent (this boundary is open),
+  // and the body is fetched to satisfy it.
+  const [leafBodies, setLeafBodies] = useState<Map<CallID, FrameT>>(new Map());
   const settings = useSettings();
   // A rebuilt index is a reason to refetch a body, not to throw the view away.
   const revision = useReloadRevision();
@@ -755,7 +759,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     for (const call of calls) {
       // A rule-marked boundary renders instead of an expansion: the point is
       // that expanding into the transport is not what you wanted.
-      if (call.leaf && boundaryShown(call)) {
+      if (call.leaf) {
         // The spliced body gets its own slot in the slice rather than sharing
         // the call's. They are different subtrees: expanding the call opens
         // the callee here, and the leaf opens the implementation in another
@@ -763,23 +767,44 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
         // without a slot at all the remote frame sat at a path the store had
         // no entry for, so every expansion inside it was silently dropped.
         const slot = leafSlot(call.id);
-        extras.push(
-          <LeafCard
-            key={`leaf:${call.id}`}
-            leaf={call.leaf}
-            open={!!slice.expansions[slot]}
-            onInline={() => store.expand(path, slot, 0)}
-            onHide={() => store.collapse(path, slot)}
-            onOpen={(id) => store.setSymbol(id)}
-            renderFrame={(f) => (
+        const body = leafBodies.get(call.id);
+        // The list, only while a choice is being made. Picking closes it, the
+        // way picking a caller closes the callers panel — what you asked for
+        // is on screen, and the thing that asked has no reason to still be.
+        if (picking.has(call.id) && !slice.expansions[slot]) {
+          extras.push(
+            <BoundaryPicker
+              key={`pick:${call.id}`}
+              leaf={call.leaf}
+              onClose={() => closePicker(call.id)}
+              onOpenRoot={(id) => {
+                closePicker(call.id);
+                store.setSymbol(id);
+              }}
+              onInline={(f) => {
+                closePicker(call.id);
+                setLeafBodies((m) => new Map(m).set(call.id, f));
+                store.expand(path, slot, 0);
+              }}
+            />,
+          );
+        }
+        if (slice.expansions[slot] && body) {
+          extras.push(
+            <div key={`leaf:${call.id}`} className="leaf-inlined inline-child">
+              {/* The hop stays named even with the far side spliced in:
+                  execution left the process, and a body that reads as
+                  continuous would be saying otherwise. */}
+              <div className="leaf-hop">execution leaves this process here</div>
               <Frame
-                frame={f}
+                frame={body}
                 path={[...path, { callId: slot, choice: 0 }]}
+                onClose={() => store.collapse(path, slot)}
                 ancestors={[...ancestors, frame.id]}
               />
-            )}
-          />,
-        );
+            </div>,
+          );
+        }
       }
       if (call.kind === "fanout") {
         if (isFanoutOpen(slice, call.id)) {
@@ -816,19 +841,33 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     return extras;
   }
 
-  function toggleBoundary(id: CallID) {
-    setBoundariesOpen((open) => {
+  function closePicker(id: CallID) {
+    setPicking((open) => {
+      if (!open.has(id)) return open;
       const next = new Set(open);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.delete(id);
       return next;
     });
   }
 
-  // A boundary is showing when it was opened, or when its far side is spliced
-  // in — the card is what offers to hide that again, so it can't be gone.
+  // The hint is the whole control: it opens the list of far ends, and once one
+  // is spliced in it closes that again. Two states, one place — where before
+  // the bar stayed and the hint only toggled it.
+  function toggleBoundary(call: CallSite) {
+    const slot = leafSlot(call.id);
+    if (slice.expansions[slot]) {
+      store.collapse(path, slot);
+      return;
+    }
+    if (picking.has(call.id)) {
+      closePicker(call.id);
+      return;
+    }
+    setPicking((open) => new Set(open).add(call.id));
+  }
+
   function boundaryShown(call: CallSite): boolean {
-    return boundariesOpen.has(call.id) || !!slice.expansions[leafSlot(call.id)];
+    return picking.has(call.id) || !!slice.expansions[leafSlot(call.id)];
   }
 
   // The hint that lives at the end of the line: what this call crosses into,
@@ -846,6 +885,20 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             ends.length > 1
               ? `${ends.length} services`
               : leaf.targetPath || leaf.service || "";
+          // Nothing on the other side — or nothing indexed yet, which looks
+          // the same from here and is the weaker claim. It stays a hint rather
+          // than becoming a control, since there is nothing to pick.
+          if (ends.length === 0) {
+            return (
+              <span
+                key={`hint:${call.id}`}
+                className="leaf-hint leaf-hint--empty"
+                title={`nothing indexed in this workspace is on the other side of ${leaf.kind ?? "this key"} ${leaf.key ?? ""} — an end is only known once its service is indexed`}
+              >
+                {leaf.role === "inbound" ? "no indexed emitter" : "no indexed receiver"}
+              </span>
+            );
+          }
           return (
             <button
               key={`hint:${call.id}`}
@@ -853,7 +906,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               className={`leaf-hint${shown ? " leaf-hint--open" : ""}`}
               onClick={(e) => {
                 e.stopPropagation();
-                toggleBoundary(call.id);
+                toggleBoundary(call);
               }}
               title={[
                 leaf.label || leaf.key,

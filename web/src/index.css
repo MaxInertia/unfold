@@ -3479,62 +3479,114 @@ body.resizing {
   margin: 0.25rem 0 0.4rem;
 }
 
-.leaf-bar {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0.2rem 0.45rem;
-  border: 1px dashed var(--call-border);
-  border-radius: 6px;
-  background: var(--call-bg);
-  font-size: 0.72rem;
+/* The list of far ends, opened from a hint and gone once one is picked.
+   Modelled on the callers panel, which answers the same kind of question a
+   level down: something asks, candidates appear, picking one changes the view
+   and the list goes away. */
+.boundary {
+  margin: 0.2rem 0 0.35rem;
+  border-left: 2px solid var(--call-border);
+  background: rgba(127, 127, 127, 0.04);
+  font-size: 0.75rem;
 }
 
-.leaf-label {
+.boundary-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.2rem 0.5rem;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.boundary-title {
   font-weight: 600;
 }
 
-/* Several far ends are one boundary with a choice, so they get a picker on the
-   bar rather than a row each — the same shape the impl switcher uses. */
-.leaf-pick {
-  font: inherit;
-  font-size: 0.68rem;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--card-border);
-  border-radius: 4px;
-  padding: 0 0.2rem;
-}
-
-.leaf-count {
+.boundary-hint,
+.boundary-note {
   color: var(--muted);
-  font-size: 0.66rem;
+  font-size: 0.68rem;
 }
 
-/* Where the boundary leads, and the only thing at the end of the bar: the
-   key it used to sit beside is already in the line above it. */
-.leaf-dest {
+.boundary-note--error {
+  color: var(--error-fg, #b91c1c);
+  padding: 0.2rem 0.5rem;
+}
+
+.boundary-close {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.7rem;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.boundary-close:hover {
+  color: var(--fg);
+}
+
+.boundary-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.boundary-end {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding-right: 0.4rem;
+}
+
+.boundary-end:hover {
+  background: var(--call-bg);
+}
+
+.boundary-pick {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  text-align: left;
+  font: inherit;
+  font-size: 0.75rem;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+
+.boundary-service {
+  font-weight: 600;
+}
+
+.boundary-target {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+}
+
+.boundary-loc {
   color: var(--muted);
   font-size: 0.68rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  margin-left: auto;
 }
 
-.leaf-action {
+.boundary-alt {
+  font: inherit;
+  font-size: 0.66rem;
   background: none;
   border: 1px solid var(--card-border);
   border-radius: 4px;
   color: var(--muted);
-  font: inherit;
-  font-size: 0.68rem;
   padding: 0 0.3rem;
   cursor: pointer;
 }
 
-.leaf-action:hover {
+.boundary-alt:hover {
   color: var(--fg);
-  border-color: var(--call-border);
 }
 
 /* Even inlined, the hop stays named: execution left the process, and a
@@ -3913,16 +3965,6 @@ body.resizing {
   overflow: auto;
 }
 
-/* A boundary with nothing on the other side, or nothing openable at it. Said
-   on the bar, where a button used to be — pressing one that can't work and
-   reading the failure afterwards is a worse way to learn the same thing. */
-.leaf-nowhere {
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-style: italic;
-  cursor: help;
-}
-
 /* ----- boundary hints: what a call crosses into, said at the end of its line -----
 
    The resting state of a recognized boundary. It used to be a bordered,
@@ -3973,12 +4015,17 @@ body.resizing {
   opacity: 0.7;
 }
 
-/* Opened from a hint, so it no longer needs to announce itself: the border and
-   fill are what made it read as chrome dropped into the code. */
-.leaf-bar {
-  border: none;
-  border-left: 2px solid var(--call-border);
-  border-radius: 0;
+/* A boundary with nothing on the other side. It stays a hint rather than
+   becoming a button, because there is nothing to open: pressing something that
+   can't work and reading the failure afterwards is a worse way to learn the
+   same thing. */
+.leaf-hint--empty {
+  cursor: help;
+  font-style: italic;
+  border-color: transparent;
+}
+
+.leaf-hint--empty:hover {
   background: none;
-  padding-left: 0.5rem;
+  border-color: transparent;
 }
