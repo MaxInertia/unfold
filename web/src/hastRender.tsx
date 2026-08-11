@@ -15,6 +15,9 @@ interface RenderCtx {
   // Hooks called by the walker for each emit.
   lineAction: (idx: number) => LineAction;
   renderLineExtras: (lineIdx: number) => ReactNode;
+  // Rendered inside the line's own row, after the code — the space past the
+  // end of a line, where a hint can sit without pushing the code around.
+  renderLineTrailer: (lineIdx: number) => ReactNode;
   renderCallSpan: (
     call: CallSite,
     children: ReactNode,
@@ -32,6 +35,7 @@ export interface RenderOptions {
   calls: CallSite[];
   lineAction: (idx: number) => LineAction;
   renderLineExtras: (lineIdx: number) => ReactNode;
+  renderLineTrailer?: (lineIdx: number) => ReactNode;
   renderCallSpan: (
     call: CallSite,
     children: ReactNode,
@@ -58,6 +62,7 @@ export function renderHast(opts: RenderOptions): ReactNode {
     lineCursor: { value: 0 },
     lineAction: opts.lineAction,
     renderLineExtras: opts.renderLineExtras,
+    renderLineTrailer: opts.renderLineTrailer ?? (() => null),
     renderCallSpan: opts.renderCallSpan,
     renderLineGutter: opts.renderLineGutter,
     renderFoldPlaceholder: opts.renderFoldPlaceholder,
@@ -154,6 +159,7 @@ function walkCode(node: Element, ctx: RenderCtx, key: string): ReactNode {
         >
           {ctx.renderLineGutter(lineIdx)}
           <span {...lineProps}>{lineChildren}</span>
+          {ctx.renderLineTrailer(lineIdx)}
         </div>,
       );
       const extras = ctx.renderLineExtras(lineIdx);

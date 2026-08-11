@@ -69,6 +69,12 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const fanoutLoading = useRef<Set<string>>(new Set());
   const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
   const [callersOpen, setCallersOpen] = useState(false);
+  // Which boundaries have been opened. A boundary rests as a hint at the end
+  // of its line and only becomes a card when asked for — every other
+  // affordance here is on demand (a type card on hover, callers on click, the
+  // impl switcher once expanded), and a band of chrome between two lines of
+  // code was the one that wasn't.
+  const [boundariesOpen, setBoundariesOpen] = useState<Set<CallID>>(new Set());
   const settings = useSettings();
   // A rebuilt index is a reason to refetch a body, not to throw the view away.
   const revision = useReloadRevision();
@@ -749,7 +755,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     for (const call of calls) {
       // A rule-marked boundary renders instead of an expansion: the point is
       // that expanding into the transport is not what you wanted.
-      if (call.leaf) {
+      if (call.leaf && boundaryShown(call)) {
         // The spliced body gets its own slot in the slice rather than sharing
         // the call's. They are different subtrees: expanding the call opens
         // the callee here, and the leaf opens the implementation in another
@@ -808,6 +814,65 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       }
     }
     return extras;
+  }
+
+  function toggleBoundary(id: CallID) {
+    setBoundariesOpen((open) => {
+      const next = new Set(open);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // A boundary is showing when it was opened, or when its far side is spliced
+  // in — the card is what offers to hide that again, so it can't be gone.
+  function boundaryShown(call: CallSite): boolean {
+    return boundariesOpen.has(call.id) || !!slice.expansions[leafSlot(call.id)];
+  }
+
+  // The hint that lives at the end of the line: what this call crosses into,
+  // said in the space past the code rather than in a block beneath it.
+  function renderLineTrailer(lineIdx: number): ReactNode {
+    const calls = (lineCallsCache.get(lineIdx) ?? []).filter((c) => c.leaf);
+    if (calls.length === 0) return null;
+    return (
+      <span className="line-hints">
+        {calls.map((call) => {
+          const leaf = call.leaf!;
+          const shown = boundaryShown(call);
+          const ends = leaf.ends ?? [];
+          const where =
+            ends.length > 1
+              ? `${ends.length} services`
+              : leaf.targetPath || leaf.service || "";
+          return (
+            <button
+              key={`hint:${call.id}`}
+              type="button"
+              className={`leaf-hint${shown ? " leaf-hint--open" : ""}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleBoundary(call.id);
+              }}
+              title={[
+                leaf.label || leaf.key,
+                where && `→ ${where}`,
+                leaf.key && `${leaf.kind ?? "key"} ${leaf.key}`,
+                `recognized by rule ${leaf.rule}`,
+              ]
+                .filter(Boolean)
+                .join(" — ")}
+            >
+              {leaf.label || leaf.key || "boundary"}
+              <span className="leaf-hint-chevron" aria-hidden="true">
+                {shown ? "⌃" : "⌄"}
+              </span>
+            </button>
+          );
+        })}
+      </span>
+    );
   }
 
   function renderLineExtras(lineIdx: number): ReactNode {
@@ -1131,6 +1196,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               calls: frame.calls,
               renderCallSpan,
               renderLineExtras: (idx) => renderLineExtras(idx),
+              renderLineTrailer: (idx) => renderLineTrailer(idx),
               renderLineGutter,
               renderFoldPlaceholder,
               lineAction,
