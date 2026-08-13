@@ -20,6 +20,25 @@ func consumeTwice(c *shared.Client) {
 func handleQuxOne(payload []byte) error { return nil }
 func handleQuxTwo(payload []byte) error { return nil }
 
+// A handler reached through an interface: the registration names
+// deps.Handler.Handle, and what actually runs is whichever implementation was
+// injected.
+type QuuxHandler interface {
+	Handle(payload []byte) error
+}
+
+type quuxLogger struct{}
+
+func (quuxLogger) Handle(payload []byte) error { return nil }
+
+type deps struct{ Handler QuuxHandler }
+
+var wiring = deps{Handler: quuxLogger{}}
+
+func consumeViaInterface(c *shared.Client) {
+	_ = c.Subscribe(shared.QuuxEventDefn, wiring.Handler.Handle)
+}
+
 // The handler written where it is registered, rather than named elsewhere.
 func consumeInline(c *shared.Client) {
 	_ = c.Subscribe(shared.BazEventDefn, func(payload []byte) error {
@@ -31,4 +50,5 @@ func main() {
 	consumeToo(&shared.Client{})
 	consumeInline(&shared.Client{})
 	consumeTwice(&shared.Client{})
+	consumeViaInterface(&shared.Client{})
 }

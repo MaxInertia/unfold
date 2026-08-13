@@ -91,7 +91,11 @@ export function BoundaryPicker({
           {ends.length > 1 && ` · ${ends.length}`}
         </span>
         <span className="boundary-hint">
-          {ends.length > 1 ? "pick one to splice it in" : "splice it in where the call is"}
+          {ends.length > 1
+            ? ends.some((e) => e.viaInterface)
+              ? "one of these runs — pick one to splice it in"
+              : "pick one to splice it in"
+            : "splice it in where the call is"}
         </span>
         <button type="button" className="boundary-close" onClick={onClose} aria-label="close">
           ✕
@@ -118,6 +122,14 @@ export function BoundaryPicker({
               {/* Said, not glossed over: this is the function the handler is
                   registered in, because the handler itself is written inline
                   and has no name to point at. */}
+              {end.viaInterface && (
+                <span
+                  className="boundary-loc"
+                  title="the handler is named through an interface — this is one of its implementations, and which one runs is a runtime fact"
+                >
+                  impl
+                </span>
+              )}
               {end.viaSite && (
                 <span
                   className="boundary-loc"

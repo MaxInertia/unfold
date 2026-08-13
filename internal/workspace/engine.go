@@ -287,14 +287,31 @@ func (w *Workspace) describeFarEnd(leaf *model.LeafInfo) {
 // then the best available answer and a true one: the body is inside it. The
 // alternative was reporting an end with no code, which is what a reader was
 // being told about a handler sitting right there in the source.
-func endpointCode(b model.Binding, role model.BindingRole) (target model.TargetID, title string, viaSite bool) {
+type endpointCode struct {
+	target       model.TargetID
+	title        string
+	viaSite      bool
+	viaInterface bool
+}
+
+func endpointCodes(b model.Binding, role model.BindingRole) []endpointCode {
 	if role == model.RoleOutbound {
-		return b.Site, b.SiteTitle, false
+		return []endpointCode{{target: b.Site, title: b.SiteTitle}}
 	}
 	if b.Target != "" {
-		return b.Target, b.TargetTitle, false
+		return []endpointCode{{target: b.Target, title: b.TargetTitle}}
 	}
-	return b.Site, b.SiteTitle, true
+	// A handler named through an interface has no single body. The
+	// implementations are what may run — the same answer an interface call
+	// site gets, and enumerating beats both guessing and dropping the link.
+	if len(b.Candidates) > 0 {
+		out := make([]endpointCode, 0, len(b.Candidates))
+		for _, c := range b.Candidates {
+			out = append(out, endpointCode{target: c.TargetID, title: c.Label, viaInterface: true})
+		}
+		return out
+	}
+	return []endpointCode{{target: b.Site, title: b.SiteTitle, viaSite: true}}
 }
 
 // describeEnds says as much about a service's ends of a key as can be said for
@@ -325,21 +342,25 @@ func (w *Workspace) describeEnds(r *repo, kind, key string, role model.BindingRo
 		if channelOf(b.Kind) != channelOf(kind) || b.Key != key {
 			continue
 		}
-		end := model.LeafEnd{Service: r.name, Indexed: true}
-		target, title, viaSite := endpointCode(b, role)
-		end.Title, end.ViaSite = title, viaSite
-		file, line := b.File, b.Line
-		// The definition, not the registration that named it: what the
-		// boundary leads to is the function that runs. Falls back to the
-		// registration when it isn't an indexed function, which is what the
-		// hop itself would land on too.
-		if f, l, ok := idx.Position(target); ok {
-			file, line = f, l
+		for _, code := range endpointCodes(b, role) {
+			end := model.LeafEnd{
+				Service:      r.name,
+				Indexed:      true,
+				Title:        code.title,
+				ViaSite:      code.viaSite,
+				ViaInterface: code.viaInterface,
+			}
+			file, line := b.File, b.Line
+			// The definition, not the registration that named it: what the
+			// boundary leads to is the function that runs.
+			if f, l, ok := idx.Position(code.target); ok {
+				file, line = f, l
+			}
+			if rel := w.repoRelative(file); rel != "" {
+				end.Path = fmt.Sprintf("%s:%d", rel, line)
+			}
+			out = append(out, end)
 		}
-		if rel := w.repoRelative(file); rel != "" {
-			end.Path = fmt.Sprintf("%s:%d", rel, line)
-		}
-		out = append(out, end)
 	}
 	if len(out) == 0 {
 		// The join says this service is an end, and its own view doesn't show
@@ -548,22 +569,30 @@ func (w *Workspace) endpoints(alias, kind, key string, role model.BindingRole) (
 		if channelOf(b.Kind) != channelOf(kind) || b.Key != key {
 			continue
 		}
-		end := model.Endpoint{Repo: alias, Service: r.name, Role: role, Indexed: true}
-		target, title, viaSite := endpointCode(b, role)
-		end.Target = model.TargetID(w.qualify(alias, string(target)))
-		end.Title, end.ViaSite = title, viaSite
-		file, line := b.File, b.Line
-		if f, l, ok := idx.Position(target); ok {
-			file, line = f, l
+		for _, code := range endpointCodes(b, role) {
+			end := model.Endpoint{
+				Repo:         alias,
+				Service:      r.name,
+				Role:         role,
+				Indexed:      true,
+				Target:       model.TargetID(w.qualify(alias, string(code.target))),
+				Title:        code.title,
+				ViaSite:      code.viaSite,
+				ViaInterface: code.viaInterface,
+			}
+			file, line := b.File, b.Line
+			if f, l, ok := idx.Position(code.target); ok {
+				file, line = f, l
+			}
+			if rel := w.repoRelative(file); rel != "" {
+				end.Path = fmt.Sprintf("%s:%d", rel, line)
+			}
+			out = append(out, end)
 		}
-		if rel := w.repoRelative(file); rel != "" {
-			end.Path = fmt.Sprintf("%s:%d", rel, line)
-		}
-		out = append(out, end)
 
 		// Candidates and staleness answer for the first match, which is what
 		// the single-answer fields describe.
-		if len(out) == 1 {
+		if len(out) > 0 && len(candidates) == 0 && !stale {
 			stale = b.Stale
 			for _, c := range b.Candidates {
 				candidates = append(candidates, model.Candidate{

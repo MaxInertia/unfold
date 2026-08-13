@@ -314,6 +314,10 @@ func (e *Evaluator) apply(r Rule, c platform.Call) (model.Binding, bool) {
 	if r.Emit.Handler != "" {
 		if n, ok := argIndex(r.Emit.Handler); ok && n < len(c.Args) {
 			b.Target = c.Args[n].Target
+			// A handler named through an interface has no single target; the
+			// implementations are what may run, and dropping them left the
+			// binding pointing at a method with no body.
+			b.Candidates = c.Args[n].Candidates
 		}
 	}
 	return b, true

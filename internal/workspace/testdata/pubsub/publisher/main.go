@@ -18,9 +18,14 @@ func publishQux(c *shared.Client) {
 	_ = c.Emit(shared.QuxEventDefn, nil)
 }
 
+func publishQuux(c *shared.Client) {
+	_ = c.Emit(shared.QuuxEventDefn, nil)
+}
+
 func main() {
 	publish(&shared.Client{})
 	publishBar(&shared.Client{})
 	publishBaz(&shared.Client{})
 	publishQux(&shared.Client{})
+	publishQuux(&shared.Client{})
 }

@@ -520,6 +520,10 @@ type LeafEnd struct {
 	// the handler is written inline at the registration. The body is in there;
 	// it just has no name, and saying so beats saying nothing.
 	ViaSite bool `json:"viaSite,omitempty"`
+	// ViaInterface marks an implementation of a handler named through an
+	// interface. Execution reaches exactly one of them, and which one is a
+	// runtime fact — so they are offered, not asserted.
+	ViaInterface bool `json:"viaInterface,omitempty"`
 }
 
 // Endpoint is one end of a platform edge: a service, and the code in it that
@@ -544,6 +548,9 @@ type Endpoint struct {
 	// ViaSite marks an end named by its registration rather than by a handler
 	// of its own. See LeafEnd.ViaSite.
 	ViaSite bool `json:"viaSite,omitempty"`
+	// ViaInterface marks one implementation of an interface-typed handler.
+	// See LeafEnd.ViaInterface.
+	ViaInterface bool `json:"viaInterface,omitempty"`
 }
 
 // Channel is one key and the services standing at each end of it: who sends,

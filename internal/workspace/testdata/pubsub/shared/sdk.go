@@ -35,6 +35,14 @@ var QuxEventDefn = EventDefinition{
 	Description: "a qux happened",
 }
 
+// Quux is subscribed with a method value reached through an *interface* field,
+// which is how a handler arrives when it is injected rather than defined next
+// to its registration.
+var QuuxEventDefn = EventDefinition{
+	ID:          "quux-happened",
+	Description: "a quux happened",
+}
+
 type Client struct{}
 
 // With returns the client again, so a registration can be written as a chain —

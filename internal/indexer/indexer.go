@@ -1453,6 +1453,13 @@ func (i *Indexer) argFacts(info *types.Info, e ast.Expr) platform.Arg {
 		if sel, ok := info.Selections[v]; ok {
 			if f, ok := sel.Obj().(*types.Func); ok {
 				a.Target = TargetID(f.FullName())
+				// Through an interface, that target is the interface's own
+				// method — no body, so nothing to open. What can run is the
+				// set of implementations, which is the same answer an
+				// interface *call* site gets.
+				if isInterface(sel.Recv()) {
+					a.Candidates = i.candidatesFor(sel.Recv(), f.Name())
+				}
 			}
 		} else if f, ok := info.Uses[v.Sel].(*types.Func); ok {
 			a.Target = TargetID(f.FullName())

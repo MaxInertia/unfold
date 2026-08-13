@@ -48,6 +48,12 @@ type Arg struct {
 	// the confidence badge, and the one case where losing it would matter is
 	// a key that gets reassigned, which is exactly when the answer is wrong.
 	Inferred bool
+	// Candidates are the implementations this argument may name, when it is a
+	// method value reached through an interface — `deps.Handler.Handle`, which
+	// is how a handler arrives when it is injected rather than written beside
+	// its registration. The interface's own method has no body, so a binding
+	// that took only Target came back pointing at nothing.
+	Candidates []model.Candidate
 	// Fields are the strings the argument's fields were initialized with,
 	// when it names a package-level struct variable passed whole:
 	// `Emit(ctx, events.FooEventDefn, nil)` against

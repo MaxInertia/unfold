@@ -50,6 +50,9 @@ export interface LeafEnd {
   // Named by the function that registers it rather than by a handler of its
   // own — what there is to point at when the handler is written inline.
   viaSite?: boolean;
+  // One implementation of a handler named through an interface. Exactly one of
+  // them runs, and which is a runtime fact — so they are offered, not asserted.
+  viaInterface?: boolean;
 }
 
 export interface Candidate {

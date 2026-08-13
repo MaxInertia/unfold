@@ -485,3 +485,50 @@ func keysOfBool(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// A handler reached through an interface.
+//
+// `wiring.Handler.Handle` names an *interface* method, which has no body and so
+// is not an indexed function. The binding came back with nothing to open, and
+// the boundary either said it couldn't identify the code or — once inline
+// handlers fell back to their registration — quietly showed the registering
+// function instead of the handler that runs. Both are wrong in the same way:
+// the implementations are known, and enumerating them is the honest answer, as
+// it already is for an interface call site.
+func TestInterfaceHandlerResolvesToItsImplementations(t *testing.T) {
+	w := bothWays(t, "publisher")
+
+	res, err := w.Resolve("pubsub.topic", "quux-happened", model.RoleOutbound)
+	if err != nil {
+		t.Fatalf("Resolve(quux-happened): %v", err)
+	}
+	if len(res.Ends) == 0 {
+		t.Fatal("no end for a key whose subscriber is injected through an interface")
+	}
+
+	var opened []string
+	for _, e := range res.Ends {
+		opened = append(opened, e.Title)
+		if e.Target == "" {
+			t.Errorf("%s: nothing to open: %+v", e.Service, e)
+		}
+	}
+	// The implementation, not the interface method (no body) and not the
+	// function the registration sits in (that is the fallback for a handler
+	// with no name at all).
+	found := false
+	for _, title := range opened {
+		if strings.Contains(title, "Handle") && !strings.Contains(title, "consume") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("opens %v; want the implementation of QuuxHandler.Handle", opened)
+	}
+
+	for _, e := range res.Ends {
+		if _, err := w.Frame(e.Target); err != nil {
+			t.Errorf("%s: target must render: %v", e.Title, err)
+		}
+	}
+}
