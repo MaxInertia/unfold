@@ -20,6 +20,21 @@ var BarEventDefn = EventDefinition{
 	Description: "a bar happened",
 }
 
+// Baz is subscribed with a handler written inline, which is how a lot of real
+// registrations look — and an anonymous function is not an indexed function,
+// so there is no named body to point at.
+var BazEventDefn = EventDefinition{
+	ID:          "baz-happened",
+	Description: "a baz happened",
+}
+
+// Qux is registered twice inside one service, which is a different shape from
+// two services each registering once.
+var QuxEventDefn = EventDefinition{
+	ID:          "qux-happened",
+	Description: "a qux happened",
+}
+
 type Client struct{}
 
 // With returns the client again, so a registration can be written as a chain —

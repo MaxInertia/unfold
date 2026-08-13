@@ -962,7 +962,10 @@ export function Frame({
       void (async () => {
         try {
           const res = await resolveBinding(leaf.kind ?? "grpc.method", leaf.key ?? "", leaf.role);
-          const match = (res.ends ?? []).find((e) => e.service === end.service) ?? res.ends?.[0];
+          // By position first: a service can be an end more than once, so its
+          // name doesn't identify which registration was open.
+          const resolved = res.ends ?? [];
+          const match = resolved[want.choice] ?? resolved.find((e) => e.service === end.service) ?? resolved[0];
           const target = match?.target ?? res.target;
           if (!target || !alive) return;
           const body = await fetchBodyByTarget(target);

@@ -37,10 +37,13 @@ export function BoundaryPicker({
   const [error, setError] = useState<string | null>(null);
   const ends = leaf.ends ?? [];
 
-  async function endFor(service: string): Promise<Endpoint | null> {
+  // Matched by position, not by service: one service can be an end more than
+  // once — two subscriptions to the same event, in the same file — and picking
+  // by name would collapse them onto whichever came first.
+  async function endFor(index: number): Promise<Endpoint | null> {
     const res = await resolveBinding(leaf.kind ?? "grpc.method", leaf.key ?? "", leaf.role);
-    const ends = res.ends ?? [];
-    const end = ends.find((e) => e.service === service) ?? ends[0] ?? null;
+    const resolved = res.ends ?? [];
+    const end = resolved[index] ?? resolved.find((e) => e.service === ends[index]?.service) ?? resolved[0] ?? null;
     if (end) return end;
     // An engine that predates Ends still answers with the single-end fields.
     if (res.target) {
@@ -56,12 +59,12 @@ export function BoundaryPicker({
     return null;
   }
 
-  async function act(service: string, how: "inline" | "open") {
-    const endIndex = Math.max(0, ends.findIndex((e) => e.service === service));
-    setBusy(`${how}:${service}`);
+  async function act(index: number, how: "inline" | "open") {
+    const service = ends[index]?.service ?? "";
+    setBusy(`${how}:${index}`);
     setError(null);
     try {
-      const end = await endFor(service);
+      const end = await endFor(index);
       if (!end?.target) {
         setError(
           `${service} is on the other side of this key, but unfold could not identify the code`,
@@ -72,7 +75,7 @@ export function BoundaryPicker({
         onOpenRoot(end.target);
         return;
       }
-      onInline(await fetchBodyByTarget(end.target), endIndex);
+      onInline(await fetchBodyByTarget(end.target), index);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -96,13 +99,15 @@ export function BoundaryPicker({
       </div>
       {error && <div className="boundary-note boundary-note--error">{error}</div>}
       <ul className="boundary-list">
-        {ends.map((end) => (
-          <li key={end.service} className="boundary-end">
+        {ends.map((end, index) => (
+          // Keyed by position: a service can appear more than once, so its
+          // name is not an identity here.
+          <li key={`${end.service}:${end.title ?? ""}:${index}`} className="boundary-end">
             <button
               type="button"
               className="boundary-pick"
               disabled={!!busy}
-              onClick={() => void act(end.service, "inline")}
+              onClick={() => void act(index, "inline")}
               title={`splice ${end.service}'s side of ${leaf.key ?? "this key"} in here`}
             >
               <span className="boundary-service">{end.service}</span>
@@ -110,22 +115,33 @@ export function BoundaryPicker({
                   this for the rest would mean indexing every service on the
                   other side just to draw a list of them. */}
               {end.title && <span className="boundary-target">{end.title}</span>}
+              {/* Said, not glossed over: this is the function the handler is
+                  registered in, because the handler itself is written inline
+                  and has no name to point at. */}
+              {end.viaSite && (
+                <span
+                  className="boundary-loc"
+                  title="the handler is written inline at the registration, so this opens the function containing it"
+                >
+                  inline handler
+                </span>
+              )}
               {end.path && <span className="boundary-loc">{end.path}</span>}
               {!end.indexed && (
                 <span className="boundary-loc" title="this service hasn't been indexed yet — picking it will read it first">
                   not indexed
                 </span>
               )}
-              {busy === `inline:${end.service}` && <span className="boundary-loc">indexing…</span>}
+              {busy === `inline:${index}` && <span className="boundary-loc">indexing…</span>}
             </button>
             <button
               type="button"
               className="boundary-alt"
               disabled={!!busy}
-              onClick={() => void act(end.service, "open")}
+              onClick={() => void act(index, "open")}
               title="open it as the root frame instead"
             >
-              {busy === `open:${end.service}` ? "…" : "open"}
+              {busy === `open:${index}` ? "…" : "open"}
             </button>
           </li>
         ))}

@@ -515,6 +515,11 @@ type LeafEnd struct {
 	// service it is in.
 	Path    string `json:"path,omitempty"`
 	Indexed bool   `json:"indexed"`
+	// ViaSite marks an end named by the function that *registers* it rather
+	// than by a handler of its own — which is what there is to point at when
+	// the handler is written inline at the registration. The body is in there;
+	// it just has no name, and saying so beats saying nothing.
+	ViaSite bool `json:"viaSite,omitempty"`
 }
 
 // Endpoint is one end of a platform edge: a service, and the code in it that
@@ -536,6 +541,9 @@ type Endpoint struct {
 	// possible for a declared end; a code-derived one is known *because* the
 	// code was read.
 	Indexed bool `json:"indexed"`
+	// ViaSite marks an end named by its registration rather than by a handler
+	// of its own. See LeafEnd.ViaSite.
+	ViaSite bool `json:"viaSite,omitempty"`
 }
 
 // Channel is one key and the services standing at each end of it: who sends,

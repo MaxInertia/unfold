@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -400,4 +401,87 @@ func TestPubsubEndAppearsOnlyWhenItsServiceIsRead(t *testing.T) {
 			t.Errorf("%s: an end from an indexed service should name and locate its code: %+v", e.Service, e)
 		}
 	}
+}
+
+// A handler written inline at its registration.
+//
+// An anonymous function is not an indexed function, so the binding has no
+// handler to name and the end came back with nothing to open — reported to the
+// reader as "could not identify the code" about a body sitting right there in
+// the source. The registering function is the honest answer: the handler is
+// inside it. The end says that is what happened rather than passing the
+// registration off as the handler.
+func TestInlineHandlerFallsBackToItsRegistration(t *testing.T) {
+	w := bothWays(t, "publisher")
+
+	res, err := w.Resolve("pubsub.topic", "baz-happened", model.RoleOutbound)
+	if err != nil {
+		t.Fatalf("Resolve(baz-happened): %v", err)
+	}
+	if len(res.Ends) != 1 {
+		t.Fatalf("ends: %+v, want the one subscriber", res.Ends)
+	}
+	end := res.Ends[0]
+	if end.Target == "" {
+		t.Fatal("an inline handler still has a body to open — the function it is written in")
+	}
+	if end.Title != "consumeInline" {
+		t.Errorf("opens %q, want consumeInline — the function the Subscribe is in", end.Title)
+	}
+	if !end.ViaSite {
+		t.Error("the end must say it is naming the registration, not a handler of its own")
+	}
+	if _, err := w.Frame(end.Target); err != nil {
+		t.Errorf("the fallback target must render: %v", err)
+	}
+
+	// A named handler is unaffected: it is still named, and not marked.
+	named, err := w.Resolve("pubsub.topic", "bar-happened", model.RoleOutbound)
+	if err != nil {
+		t.Fatalf("Resolve(bar-happened): %v", err)
+	}
+	if named.Ends[0].Title != "handleBar" || named.Ends[0].ViaSite {
+		t.Errorf("named handler came back as %+v, want handleBar and not via-site", named.Ends[0])
+	}
+}
+
+// Two registrations of the same event inside one service.
+//
+// An "end" was a service, so a second subscription in the same repo — the same
+// file, even — was invisible: the search stopped at the first binding that
+// matched the key. Both handlers run, and a reader shown one of them has been
+// told something false by omission.
+func TestSeveralRegistrationsInOneServiceAreAllEnds(t *testing.T) {
+	w := bothWays(t, "publisher")
+
+	res, err := w.Resolve("pubsub.topic", "qux-happened", model.RoleOutbound)
+	if err != nil {
+		t.Fatalf("Resolve(qux-happened): %v", err)
+	}
+
+	titles := map[string]bool{}
+	for _, e := range res.Ends {
+		titles[e.Title] = true
+		if e.Target == "" {
+			t.Errorf("%s: end with nothing to open: %+v", e.Service, e)
+		}
+	}
+	// One service, two registrations, in one function — both are ends.
+	for _, want := range []string{"handleQuxOne", "handleQuxTwo"} {
+		if !titles[want] {
+			t.Errorf("%s is a subscriber of qux-happened and is missing; got %v", want, keysOfBool(titles))
+		}
+	}
+	if len(res.Ends) != 2 {
+		t.Errorf("got %d ends, want 2 — one per registration", len(res.Ends))
+	}
+}
+
+func keysOfBool(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

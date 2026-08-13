@@ -274,45 +274,61 @@ func (w *Workspace) describeFarEnd(leaf *model.LeafInfo) {
 		if !ok {
 			continue
 		}
-		leaf.Ends = append(leaf.Ends, w.describeEnd(r, leaf.Kind, leaf.Key, want))
+		leaf.Ends = append(leaf.Ends, w.describeEnds(r, leaf.Kind, leaf.Key, want)...)
 	}
 }
 
-// describeEnd says as much about one end as can be said for free: its service
-// always, and the code at it only if that service is already indexed. Reading
-// an unindexed one here would index a whole repository as a side effect of
-// drawing a frame.
-func (w *Workspace) describeEnd(r *repo, kind, key string, role model.BindingRole) model.LeafEnd {
-	end := model.LeafEnd{Service: r.name}
+// endpointCode picks what there is to open at one end of a key.
+//
+// An outbound end is the call itself, so the function containing it is the
+// answer. An inbound end normally hands off to a named handler — but a handler
+// written inline at the registration is an anonymous function, which is not an
+// indexed function and so has nothing to name. The registering function is
+// then the best available answer and a true one: the body is inside it. The
+// alternative was reporting an end with no code, which is what a reader was
+// being told about a handler sitting right there in the source.
+func endpointCode(b model.Binding, role model.BindingRole) (target model.TargetID, title string, viaSite bool) {
+	if role == model.RoleOutbound {
+		return b.Site, b.SiteTitle, false
+	}
+	if b.Target != "" {
+		return b.Target, b.TargetTitle, false
+	}
+	return b.Site, b.SiteTitle, true
+}
+
+// describeEnds says as much about a service's ends of a key as can be said for
+// free: the service always, and the code at each only if it is already indexed.
+// Reading an unindexed one here would index a whole repository as a side effect
+// of drawing a frame.
+//
+// Plural because a service can be an end more than once. Two subscriptions to
+// one event — in the same file, even — are two handlers that both run, and
+// stopping at the first was telling the reader something false by omission.
+func (w *Workspace) describeEnds(r *repo, kind, key string, role model.BindingRole) []model.LeafEnd {
+	bare := model.LeafEnd{Service: r.name}
 
 	r.mu.Lock()
 	idx, loaded := r.idx, r.loaded
 	r.mu.Unlock()
 	if !loaded || idx == nil {
-		return end
+		return []model.LeafEnd{bare}
 	}
-	end.Indexed = true
+	bare.Indexed = true
 
 	sv, err := idx.ServiceView("")
 	if err != nil {
-		return end
+		return []model.LeafEnd{bare}
 	}
-	bindings := sv.Inbound
-	if role == model.RoleOutbound {
-		bindings = sv.Outbound
-	}
-	for _, b := range bindings {
+	var out []model.LeafEnd
+	for _, b := range bindingsFor(sv, role) {
 		if channelOf(b.Kind) != channelOf(kind) || b.Key != key {
 			continue
 		}
-		// What this end *is* depends on the side: an inbound end hands off to
-		// a handler, an outbound end is the call itself, so the function
-		// containing it is what there is to name.
-		target, title, file, line := b.Target, b.TargetTitle, b.File, b.Line
-		if role == model.RoleOutbound {
-			target, title = b.Site, b.SiteTitle
-		}
-		end.Title = title
+		end := model.LeafEnd{Service: r.name, Indexed: true}
+		target, title, viaSite := endpointCode(b, role)
+		end.Title, end.ViaSite = title, viaSite
+		file, line := b.File, b.Line
 		// The definition, not the registration that named it: what the
 		// boundary leads to is the function that runs. Falls back to the
 		// registration when it isn't an indexed function, which is what the
@@ -323,9 +339,22 @@ func (w *Workspace) describeEnd(r *repo, kind, key string, role model.BindingRol
 		if rel := w.repoRelative(file); rel != "" {
 			end.Path = fmt.Sprintf("%s:%d", rel, line)
 		}
-		return end
+		out = append(out, end)
 	}
-	return end
+	if len(out) == 0 {
+		// The join says this service is an end, and its own view doesn't show
+		// one. Saying nothing about it would drop it from the list entirely.
+		return []model.LeafEnd{bare}
+	}
+	return out
+}
+
+// bindingsFor is the side of a service view that answers for a role.
+func bindingsFor(sv *model.ServiceView, role model.BindingRole) []model.Binding {
+	if role == model.RoleOutbound {
+		return sv.Outbound
+	}
+	return sv.Inbound
 }
 
 // SetProtoRoot re-points every repo's declared surface, and rebuilds the
@@ -464,85 +493,90 @@ func (w *Workspace) Resolve(kind, key string, role model.BindingRole) (*model.Re
 
 	res := &model.Resolution{}
 	for _, alias := range aliases {
-		end, cands, stale, err := w.endpoint(alias, kind, key, want)
+		ends, cands, stale, err := w.endpoints(alias, kind, key, want)
 		if err != nil {
 			return nil, err
 		}
-		res.Ends = append(res.Ends, end)
+		res.Ends = append(res.Ends, ends...)
 		// The single-answer fields describe the first end. They exist because
 		// a gRPC method has exactly one implementer, which made "the far end"
 		// look singular; a caller that wants the whole picture reads Ends.
-		if len(res.Ends) == 1 {
-			res.Repo, res.Service = end.Repo, end.Service
-			res.Target, res.Title = end.Target, end.Title
+		if len(res.Ends) == len(ends) && len(ends) > 0 {
+			first := ends[0]
+			res.Repo, res.Service = first.Repo, first.Service
+			res.Target, res.Title = first.Target, first.Title
 			res.Candidates, res.Stale = cands, stale
-			if end.Target == "" && len(cands) == 0 {
+			if first.Target == "" && len(cands) == 0 {
 				res.Note = fmt.Sprintf("%s is an end of %s but unfold could not identify the code",
-					end.Service, key)
+					first.Service, key)
 			}
 		}
 	}
 	return res, nil
 }
 
-// endpoint describes one service's side of a key, indexing it if needed.
-func (w *Workspace) endpoint(alias, kind, key string, role model.BindingRole) (
-	model.Endpoint, []model.Candidate, bool, error,
+// endpoints describes a service's ends of a key, indexing it if needed.
+//
+// Plural for the same reason describeEnds is: one service can register the same
+// key more than once, and every registration is a place execution actually
+// arrives.
+func (w *Workspace) endpoints(alias, kind, key string, role model.BindingRole) (
+	[]model.Endpoint, []model.Candidate, bool, error,
 ) {
 	r := w.repos[alias]
-	end := model.Endpoint{Repo: alias, Service: r.name, Role: role}
+	bare := model.Endpoint{Repo: alias, Service: r.name, Role: role}
 	if err := w.load(alias); err != nil {
-		return end, nil, false, err
+		return []model.Endpoint{bare}, nil, false, err
 	}
-	end.Indexed = true
+	bare.Indexed = true
 
 	r.mu.Lock()
 	idx := r.idx
 	r.mu.Unlock()
 	sv, err := idx.ServiceView("")
 	if err != nil {
-		return end, nil, false, err
+		return []model.Endpoint{bare}, nil, false, err
 	}
-	bindings := sv.Inbound
-	if role == model.RoleOutbound {
-		bindings = sv.Outbound
-	}
+
+	var out []model.Endpoint
 	var candidates []model.Candidate
 	var stale bool
-	for _, b := range bindings {
+	for _, b := range bindingsFor(sv, role) {
 		// Same normalization as the lookup that got us here: the caller asks
 		// with the kind its own side uses, and the answering end's kind is the
 		// other half of the channel.
 		if channelOf(b.Kind) != channelOf(kind) || b.Key != key {
 			continue
 		}
-		// Which code answers depends on the side. An inbound end hands off to
-		// a handler; an outbound end *is* the call, so the function containing
-		// it is what there is to open.
-		target, title, file, line := b.Target, b.TargetTitle, b.File, b.Line
-		if role == model.RoleOutbound {
-			target, title = b.Site, b.SiteTitle
-		}
+		end := model.Endpoint{Repo: alias, Service: r.name, Role: role, Indexed: true}
+		target, title, viaSite := endpointCode(b, role)
 		end.Target = model.TargetID(w.qualify(alias, string(target)))
-		end.Title = title
-		stale = b.Stale
-		for _, c := range b.Candidates {
-			candidates = append(candidates, model.Candidate{
-				TargetID: model.TargetID(w.qualify(alias, string(c.TargetID))),
-				Label:    c.Label,
-			})
-		}
-		// The definition, not the registration: what this end *is* is the
-		// function that runs, or the one that makes the call.
+		end.Title, end.ViaSite = title, viaSite
+		file, line := b.File, b.Line
 		if f, l, ok := idx.Position(target); ok {
 			file, line = f, l
 		}
 		if rel := w.repoRelative(file); rel != "" {
 			end.Path = fmt.Sprintf("%s:%d", rel, line)
 		}
-		break
+		out = append(out, end)
+
+		// Candidates and staleness answer for the first match, which is what
+		// the single-answer fields describe.
+		if len(out) == 1 {
+			stale = b.Stale
+			for _, c := range b.Candidates {
+				candidates = append(candidates, model.Candidate{
+					TargetID: model.TargetID(w.qualify(alias, string(c.TargetID))),
+					Label:    c.Label,
+				})
+			}
+		}
 	}
-	return end, candidates, stale, nil
+	if len(out) == 0 {
+		return []model.Endpoint{bare}, nil, false, nil
+	}
+	return out, candidates, stale, nil
 }
 
 // PlatformView is the L0 view: every service in the workspace, and the calls

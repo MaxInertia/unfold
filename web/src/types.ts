@@ -47,6 +47,9 @@ export interface LeafEnd {
   title?: string; // the handler, or the function making the call
   path?: string; // "<service>/<path within it>:<line>"
   indexed: boolean; // false: known to be an end, code not read yet
+  // Named by the function that registers it rather than by a handler of its
+  // own — what there is to point at when the handler is written inline.
+  viaSite?: boolean;
 }
 
 export interface Candidate {

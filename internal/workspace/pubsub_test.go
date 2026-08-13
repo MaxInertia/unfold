@@ -274,10 +274,17 @@ func TestPubsubJoinsAcrossTopicAndSubscriptionKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ServiceView: %v", err)
 	}
+	// Named per key rather than asserted over all of them: the fixture has
+	// more events than this test is about, and a sweep would fail the next
+	// time one is added for an unrelated reason.
+	servedBy := map[string]string{}
 	for _, b := range sv.Outbound {
-		if b.Kind == "pubsub.topic" && b.ServedByRepo != "subscriber" {
-			t.Errorf("publish to %q says it's served by %q, want subscriber", b.Key, b.ServedByRepo)
+		if b.Kind == "pubsub.topic" {
+			servedBy[b.Key] = b.ServedByRepo
 		}
+	}
+	if got := servedBy["foo-happened"]; got != "subscriber" {
+		t.Errorf("foo-happened is served by %q, want subscriber", got)
 	}
 
 	pv, err := w.PlatformView("")
