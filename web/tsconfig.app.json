@@ -18,5 +18,8 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests aren't part of the bundle, and they import bun:test — types the app
+  // build has no reason to carry. `bun test` type-checks them itself.
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

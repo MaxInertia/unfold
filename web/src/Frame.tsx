@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { Root as HastRoot } from "hast";
-import { fetchBodyByCall, fetchTypeInfo, openInEditor } from "./api";
+import { fetchBodyByCall, fetchBodyByTarget, fetchTypeInfo, openInEditor, resolveBinding } from "./api";
 import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
 import type {
@@ -102,6 +102,9 @@ export function Frame({
   // loaded children are: the slice carries the intent (this boundary is open),
   // and the body is fetched to satisfy it.
   const [leafBodies, setLeafBodies] = useState<Map<CallID, FrameT>>(new Map());
+  // Guards the restore below against firing twice for the same boundary while
+  // its fetch is in flight.
+  const restoring = useRef<Set<CallID>>(new Set());
   const settings = useSettings();
   // A rebuilt index — or a repository finishing its own — is a reason to
   // refetch a body, not to throw the view away.
@@ -855,6 +858,7 @@ export function Frame({
         // no entry for, so every expansion inside it was silently dropped.
         const slot = leafSlot(call.id);
         const body = leafBodies.get(call.id);
+        const openEnd = slice.expansions[slot];
         // The list, only while a choice is being made. Picking closes it, the
         // way picking a caller closes the callers panel — what you asked for
         // is on screen, and the thing that asked has no reason to still be.
@@ -880,7 +884,7 @@ export function Frame({
             </div>,
           );
         }
-        if (slice.expansions[slot] && body) {
+        if (openEnd && body) {
           extras.push(
             <div key={`leaf:${call.id}`} className="leaf-inlined inline-child">
               {/* The hop stays named even with the far side spliced in:
@@ -889,7 +893,7 @@ export function Frame({
               <div className="leaf-hop">execution leaves this process here</div>
               <Frame
                 frame={body}
-                path={[...path, { callId: slot, choice: 0 }]}
+                path={[...path, { callId: slot, choice: openEnd.choice }]}
                 onClose={() => store.collapse(path, slot)}
                 ancestors={[...ancestors, frame.id]}
               />
@@ -934,6 +938,48 @@ export function Frame({
     }
     return extras;
   }
+
+  // A boundary the slice says is open, whose body this component doesn't have.
+  //
+  // The body is fetched, not stored — the slice carries the intent, the way it
+  // does for an ordinary expansion. But an ordinary expansion is refetched
+  // from its call id, and a far side isn't: it was resolved by key, through a
+  // direction, to one of several services. So it has to be resolved again, and
+  // to the *same* end, which is what the recorded choice is for.
+  //
+  // Without this, every unmount lost them: re-rooting on a caller, the back
+  // button, and any link shared with a boundary open.
+  useEffect(() => {
+    let alive = true;
+    for (const call of frame.calls) {
+      const leaf = call.leaf;
+      if (!leaf) continue;
+      const want = slice.expansions[leafSlot(call.id)];
+      if (!want || leafBodies.has(call.id) || restoring.current.has(call.id)) continue;
+      const end = (leaf.ends ?? [])[want.choice] ?? (leaf.ends ?? [])[0];
+      if (!end) continue;
+      restoring.current.add(call.id);
+      void (async () => {
+        try {
+          const res = await resolveBinding(leaf.kind ?? "grpc.method", leaf.key ?? "", leaf.role);
+          const match = (res.ends ?? []).find((e) => e.service === end.service) ?? res.ends?.[0];
+          const target = match?.target ?? res.target;
+          if (!target || !alive) return;
+          const body = await fetchBodyByTarget(target);
+          if (alive) setLeafBodies((m) => new Map(m).set(call.id, body));
+        } catch {
+          // A far side that can't be restored leaves the boundary closed
+          // rather than the frame broken; the hint still opens the picker.
+        } finally {
+          restoring.current.delete(call.id);
+        }
+      })();
+    }
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frame.calls, slice.expansions, leafBodies, revision]);
 
   function closePicker(id: CallID) {
     setPicking((open) => {

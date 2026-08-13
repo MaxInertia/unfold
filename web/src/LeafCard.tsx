@@ -26,7 +26,9 @@ export function BoundaryPicker({
 }: {
   leaf: LeafInfo;
   // Splice the far side in where the call is; the picker closes behind it.
-  onInline: (frame: FrameT) => void;
+  // The index says *which* end was picked, so the view can restore the same one
+  // after a remount rather than defaulting back to the first.
+  onInline: (frame: FrameT, endIndex: number) => void;
   // Or make it the root, the way picking a caller re-roots the view.
   onOpenRoot: (id: TargetID) => void;
   onClose: () => void;
@@ -55,6 +57,7 @@ export function BoundaryPicker({
   }
 
   async function act(service: string, how: "inline" | "open") {
+    const endIndex = Math.max(0, ends.findIndex((e) => e.service === service));
     setBusy(`${how}:${service}`);
     setError(null);
     try {
@@ -69,7 +72,7 @@ export function BoundaryPicker({
         onOpenRoot(end.target);
         return;
       }
-      onInline(await fetchBodyByTarget(end.target));
+      onInline(await fetchBodyByTarget(end.target), endIndex);
     } catch (e) {
       setError((e as Error).message);
     } finally {
