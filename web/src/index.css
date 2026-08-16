@@ -4044,3 +4044,133 @@ body.resizing {
   background: none;
   border-color: transparent;
 }
+
+/* ── The call graph: the platform read as APIs ─────────────────────────────
+   Same layout engine as the service graph, so most of the .graph-* rules
+   carry over. What differs is that a node here is an API, and three things
+   about it have to be legible at a glance: which service serves it, whether
+   execution can even enter it from outside, and whether unfold actually read
+   what it calls. */
+
+.callgraph {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.callgraph-node {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 0.1rem;
+  cursor: pointer;
+  padding: 0 0.45rem;
+}
+
+.callgraph-node-label {
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.callgraph-node-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.66rem;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* A service's own main/init. Not an API at all — it is where that service's
+   work starts — so it reads as a different kind of thing rather than as an
+   entrypoint nobody calls. */
+.callgraph-node--root {
+  border-style: dashed;
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+/* A key this workspace calls but nothing in it serves. The chain leaves here,
+   and the node exists to say so: drawn as an outline, because there is no
+   code behind it to open. */
+.callgraph-node--external {
+  border-style: dotted;
+  background: none;
+  opacity: 0.8;
+}
+
+.callgraph-node--focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--call-bg);
+}
+
+.callgraph-badge {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 0 0.2rem;
+  border-radius: 3px;
+  background: var(--call-bg);
+  color: var(--muted);
+}
+
+/* Stale surface, and surface whose outgoing calls were never determined. Both
+   are claims about how much unfold knows, not about the code, so they share a
+   colour distinct from the anchor's. */
+.callgraph-badge--warn {
+  color: var(--warn, #b7791f);
+  background: none;
+  border: 1px solid currentColor;
+}
+
+.callgraph-open {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.1rem 0.15rem;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.callgraph-node:hover .callgraph-open {
+  opacity: 1;
+}
+
+.callgraph-open:hover {
+  color: var(--accent);
+}
+
+.callgraph-toggle {
+  font: inherit;
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.1rem 0.4rem;
+}
+
+.callgraph-toggle:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* Anchored: the chain that reaches the frame you zoomed out from. The service
+   graph accents .graph-node-name; a call graph node names its API in its own
+   element, so the same mark has to be said again here. */
+.graph-node--reaches .callgraph-node-label {
+  color: var(--accent);
+  font-weight: 600;
+}

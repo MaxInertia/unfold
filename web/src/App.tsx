@@ -11,6 +11,7 @@ import { NotesList } from "./NotesUI";
 import { loadNotes } from "./notes";
 import { ServiceView } from "./ServiceView";
 import { PlatformView } from "./PlatformView";
+import { CallGraphView } from "./CallGraphView";
 import { ChannelIndex } from "./ChannelIndex";
 import { WorkspaceStatus } from "./WorkspaceStatus";
 import { EntrypointsPanel, OutboundsPanel } from "./AnchorPanels";
@@ -113,7 +114,7 @@ function AppShell() {
   const [platformFilter, setPlatformFilter] = useState("");
   // Which reading of the platform level is showing. Local rather than in the
   // URL: it is a way of looking at one level, not a different place to be.
-  const [platformMode, setPlatformMode] = useState<"graph" | "keys">("graph");
+  const [platformMode, setPlatformMode] = useState<"graph" | "calls" | "keys">("graph");
   const selectedService = store.service;
   const setSelectedService = store.setService;
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -453,7 +454,11 @@ function AppShell() {
                 </div>
                 <div className="tree-body">
                   {zoom === "platform" ? (
-                    <PlatformFilterPanel text={platformFilter} onChange={setPlatformFilter} />
+                    <PlatformFilterPanel
+                      text={platformFilter}
+                      onChange={setPlatformFilter}
+                      mode={platformMode}
+                    />
                   ) : zoom === "service" ? (
                     <ServiceFilterPanel
                       view={serviceView}
@@ -505,10 +510,13 @@ function AppShell() {
           {loading && !rootFrame && <div className="app-loading">loading…</div>}
           {zoom === "platform" ? (
             <>
-              {/* Two readings of the same level. The graph is shaped by
-                  service — who calls whom; the key index is shaped by the
-                  thing they share, which is the question you have when you
-                  know the event's name and not who is on it. */}
+              {/* Three readings of the same level, and they differ by what a
+                  node *is*. Services: who calls whom. Calls: the APIs
+                  themselves, so a chain reads through the entrypoint that
+                  carries each hop rather than stopping at the repo boundary.
+                  Keys: shaped by the thing both ends share, which is the
+                  question you have when you know the event's name and not who
+                  is on it. */}
               <div className="platform-modes">
                 <button
                   type="button"
@@ -519,13 +527,26 @@ function AppShell() {
                 </button>
                 <button
                   type="button"
+                  className={`platform-mode${platformMode === "calls" ? " platform-mode--on" : ""}`}
+                  onClick={() => setPlatformMode("calls")}
+                >
+                  calls
+                </button>
+                <button
+                  type="button"
                   className={`platform-mode${platformMode === "keys" ? " platform-mode--on" : ""}`}
                   onClick={() => setPlatformMode("keys")}
                 >
                   keys
                 </button>
               </div>
-              {platformMode === "graph" ? (
+              {platformMode === "calls" ? (
+                <CallGraphView
+                  anchor={rootFrame?.id ?? null}
+                  filter={platformFilter}
+                  onOpen={(id) => store.setSymbol(id)}
+                />
+              ) : platformMode === "graph" ? (
                 <PlatformView
                   anchor={rootFrame?.id ?? null}
                   filter={platformFilter}

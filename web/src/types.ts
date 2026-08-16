@@ -288,6 +288,78 @@ export interface PlatformCall {
   line?: number;
 }
 
+// The platform's API surface as one graph: every entrypoint any service
+// serves, every call any service makes, and the edges joining them.
+//
+// Nodes are APIs rather than services, and an outbound call is not a node of
+// its own — a call whose key some service serves *is* that service's entrypoint
+// node. That identification is what makes a chain across repos plain graph
+// reachability instead of a second kind of edge.
+export interface CallGraph {
+  nodes: CallGraphNode[];
+  edges: CallGraphEdge[];
+  anchor?: TargetID;
+  anchorTitle?: string;
+  // Services whose code hasn't been read. Their entrypoints are known from
+  // declarations, but what those go on to call is not — so a chain stopping at
+  // one has stopped for want of indexing, not because it ended.
+  unindexed?: string[];
+}
+
+// entrypoint: an API a service serves. root: a service's own main/init, which
+// no entrypoint of its own causes. external: a key this workspace calls but
+// nothing in it serves.
+export type CallGraphOrigin = "entrypoint" | "root" | "external";
+
+export interface CallGraphNode {
+  id: string;
+  origin: CallGraphOrigin;
+  service?: string; // alias; absent for an external key
+  kind?: string;
+  key?: string;
+  title: string;
+  visibility?: BindingVisibility;
+  confidence?: BindingConfidence;
+  stale?: boolean;
+  target?: TargetID;
+  candidates?: Candidate[];
+  site?: TargetID;
+  siteTitle?: string;
+  file?: string;
+  line?: number;
+  // Whether this node's outgoing edges were determined. Falsy means no handler
+  // could be walked, so "calls nothing" was never established — a node with no
+  // outgoing edges is then an unread page, not a leaf.
+  //
+  // Test it as `!outboundKnown`, never `=== false`: the field is omitempty on
+  // the wire, so the unknown case arrives absent rather than false, and the
+  // strict comparison silently never fires.
+  outboundKnown?: boolean;
+  reachesAnchor?: boolean;
+  // Nothing in the workspace reaches this node: where work enters the platform.
+  entry?: boolean;
+}
+
+export interface CallGraphEdge {
+  from: string;
+  to: string;
+  kind: string;
+  key: string;
+  sites?: CallGraphSite[];
+  confidence?: BindingConfidence;
+  // The key has more than one receiver — a topic with several subscribers. All
+  // of them run, so all the edges are drawn.
+  fanout?: boolean;
+  reachesAnchor?: boolean;
+}
+
+export interface CallGraphSite {
+  site?: TargetID;
+  siteTitle?: string;
+  file?: string;
+  line?: number;
+}
+
 export interface TypeInfo {
   kind: string;
   name: string;

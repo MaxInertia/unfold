@@ -214,6 +214,18 @@ func (r *Reloadable) PlatformView(anchor model.TargetID) (*model.PlatformView, e
 	return we.PlatformView(anchor)
 }
 
+// CallGraph forwards the workspace-wide graph of entrypoints and the calls
+// between them.
+func (r *Reloadable) CallGraph(anchor model.TargetID) (*model.CallGraph, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cg, ok := r.cur.(model.CallGrapher)
+	if !ok {
+		return nil, model.ErrNoWorkspace
+	}
+	return cg.CallGraph(anchor)
+}
+
 // ServiceViewOf forwards the view of a named workspace service.
 func (r *Reloadable) ServiceViewOf(repo string, anchor model.TargetID) (*model.ServiceView, error) {
 	r.mu.RLock()

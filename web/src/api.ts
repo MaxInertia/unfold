@@ -1,4 +1,5 @@
 import type {
+  CallGraph,
   CallID,
   Channel,
   PlatformView,
@@ -87,6 +88,13 @@ export function fetchServiceView(
 export function fetchPlatformView(anchor?: TargetID | null): Promise<PlatformView> {
   const qs = anchor ? `?anchor=${encodeURIComponent(anchor)}` : "";
   return getJSON<PlatformView>(`/api/platform${qs}`);
+}
+
+// The same workspace one granularity finer: entrypoints and the calls between
+// them, joined across repos.
+export function fetchCallGraph(anchor?: TargetID | null): Promise<CallGraph> {
+  const qs = anchor ? `?anchor=${encodeURIComponent(anchor)}` : "";
+  return getJSON<CallGraph>(`/api/callgraph${qs}`);
 }
 
 // Index one service's code, filling in its outgoing edges. Expensive and

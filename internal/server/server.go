@@ -116,6 +116,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/dirs", s.handleDirs)
 	mux.HandleFunc("/api/resolve", s.handleResolve)
 	mux.HandleFunc("/api/platform", s.handlePlatform)
+	mux.HandleFunc("/api/callgraph", s.handleCallGraph)
 	mux.HandleFunc("/api/channels", s.handleChannels)
 	mux.HandleFunc("/api/index-repo", s.handleIndexRepo)
 	mux.HandleFunc("/api/notes", s.handleNotes)
@@ -765,6 +766,24 @@ func (s *Server) handlePlatform(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, pv)
+}
+
+func (s *Server) handleCallGraph(w http.ResponseWriter, r *http.Request) {
+	cg, ok := s.engine.(model.CallGrapher)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, model.ErrNoWorkspace.Error())
+		return
+	}
+	g, err := cg.CallGraph(model.TargetID(r.URL.Query().Get("anchor")))
+	if err != nil {
+		if errors.Is(err, model.ErrNoWorkspace) {
+			writeError(w, http.StatusNotImplemented, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
 }
 
 // POST /api/index-repo {"alias": "<service>"} — index one service's code.
