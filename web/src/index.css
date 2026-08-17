@@ -4174,3 +4174,105 @@ body.resizing {
   color: var(--accent);
   font-weight: 600;
 }
+
+/* The fold controls, and the scroll containment that goes with them.
+
+   Without a height bound the graph grew the page: a 5900px canvas scrolled the
+   whole app, taking the header and the very controls you needed to narrow it
+   off the top of the screen. The graph scrolls inside itself now, so what you
+   use to make it smaller stays put while you use it. */
+.callgraph-scroll {
+  overflow: auto;
+}
+
+.callgraph-buckets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0 0.6rem;
+  font-size: 0.72rem;
+}
+
+.callgraph-buckets-label {
+  color: var(--muted);
+  margin-right: 0.15rem;
+}
+
+.callgraph-chip {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.05rem 0.4rem;
+}
+
+.callgraph-chip:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* Expanded: this service is drawn as its APIs. */
+.callgraph-chip--on {
+  color: var(--fg);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+  font-weight: 600;
+}
+
+.callgraph-chip-count {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A folded service. Layered edges so it reads as several boxes stacked, which
+   is what it stands for. */
+.callgraph-node--group {
+  box-shadow:
+    3px -3px 0 -1px var(--card-bg),
+    3px -3px 0 0 var(--card-border);
+}
+
+.callgraph-expand {
+  position: absolute;
+  top: 2px;
+  right: 5px;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.callgraph-focus {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.callgraph-hops {
+  font-variant-numeric: tabular-nums;
+  min-width: 3.4em;
+  text-align: center;
+}
+
+.callgraph-step {
+  font: inherit;
+  line-height: 1;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0 0.3rem;
+}
+
+.callgraph-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
