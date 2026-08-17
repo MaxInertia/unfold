@@ -220,31 +220,93 @@ function assignLayers(nodes: GraphNode[], links: GraphLink[]): Map<string, numbe
   return layer;
 }
 
+// How many pairs of edges cross between adjacent layers, which is the thing
+// the ordering is actually trying to minimise. Counting it is what lets the
+// sweeps below keep the best ordering they found instead of whichever one they
+// happened to stop on — a barycenter pass is a heuristic and can make a layout
+// worse, so an unmeasured "improvement" is a coin flip.
+function countCrossings(byLayer: Slot[][], preds: Map<string, string[]>): number {
+  const pos = new Map<string, number>();
+  byLayer.forEach((l) => l.forEach((s, i) => pos.set(s.id, i)));
+  let total = 0;
+  for (let l = 1; l < byLayer.length; l++) {
+    const pairs: [number, number][] = [];
+    for (const s of byLayer[l]) {
+      for (const p of preds.get(s.id) ?? []) {
+        const a = pos.get(p);
+        const b = pos.get(s.id);
+        if (a !== undefined && b !== undefined) pairs.push([a, b]);
+      }
+    }
+    for (let i = 0; i < pairs.length; i++) {
+      for (let j = i + 1; j < pairs.length; j++) {
+        if ((pairs[i][0] - pairs[j][0]) * (pairs[i][1] - pairs[j][1]) < 0) total++;
+      }
+    }
+  }
+  return total;
+}
+
 // orderLayers sorts each layer to reduce edge crossings: repeatedly place a
-// slot at the average position of its predecessors in the previous layer.
+// slot at the average position of its neighbours in the adjacent layer.
 // Waypoints take part, so a routed edge is pulled toward the rows it connects
 // rather than cutting across the ones it doesn't.
+//
+// Sweeps alternate direction. Sorting only by predecessors propagates left to
+// right and leaves the left-hand layers ordered by nothing but their labels —
+// on a dense workspace (12 services, 58 edges, seven layers) that measured 677
+// crossing edge pairs, most of them in the first two columns, where the fan-out
+// that determines the whole picture lives. A backward sweep orders a layer by
+// where its *successors* ended up, which is the only way information about the
+// right-hand side reaches the left.
+//
+// The best ordering seen is kept rather than the last: barycenter is a
+// heuristic, an individual sweep can make things worse, and a layout that
+// wobbles between loads is the thing this file exists to avoid.
 function orderLayers(byLayer: Slot[][], preds: Map<string, string[]>): void {
+  const succs = new Map<string, string[]>();
+  for (const [id, list] of preds) {
+    for (const p of list) succs.set(p, [...(succs.get(p) ?? []), id]);
+  }
+
   const pos = new Map<string, number>();
   const setPos = () => byLayer.forEach((l) => l.forEach((s, i) => pos.set(s.id, i)));
   setPos();
 
-  const barycenter = (s: Slot): number => {
-    const p = preds.get(s.id) ?? [];
-    if (p.length === 0) return Number.MAX_SAFE_INTEGER; // unconnected sink to the end
+  const barycenter = (s: Slot, rel: Map<string, string[]>): number => {
+    const p = rel.get(s.id) ?? [];
+    // Nothing on that side to be pulled by: hold position rather than sorting
+    // to one end, or every sweep would shuffle the unconnected slots about.
+    if (p.length === 0) return pos.get(s.id) ?? 0;
     return p.reduce((sum, id) => sum + (pos.get(id) ?? 0), 0) / p.length;
   };
 
-  // Three passes rather than two: waypoints add a rung to most chains, so the
-  // ordering needs one more round to propagate all the way right.
-  for (let pass = 0; pass < 3; pass++) {
-    for (let l = 1; l < byLayer.length; l++) {
+  let best = byLayer.map((l) => [...l]);
+  let bestCount = countCrossings(byLayer, preds);
+
+  // Six sweeps, alternating. Waypoints add a rung to most chains, so the
+  // ordering needs several rounds to propagate the length of the graph, and
+  // the alternation means each round carries information the other direction.
+  for (let pass = 0; pass < 6; pass++) {
+    const forward = pass % 2 === 0;
+    const rel = forward ? preds : succs;
+    const from = forward ? 1 : byLayer.length - 2;
+    const to = forward ? byLayer.length : -1;
+    const step = forward ? 1 : -1;
+    for (let l = from; forward ? l < to : l > to; l += step) {
       byLayer[l].sort(
-        (a, b) => barycenter(a) - barycenter(b) || a.label.localeCompare(b.label),
+        (a, b) => barycenter(a, rel) - barycenter(b, rel) || a.label.localeCompare(b.label),
       );
+      setPos();
     }
-    setPos();
+    const count = countCrossings(byLayer, preds);
+    if (count < bestCount) {
+      bestCount = count;
+      best = byLayer.map((l) => [...l]);
+    }
   }
+
+  byLayer.forEach((l, i) => l.splice(0, l.length, ...best[i]));
 }
 
 export function layoutGraph(

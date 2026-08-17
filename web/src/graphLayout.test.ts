@@ -194,3 +194,85 @@ describe("determinism", () => {
     expect(at).toEqual(bt);
   });
 });
+
+// Crossing count, computed from the routes the layout actually returns rather
+// than from anything it reports about itself.
+function crossings(links: { points: { x: number; y: number }[] }[]): number {
+  const side = (p: any, q: any, r: any) =>
+    Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  const hits = (a: any, b: any, c: any, d: any) =>
+    side(a, b, c) !== side(a, b, d) && side(c, d, a) !== side(c, d, b);
+  let n = 0;
+  for (let i = 0; i < links.length; i++)
+    for (let j = i + 1; j < links.length; j++) {
+      let crossed = false;
+      for (let k = 0; k < links[i].points.length - 1 && !crossed; k++)
+        for (let l = 0; l < links[j].points.length - 1 && !crossed; l++)
+          if (hits(links[i].points[k], links[i].points[k + 1], links[j].points[l], links[j].points[l + 1]))
+            crossed = true;
+      if (crossed) n++;
+    }
+  return n;
+}
+
+describe("crossing reduction", () => {
+  // The service-level graph of a twelve-service workspace, taken from a real
+  // run rather than invented: small synthetic graphs are too symmetric to tell
+  // the orderings apart, and inventing a baseline number is how you end up
+  // asserting something you never measured.
+  //
+  // Ordering by predecessors alone scored 653 crossing pairs on this graph.
+  // The leftmost layer has no predecessors to be ordered by, so it stayed in
+  // label order — and that layer is where the fan-out deciding the whole
+  // picture lives. Alternating the sweeps, so a layer can also be ordered by
+  // where its successors ended up, brought it to 452.
+  const EDGES: [string, string, number][] = [
+    ["accounts","analytics",1],["accounts","audit",2],["accounts","billing",4],
+    ["accounts","fulfilment",4],["accounts","inventory",1],["accounts","notifications",4],
+    ["accounts","orders",3],["accounts","pricing",2],["accounts","search",2],
+    ["analytics","audit",8],["analytics","pricing",8],["audit","pricing",10],
+    ["billing","analytics",3],["billing","audit",4],["billing","inventory",4],
+    ["billing","notifications",3],["billing","orders",4],["billing","pricing",3],
+    ["fulfilment","analytics",1],["fulfilment","audit",3],["fulfilment","notifications",6],
+    ["fulfilment","pricing",7],["fulfilment","search",3],["gateway","accounts",3],
+    ["gateway","analytics",3],["gateway","audit",2],["gateway","billing",1],
+    ["gateway","identity",5],["gateway","inventory",2],["gateway","orders",3],
+    ["gateway","pricing",2],["identity","accounts",2],["identity","analytics",4],
+    ["identity","audit",2],["identity","billing",4],["identity","notifications",2],
+    ["identity","orders",1],["identity","pricing",4],["identity","search",2],
+    ["inventory","analytics",5],["inventory","audit",2],["inventory","fulfilment",5],
+    ["inventory","notifications",4],["inventory","pricing",5],["inventory","search",5],
+    ["notifications","analytics",2],["notifications","audit",6],["notifications","pricing",8],
+    ["notifications","search",3],["orders","analytics",3],["orders","audit",6],
+    ["orders","fulfilment",1],["orders","inventory",1],["orders","notifications",3],
+    ["orders","pricing",3],["search","analytics",6],["search","audit",7],
+    ["search","pricing",7],
+  ];
+
+  const workspace = () => {
+    const ids = [...new Set(EDGES.flatMap(([a, b]) => [a, b]))].sort();
+    return {
+      nodes: ids.map((id) => ({ id, label: id })),
+      links: EDGES.map(([from, to, weight]) => ({ key: `${from}->${to}`, from, to, weight })),
+    };
+  };
+
+  test("a real dense workspace stays well under what one direction left behind", () => {
+    // An upper bound, not an equality: a better ordering is not a regression,
+    // and pinning the exact number would fail the next time this improves.
+    const { nodes, links } = workspace();
+    const g = layoutGraph(nodes, links, { nodeW: 208, nodeH: 56, minHeight: 680 });
+    expect(crossings(g.links)).toBeLessThan(550);
+  });
+
+  test("keeping the best sweep means input order can't change the result", () => {
+    // Barycenter is a heuristic and an individual sweep can degrade a layout,
+    // so the passes keep the best ordering they saw rather than the last. Two
+    // orderings of the same graph must therefore agree.
+    const { nodes, links } = workspace();
+    const opts = { nodeW: 208, nodeH: 56, minHeight: 680 };
+    const a = layoutGraph(nodes, links, opts);
+    const b = layoutGraph([...nodes].reverse(), [...links].reverse(), opts);
+    expect(crossings(b.links)).toBe(crossings(a.links));
+  });
+});
