@@ -106,7 +106,25 @@ your expansion state is exactly as you left it.
 The service view is a two-sided card, not a graph:
 
 - **inbound** — where work enters: HTTP routes registered with `net/http`,
-  Pub/Sub subscriptions. Click one to open its handler as a new root frame.
+  Pub/Sub subscriptions, the gRPC methods this service registers an
+  implementation for. Click one to open its handler as a new root frame.
+
+  A gRPC service is read from the registration itself — `RegisterFooServer(s,
+  impl)`, or the `s.RegisterService(&Foo_ServiceDesc, impl)` inside it. The
+  generated descriptor carries the fully qualified service name and one entry
+  per RPC, which is the same key the generated *client* names on the other
+  side, so both ends of a cross-service edge come from generated code and meet
+  on a key neither invented. Nothing has to be declared for this: it needs no
+  `microservice.yaml` and no proto root.
+
+  The registration that counts is the one your service performs. The generated
+  helper hands its own parameter to `RegisterService`, so its body is shaped
+  exactly like a registration and isn't one — reading it as one would describe
+  every service twice and name no implementation either time.
+
+  Where a manifest *does* declare the same RPC, the declared tier describes it
+  (see below): it knows the proto file and whether the method is excluded from
+  SDK generation, and this pass stands aside for those keys.
 - **outbound** — where the service reaches out: gRPC calls through a generated
   client, `http.Get`/`Post` calls with a statically known URL, Pub/Sub topics it
   names. These have no in-repo target (the far end lives in another service) so
@@ -131,6 +149,12 @@ The service view is a two-sided card, not a graph:
   A hand-written function that issues the call itself is the call site, since
   it's business logic talking to grpc rather than a client standing in for an
   RPC.
+
+  Each such call site is also a **boundary**: the call carries the key, so a
+  reader standing in the handler that makes it is offered the implementation in
+  the repository that serves it — to navigate to, or to splice in where the
+  call is. A recognizer rule of your own about the same call site wins over
+  this, since a rule is your last word about what a call is.
 
   Finally, a call site only counts if execution can **reach** it from one of
   the service's entrypoints — its route handlers, the implementations of the
@@ -231,6 +255,11 @@ propagating a mark from a service to its callers requires knowing, per repo,
 which inbound key leads to which outbound call.
 
 ### What the service declares about itself
+
+A repo needs none of this: the gRPC surface above is read from code, and the
+manifest is a second, cheaper source for the same fact — cheap because it is
+read without indexing anyone's Go, which is what lets a large workspace answer
+"who serves this key" before the repository that serves it has been opened.
 
 If the repo root has a `microservice.yaml`, unfold reads it. Declared facts are
 the *strongest* resolution tier — a proto is the contract both a server and its
