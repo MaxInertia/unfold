@@ -630,6 +630,13 @@ func (i *Indexer) Load(dir, pattern string) error {
 		i.bindings = append(i.bindings, served...)
 	}
 
+	// And what the repo simply states it serves, for the surface neither the
+	// manifest nor this index can show. Last of the three, because it is the
+	// only one that knows nothing about where the code is.
+	declaredServes := i.declaredServes()
+	i.titleEndpoints(declaredServes)
+	i.bindings = append(i.bindings, declaredServes...)
+
 	// Outbound gRPC is a call-graph question rather than a per-call-site one,
 	// so it runs as its own pass. It goes *after* the declared surface
 	// because it seeds reachability from the inbound entrypoints, and for a

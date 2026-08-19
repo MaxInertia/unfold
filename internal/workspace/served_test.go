@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/MaxInertia/unfold/internal/model"
@@ -78,5 +80,89 @@ func TestTheCallSiteOffersTheFarSideWithoutAnyDeclaration(t *testing.T) {
 	}
 	if end.Title != "ConversationServer.GetConversation" {
 		t.Errorf("the far end should name the code that serves it, got %q", end.Title)
+	}
+}
+
+// declaring writes a shared rules file and opens the workspace with it, the
+// way an org file is wired in at startup.
+func declaring(t *testing.T, mode Mode, body string) *Workspace {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "org-recognizers.json")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := RulePaths
+	t.Cleanup(func() { RulePaths = prev })
+	RulePaths = []string{path}
+
+	dirs, err := Discover(abs(t, "testdata/ws"))
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	w, err := Open(dirs, abs(t, "testdata/ws/inbox"), "", mode)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	return w
+}
+
+// The reason a declaration still matters now that registrations are read from
+// code: it costs no index. In a lazy workspace the repositories behind the one
+// you are standing in have not been read, and until they are, the only thing
+// that can say who serves a key is something that was *stated*.
+func TestADeclarationAnswersBeforeTheRepoIsIndexed(t *testing.T) {
+	w := declaring(t, ModeLazy, `{"serves": [
+	  {"service": "conversation", "kind": "grpc.method", "keys": ["conversation.v1.ConversationService/GetConversation"]}
+	]}`)
+
+	r := w.repos["conversation"]
+	r.mu.Lock()
+	loaded := r.loaded
+	r.mu.Unlock()
+	if loaded {
+		t.Fatalf("this test is about an unindexed repo; conversation was indexed")
+	}
+	ends := w.endsOf("grpc.method", "conversation.v1.ConversationService/GetConversation", model.RoleInbound)
+	if len(ends) != 1 || ends[0] != "conversation" {
+		t.Fatalf("the declared end should answer without an index, got %v", ends)
+	}
+}
+
+// A pattern declares a whole service in a line — the shape "point at the
+// protos" had, without the protos.
+func TestADeclaredPatternCoversEveryKeyUnderIt(t *testing.T) {
+	w := declaring(t, ModeLazy, `{"serves": [
+	  {"service": "conversation", "kind": "grpc.method", "keys": ["billing.v1.BillingService/*"]}
+	]}`)
+
+	ends := w.endsOf("grpc.method", "billing.v1.BillingService/Charge", model.RoleInbound)
+	if len(ends) != 1 || ends[0] != "conversation" {
+		t.Fatalf("a key under the pattern should resolve to the service that declared it, got %v", ends)
+	}
+	if ends := w.endsOf("grpc.method", "other.v1.Service/Charge", model.RoleInbound); len(ends) != 0 {
+		t.Errorf("a key outside the pattern must not, got %v", ends)
+	}
+	// And the channel index agrees with the join it indexes, rather than
+	// showing a key that resolves as one nobody serves.
+	var found bool
+	for _, ch := range w.Channels() {
+		if ch.Key == "billing.v1.BillingService/*" && len(ch.Inbound) == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the declared pattern should be a row of its own: %+v", w.Channels())
+	}
+}
+
+// A declaration about one service says nothing about another, whichever file
+// it was written in.
+func TestADeclarationBelongsToTheServiceItNames(t *testing.T) {
+	w := declaring(t, ModeLazy, `{"serves": [
+	  {"service": "gateway", "kind": "http.route", "keys": ["GET /v1/threads"]}
+	]}`)
+	ends := w.endsOf("http.route", "GET /v1/threads", model.RoleInbound)
+	if len(ends) != 1 || ends[0] != "gateway" {
+		t.Fatalf("expected gateway to be the end, got %v", ends)
 	}
 }
