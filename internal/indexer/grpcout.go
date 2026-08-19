@@ -6,8 +6,15 @@ import (
 
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/platform"
+	"github.com/MaxInertia/unfold/internal/rules"
 	"golang.org/x/tools/go/packages"
 )
+
+// callsRuleID names the outbound gRPC pass. Both gRPC passes are addressable
+// so they can be switched off and counted like every other recognizer: they
+// were the only two with no id, which made "which rule drew this edge" a
+// question with no answer for the edges that matter most.
+const callsRuleID = "builtin.grpc.calls"
 
 // Outbound gRPC edges, derived from the call graph rather than from scanning
 // for literals.
@@ -59,6 +66,24 @@ import (
 // as "this service depends on nothing" instead of "unfold couldn't tell".
 // Saying how many were dropped makes the difference visible.
 func (i *Indexer) grpcOutbound() ([]model.Binding, int) {
+	// Where each edge is written, so the call site itself can offer the far
+	// side. The binding alone puts the hop in the service view; a reader
+	// standing in the handler that makes the call was still shown a call into
+	// a generated stub with nothing saying the implementation is one click
+	// away in another repository.
+	i.grpcLeaves = map[string]rules.LeafDecision{}
+	boundary := func(c *callInfo, key string) {
+		if c == nil {
+			return
+		}
+		i.grpcLeaves[i.siteKeyOf(c)] = rules.LeafDecision{
+			RuleID:    callsRuleID,
+			Key:       strings.TrimPrefix(key, "/"),
+			Kind:      "grpc.method",
+			Role:      model.RoleOutbound,
+			CrossRepo: true,
+		}
+	}
 	// Only call sites execution can actually reach count. Without this, a
 	// client sitting unused in the repo still produced an edge — the repo
 	// containing the ability to make a call is not the service making it.
@@ -97,14 +122,21 @@ func (i *Indexer) grpcOutbound() ([]model.Binding, int) {
 		if i.ownsCode(i.funcs[id]) && !i.isGeneratedClient(id) {
 			if keep(id) {
 				out = emit(out, id, key, id)
+				// The transport call in its own body is where execution
+				// leaves: there is no client method standing between this
+				// code and the wire, so the boundary is the Invoke itself.
+				for _, c := range i.transportCallsIn(id) {
+					boundary(c, key)
+				}
 			}
 			continue
 		}
 		// Otherwise the method stands for the RPC, and the calls are whoever
 		// invokes it from this project.
-		for _, site := range i.ownedCallersOf(id) {
-			if keep(site) {
-				out = emit(out, site, key, id)
+		for _, oc := range i.ownedCallersOf(id) {
+			if keep(oc.site) {
+				out = emit(out, oc.site, key, id)
+				boundary(oc.call, key)
 			}
 		}
 	}
@@ -139,9 +171,9 @@ func (i *Indexer) grpcBinding(site TargetID, key string, client TargetID) model.
 // intermediate hops are an SDK's own layers, and the search stops the moment
 // it arrives somewhere that belongs to the service. Frames further out never
 // enter the result, so a caller-of-a-caller can't inherit the edge.
-func (i *Indexer) ownedCallersOf(client TargetID) []TargetID {
+func (i *Indexer) ownedCallersOf(client TargetID) []ownedCall {
 	var (
-		frontier []TargetID
+		frontier []ownedCall
 		seen     = map[TargetID]bool{client: true}
 		queue    = []TargetID{client}
 	)
@@ -156,13 +188,42 @@ func (i *Indexer) ownedCallersOf(client TargetID) []TargetID {
 			}
 			seen[u.parent] = true
 			if fi := i.funcs[u.parent]; fi != nil && i.ownsCode(fi) {
-				frontier = append(frontier, u.parent)
+				// The call as well as the function: the binding is about the
+				// function, but the boundary a reader clicks is one call in
+				// it, and by the time the walk arrives here the edge that got
+				// us to owned code is the only thing that knows which.
+				frontier = append(frontier, ownedCall{site: u.parent, call: u.call})
 				continue // the frontier is the answer; don't climb past it
 			}
 			queue = append(queue, u.parent)
 		}
 	}
 	return frontier
+}
+
+// ownedCall is one owned call site that reaches a client method: the enclosing
+// function, which owns the edge, and the call written in it, which is where the
+// boundary is drawn.
+type ownedCall struct {
+	site TargetID
+	call *callInfo
+}
+
+// transportCallsIn returns the calls in a function's body that issue the RPC
+// themselves — the Invoke/NewStream of a hand-written client, where the frame
+// making the call and the frame reaching the wire are the same one.
+func (i *Indexer) transportCallsIn(id TargetID) []*callInfo {
+	fi := i.funcs[id]
+	if fi == nil {
+		return nil
+	}
+	var out []*callInfo
+	for _, c := range fi.calls {
+		if c.displayName == "Invoke" || c.displayName == "NewStream" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // directInvokeKey returns the gRPC method path a function issues in its own

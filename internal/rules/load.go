@@ -14,11 +14,50 @@ import (
 // rule is exactly the failure this package exists to avoid. They surface in
 // the UI instead.
 type Set struct {
-	Rules    []Rule
+	Rules []Rule
+	// Serves is what the files declare their services serve, in file order.
+	// Unlike rules these are not merged by id: two files declaring the same
+	// service's surface are two statements about it, and the union is what
+	// both of them meant.
+	Serves   []Serve
 	Problems []string
 	// Sources records which file each rule id came from, so "why is this edge
 	// here" is answerable down to the file someone else committed.
 	Sources map[string]string
+}
+
+// isRepoLocal reports whether a rules file is a repository's own, which is the
+// only file whose unnamed statements have a subject.
+func isRepoLocal(path string) bool {
+	return path != "" && path == RepoPath(filepath.Dir(filepath.Dir(path)))
+}
+
+// ServesFor returns the entries that apply to one service, matched by any of
+// the names it goes by — its directory and whatever its manifest calls it.
+//
+// A repo-local file's unnamed entries are about the repository they are in,
+// which is how they were validated, so they apply wherever that file was read.
+func (s Set) ServesFor(dir string, names ...string) []Serve {
+	want := map[string]bool{}
+	for _, n := range names {
+		if n != "" {
+			want[n] = true
+		}
+	}
+	local := RepoPath(dir)
+	var out []Serve
+	for _, sv := range s.Serves {
+		if sv.Service == "" {
+			if local != "" && sv.From == local {
+				out = append(out, sv)
+			}
+			continue
+		}
+		if want[sv.Service] {
+			out = append(out, sv)
+		}
+	}
+	return out
 }
 
 // Disabled reports the ids switched off, including built-ins.
@@ -73,6 +112,21 @@ func Load(paths ...string) Set {
 				set.Rules = append(set.Rules, r)
 			}
 			set.Sources[r.ID] = path
+		}
+		for _, sv := range f.Serves {
+			// A shared file's entry has to name the service it is about: with
+			// no name it would mean "this file's repository", and a file
+			// applied to every repository would make every one of them serve
+			// it. Repo-local files are the last path in the list, which is
+			// where an unnamed entry is answerable.
+			if sv.Service == "" && !isRepoLocal(path) {
+				set.Problems = append(set.Problems, fmt.Sprintf(
+					"%s: a serves entry in a shared file must name its service, "+
+						"or every repository would be said to serve it", path))
+				continue
+			}
+			sv.From = path
+			set.Serves = append(set.Serves, sv)
 		}
 	}
 
