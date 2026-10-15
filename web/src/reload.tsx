@@ -12,9 +12,15 @@ const ReloadContext = createContext(0);
 // ticked would be redrawing to report someone else's progress.
 const ReposContext = createContext(0);
 
+// Bumped when a tour file under .unfold/tours changes on disk. Tours are
+// mostly written by something other than this page, so this is the only way
+// a new one gets here without a refresh.
+const ToursContext = createContext(0);
+
 export function ReloadProvider({ children }: { children: ReactNode }) {
   const [revision, setRevision] = useState(0);
   const [repos, setRepos] = useState(0);
+  const [tours, setTours] = useState(0);
   useEffect(() => {
     let es: EventSource | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -24,6 +30,7 @@ export function ReloadProvider({ children }: { children: ReactNode }) {
       es = new EventSource("/api/events");
       es.addEventListener("reload", () => setRevision((n) => n + 1));
       es.addEventListener("repos", () => setRepos((n) => n + 1));
+      es.addEventListener("tours", () => setTours((n) => n + 1));
       es.onerror = () => {
         // The stream dropped (e.g. server restart). Reconnect after a short
         // delay; EventSource also retries on its own, but closing avoids a
@@ -42,7 +49,9 @@ export function ReloadProvider({ children }: { children: ReactNode }) {
   }, []);
   return (
     <ReloadContext.Provider value={revision}>
-      <ReposContext.Provider value={repos}>{children}</ReposContext.Provider>
+      <ReposContext.Provider value={repos}>
+        <ToursContext.Provider value={tours}>{children}</ToursContext.Provider>
+      </ReposContext.Provider>
     </ReloadContext.Provider>
   );
 }
@@ -54,4 +63,9 @@ export function useReloadRevision(): number {
 // Bumped when a repository starts or finishes indexing.
 export function useReposRevision(): number {
   return useContext(ReposContext);
+}
+
+// Bumped when a tour file changes on disk.
+export function useToursRevision(): number {
+  return useContext(ToursContext);
 }

@@ -8,7 +8,9 @@ import { SettingsPanel } from "./SettingsPanel";
 import { RulesPanel } from "./RulesPanel";
 import { useSettings } from "./settings";
 import { NotesList } from "./NotesUI";
+import { TourPanel } from "./TourPanel";
 import { loadNotes } from "./notes";
+import { activeTour, loadTours, nextStop, prevStop, setTourRevision, useTourDriver, useTours } from "./tours";
 import { ServiceView } from "./ServiceView";
 import { PlatformView } from "./PlatformView";
 import { ChannelIndex } from "./ChannelIndex";
@@ -22,11 +24,11 @@ import {
   type ServiceFilters,
 } from "./ZoomSidebar";
 import { repoOf, zoomIn, zoomOut } from "./zoom";
-import { matches } from "./keybindings";
+import { inTextField, matches } from "./keybindings";
 import { fetchServiceView, fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult, ServiceView as ServiceViewT } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
-import { ReloadProvider, useReloadRevision } from "./reload";
+import { ReloadProvider, useReloadRevision, useToursRevision } from "./reload";
 import { setBookmarkProject, useBookmarks } from "./bookmarks";
 import { closeRules, toggleRules, useRulesPanel } from "./rules";
 
@@ -71,7 +73,7 @@ function AppShell() {
   // A pick is remembered as itself, so choosing a tab survives health
   // resolving late and never gets overwritten by a default.
   const [sidebarTab, setSidebarTab] = useState<
-    "files" | "callers" | "entrypoints" | "notes" | null
+    "files" | "callers" | "entrypoints" | "notes" | "tour" | null
   >(null);
   const [rightTab, setRightTab] = useState<"calls" | "outbounds" | null>(null);
   const [reindexed, setReindexed] = useState(false);
@@ -258,6 +260,19 @@ function AppShell() {
     loadNotes();
   }, []);
 
+  // Tours are written to disk by agents and people, so the list is refetched
+  // on every "tours" event, and the stops are re-resolved after a reindex
+  // (target ids don't survive one).
+  const toursRevision = useToursRevision();
+  useEffect(() => {
+    void loadTours();
+  }, [toursRevision]);
+  useEffect(() => {
+    setTourRevision(revision);
+  }, [revision]);
+  useTourDriver();
+  const tourStopCount = activeTour(useTours())?.stops.length ?? 0;
+
   // Everything the trail shows comes from one request: the service's name,
   // whether the current frame is even *in* that service, and how many
   // entrypoints reach it. The backend only echoes an anchor that belongs to
@@ -293,6 +308,19 @@ function AppShell() {
   // lateral move worth undoing in a single repo too.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // Bare keys, so not while typing.
+      if (!inTextField(e.target)) {
+        if (matches("tour.next", e)) {
+          e.preventDefault();
+          nextStop();
+          return;
+        }
+        if (matches("tour.prev", e)) {
+          e.preventDefault();
+          prevStop();
+          return;
+        }
+      }
       if (matches("history.back", e)) {
         e.preventDefault();
         history.back();
@@ -433,6 +461,15 @@ function AppShell() {
                       >
                         notes
                       </button>
+                      <button
+                        type="button"
+                        className={`tree-tab${leftTab === "tour" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("tour")}
+                        title="follow a guided reading list from .unfold/tours — [ and ] step through it"
+                      >
+                        tour
+                        {tourStopCount > 0 && <span className="tree-tab-count">{tourStopCount}</span>}
+                      </button>
                     </>
                   ) : (
                     <span className="tree-tab tree-tab--active tree-tab--static">
@@ -462,6 +499,8 @@ function AppShell() {
                     <FileTree onOpen={(id) => store.setSymbol(id)} />
                   ) : leftTab === "notes" ? (
                     <NotesList />
+                  ) : leftTab === "tour" ? (
+                    <TourPanel />
                   ) : platform && leftTab === "entrypoints" ? (
                     <EntrypointsPanel view={serviceView} onOpen={(id) => store.setSymbol(id)} />
                   ) : !rootFrame ? (

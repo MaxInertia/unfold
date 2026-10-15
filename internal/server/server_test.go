@@ -18,6 +18,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/indexer"
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/notes"
+	"github.com/MaxInertia/unfold/internal/tours"
 )
 
 // TestEndpoints exercises the API against the unfold module itself.
@@ -29,6 +30,7 @@ func TestEndpoints(t *testing.T) {
 	srv := New(idx)
 	srv.SetTarget("./...")
 	srv.SetNotes(notes.NewStore(t.TempDir()))
+	srv.SetTours(tours.NewStore(t.TempDir()))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -201,6 +203,52 @@ func TestEndpoints(t *testing.T) {
 		dres, err := http.DefaultClient.Do(req)
 		if err != nil || dres.StatusCode != http.StatusOK {
 			t.Fatalf("delete: status=%v err=%v", dres, err)
+		}
+	})
+
+	t.Run("tours-list-and-save", func(t *testing.T) {
+		// Empty project: an empty list, not null, and the directory an author
+		// should write into.
+		var empty struct {
+			Tours []tours.Tour `json:"tours"`
+			Dir   string       `json:"dir"`
+		}
+		getJSON(t, ts.URL+"/api/tours", http.StatusOK, &empty)
+		if empty.Tours == nil || len(empty.Tours) != 0 || !strings.HasSuffix(empty.Dir, filepath.Join(".unfold", "tours")) {
+			t.Fatalf("empty list: %+v", empty)
+		}
+		body := `{"name":"retry","title":"Retries","stops":[{"symbol":"NewReloadable","description":"start"},{"file":"cmd/cli/main.go","line":3,"expand":["x > y"]}]}`
+		res, err := http.Post(ts.URL+"/api/tours", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		var saved tours.Tour
+		if err := json.NewDecoder(res.Body).Decode(&saved); err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("save: status=%d err=%v", res.StatusCode, err)
+		}
+		if saved.Name != "retry" || len(saved.Stops) != 2 || saved.Stops[1].Expand[0] != "x > y" {
+			t.Fatalf("saved: %+v", saved)
+		}
+		var list struct {
+			Tours []tours.Tour `json:"tours"`
+		}
+		getJSON(t, ts.URL+"/api/tours", http.StatusOK, &list)
+		if len(list.Tours) != 1 || list.Tours[0].Title != "Retries" {
+			t.Fatalf("list: %+v", list)
+		}
+		// A tour that points nowhere is refused, with the reason.
+		bad, err := http.Post(ts.URL+"/api/tours", "application/json", strings.NewReader(`{"name":"bad","stops":[{"description":"?"}]}`))
+		if err != nil || bad.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid tour: status=%v err=%v", bad, err)
+		}
+	})
+
+	t.Run("tours-save-rejects-cross-origin", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/tours", strings.NewReader("{}"))
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil || res.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-site POST: status=%v err=%v", res, err)
 		}
 	})
 

@@ -15,7 +15,7 @@ export type KeyLike = {
   shiftKey: boolean;
 };
 
-export type KeyScope = "zoom" | "history" | "reading" | "search" | "notes";
+export type KeyScope = "zoom" | "history" | "reading" | "search" | "notes" | "tour";
 
 export interface Keybinding {
   id: string;
@@ -95,6 +95,21 @@ export const KEYBINDINGS: Keybinding[] = [
     description: "save the note being written",
     matches: withMod("Enter"),
   },
+  // Bare keys, so they are ignored while typing — see inTextField.
+  {
+    id: "tour.next",
+    scope: "tour",
+    keys: ["]"],
+    description: "go to the next stop of the active tour",
+    matches: bare("]"),
+  },
+  {
+    id: "tour.prev",
+    scope: "tour",
+    keys: ["["],
+    description: "go back to the previous stop",
+    matches: bare("["),
+  },
   {
     id: "ui.dismiss",
     scope: "reading",
@@ -120,6 +135,7 @@ export const SCOPE_LABELS: Record<KeyScope, string> = {
   reading: "reading",
   search: "search",
   notes: "notes",
+  tour: "tour",
 };
 
 // Bindings grouped for display, in the order scopes are declared above.
@@ -131,4 +147,19 @@ export function bindingsByScope(): [KeyScope, Keybinding[]][] {
     else groups.set(b.scope, [b]);
   }
   return [...groups];
+}
+
+// Whether a key event came from somewhere text is being typed. A bare-key
+// binding on the window must step aside there, or typing "]" into the search
+// box walks the tour. An *empty* field doesn't count: the search box has
+// focus when the page opens, and nothing is being typed into it yet, so the
+// first "]" should walk the tour rather than silently do nothing.
+export function inTextField(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.tagName !== "string") return false;
+  const tag = el.tagName.toLowerCase();
+  if (tag === "input" || tag === "textarea") {
+    return (el as HTMLInputElement).value !== "";
+  }
+  return tag === "select" || !!el.isContentEditable;
 }

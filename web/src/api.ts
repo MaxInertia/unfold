@@ -11,6 +11,7 @@ import type {
   SearchResult,
   ServiceView,
   TargetID,
+  Tour,
   TypeInfo,
   Usage,
 } from "./types";
@@ -264,4 +265,10 @@ async function postRules(body: unknown): Promise<RuleReport> {
     throw new Error(b?.error ?? `rules failed: ${res.status}`);
   }
   return res.json();
+}
+
+// The project's tours, and the directory an author writes them into.
+export async function fetchTours(): Promise<{ tours: Tour[]; dir: string }> {
+  const res = await getJSON<{ tours: Tour[]; dir: string }>("/api/tours");
+  return { tours: res.tours ?? [], dir: res.dir ?? "" };
 }

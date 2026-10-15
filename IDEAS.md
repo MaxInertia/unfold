@@ -284,3 +284,106 @@ Full design record in the vault: `docs/2026-08-07-unfold-user-defined-recognizer
 **Acceptance test for the language:** express the built-in gRPC rule as config and check it yields bindings identical to the hardcoded pass on `testdata/declared`. If it can't state the rule set that was hardest to get right, it won't survive the next library.
 
 **Second use — deciding what counts as a leaf.** A rule has a *match* half and an *action* half; today the action is always "emit a binding". Adding `leaf: true/false` / `render: resource` reuses the entire matching half. Today that decision is one hardcoded heuristic (`CallSite.External`, true for stdlib/deps), which is crude: an in-house SDK is a dependency you always want to expand, a logging library is expandable but never worth expanding, and a client fronting another service should show a junction card rather than transport plumbing. It would also make "why can't I expand this?" answerable, which it currently isn't.
+
+---
+
+## Tours — an LLM-authored list of places to look (2026-10-14) — SHIPPED (web)
+
+Shipped 2026-10-15 for the web UI: `internal/tours`, `/api/tours`, the
+`tours` event, the sidebar tab, `[` / `]`, in-code stop cards. Symbol lookup
+learned qualified names on the way (`pkg.Func`, `Type.Method`,
+`(*Type).Method`), since that is how an LLM writes them. The GoLand plugin is
+deliberately not covered yet. Sketch kept as the design record.
+
+An LLM (or a colleague) hands you an ordered list of notable places in the
+code, each with a description of why it matters, and unfold lets you step
+through them: next / previous, each stop loading in the view. "Here are the
+six places the retry logic lives, in the order you should read them."
+
+Today the nearest things are bookmarks (personal, localStorage, symbol only,
+no description, no order) and notes (file-anchored text, persisted in
+`.unfold/notes.json`, `[[Symbol]]` refs). A tour is the thing between them:
+ordered, described, shareable, and written by something other than the
+browser.
+
+### Sketch
+
+**Shape.** A tour is a named, ordered list of stops. A stop is a location
+plus prose:
+
+```json
+{
+  "name": "retry-path",
+  "title": "How a failed publish is retried",
+  "stops": [
+    { "symbol": "pubsub.(*Client).Publish",
+      "description": "Entry point. Note the ctx deadline is set here, not by callers." },
+    { "file": "internal/pubsub/retry.go", "line": 41,
+      "description": "The backoff table. Jitter is applied *after* the cap — that's the bug." },
+    { "symbol": "pubsub.(*Client).Publish",
+      "expand": ["retry.Do", "backoff.Next"],
+      "description": "Same entry point, but read it with the retry loop spliced in." }
+  ]
+}
+```
+
+A stop names either a `symbol` (Go `FullName`, TS registered name) or a
+`file`+`line`; both reuse what exists — symbols re-resolve by name through
+`LookupSymbol` as bookmarks were designed to, and file/line is a notes
+`Anchor`. Optional `expand` is a list of call names to splice in, so a stop
+can be a pre-unfolded reading, not just a position. Nothing in the format is
+unfold-specific knowledge an LLM doesn't already have: qualified names and
+file:line are what it emits anyway.
+
+**Where it lives.** `.unfold/tours/<name>.json`, next to `notes.json`, for
+the same reason notes aren't in localStorage: it's knowledge capture, it
+should be plain text, committable, and — the point here — *writable by a
+process that isn't the browser*. Claude Code or any agent writes the file
+with its ordinary file tools; no client library, no MCP server needed for
+v1. A `POST /api/tours` is a small addition for agents that prefer HTTP.
+
+**Live update.** The notes store does not watch its file; an external
+writer's changes aren't seen until reload. Tours need that fixed: watch
+`.unfold/` in the existing watch-mode path and push a `tours` SSE event
+(`/api/events` already exists), so the panel fills in while the LLM is
+still writing the list. Do the same for notes while there.
+
+**UI.** A **Tour** panel in the left sidebar (alongside bookmarks / files /
+callers): the stop list with descriptions, the current stop highlighted,
+`N of M` in the header. Clicking a stop loads it: `setSymbol` for a symbol,
+whole-file frame scrolled to the line for file/line, then the `expand`
+chain spliced in the way the callers tree loads a pre-unfolded view. Next /
+previous on a keybinding (`]` / `[` or alt+→ / alt+←, via `keybindings.ts`).
+The description also renders *in the code* as a note at the stop's anchor,
+so the "why" sits beside the "where" and `[[Symbol]]` refs in it are links —
+reuse `NotesUI` rendering rather than inventing a second prose surface.
+
+**Unresolved stops stay visible.** A symbol that no longer resolves, or a
+line whose snippet drifted, is shown dimmed with the description intact —
+the LLM's reasoning is still worth reading even when the code moved. Same
+rule as bookmarks ("mark unresolved, don't drop").
+
+**Authoring.** A short skill / prompt fragment that says "write
+`.unfold/tours/<name>.json` with this schema; symbols are Go full names;
+one sentence per stop on *why*, not *what*". Because each stop can also be
+expressed as a URL hash (symbol + `v=` tree), a tour could alternatively be
+a list of links — but a file is easier for a model to write incrementally
+and for a human to diff.
+
+**GoLand plugin.** Same file format, read from the project root. A tool
+window listing the stops; next/previous moves the caret and, when `expand`
+is present, runs ExpandCall on the named call sites. More work than the web
+side (the plugin has no sidebar surface yet), so start on the web app and
+let the format settle there.
+
+### Open questions
+
+- One tour per file (many tours, pick in a dropdown) vs one `tours.json`
+  with a list — many files is friendlier to an agent writing one at a time.
+- Should finishing a stop be recorded (checked off) so a long tour survives
+  closing the tab? Cheap in localStorage; probably yes.
+- Is `expand` worth having in v1, or do symbol + file/line stops cover it?
+  Pre-unfolded stops are the thing that makes this better than a list of
+  `file:line` in a chat message — lean yes.
+- Let the browser write tours too (a "record my trail" button that emits
+  the file) so humans and LLMs produce the same artifact? Natural follow-up.

@@ -24,6 +24,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/notes"
 	"github.com/MaxInertia/unfold/internal/prefs"
 	"github.com/MaxInertia/unfold/internal/rules"
+	"github.com/MaxInertia/unfold/internal/tours"
 )
 
 //go:embed all:static/dist
@@ -35,6 +36,7 @@ type Server struct {
 	target string
 	differ *diff.Differ // nil = diff mode off
 	notes  *notes.Store // nil = notes disabled
+	tours  *tours.Store // nil = tours disabled
 	// projectDir is where per-project prefs are persisted (the proto root a
 	// user picks in the UI). Empty disables persistence.
 	projectDir string
@@ -88,6 +90,9 @@ func (s *Server) SetReloader(fn func() error) { s.reload = fn }
 // SetNotes enables the notes API backed by the given store.
 func (s *Server) SetNotes(n *notes.Store) { s.notes = n }
 
+// SetTours enables the tours API backed by the given store.
+func (s *Server) SetTours(t *tours.Store) { s.tours = t }
+
 // SetProjectDir records where to persist choices made in the UI, so a proto
 // root picked once survives a restart.
 func (s *Server) SetProjectDir(dir string) { s.projectDir = dir }
@@ -119,6 +124,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/channels", s.handleChannels)
 	mux.HandleFunc("/api/index-repo", s.handleIndexRepo)
 	mux.HandleFunc("/api/notes", s.handleNotes)
+	mux.HandleFunc("/api/tours", s.handleTours)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))
@@ -173,6 +179,11 @@ func (s *Server) NotifyReload() { s.notify("reload") }
 // code on screen changed, and a view that refetched itself every time a
 // background load ticked would be redrawing to report someone else's progress.
 func (s *Server) NotifyRepos() { s.notify("repos") }
+
+// NotifyTours tells every subscriber a tour file changed on disk. Tours are
+// usually written by something other than the browser, so this is how what
+// an agent just wrote reaches the panel without a refresh.
+func (s *Server) NotifyTours() { s.notify("tours") }
 
 // notify wakes every connected /api/events subscriber. Non-blocking: a client
 // whose buffer is full is already behind, and the events are edges on a state
@@ -895,6 +906,47 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "use GET, POST, or DELETE")
+	}
+}
+
+// /api/tours — list (GET) the tours in <project>/.unfold/tours/, or save one
+// (POST a Tour; its name becomes the filename). The files are the real
+// interface: an agent working in the repository writes them directly and
+// the watcher pushes a "tours" event. POST exists for authors that would
+// rather speak HTTP, and is same-origin-guarded like the other mutations.
+func (s *Server) handleTours(w http.ResponseWriter, r *http.Request) {
+	if s.tours == nil {
+		writeError(w, http.StatusNotImplemented, "tours are not enabled")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		list := s.tours.List()
+		if list == nil {
+			list = []tours.Tour{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"tours": list, "dir": s.tours.Dir()})
+	case http.MethodPost:
+		if !sameOrigin(r) {
+			writeError(w, http.StatusForbidden, "cross-origin request rejected")
+			return
+		}
+		var t tours.Tour
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&t); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid tour: "+err.Error())
+			return
+		}
+		saved, err := s.tours.Save(t)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		// The watcher will also notice the write, but say so now: a client
+		// that saved should not wait on a debounce to see its own tour.
+		s.NotifyTours()
+		writeJSON(w, http.StatusOK, saved)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "use GET or POST")
 	}
 }
 

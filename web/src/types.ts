@@ -383,3 +383,27 @@ export interface RuleSpec {
     confidence?: "declared" | "inferred";
   };
 }
+
+// ----- tours (mirrors internal/tours) -----
+
+// One place to look. Exactly one of symbol / file says where; expand lists
+// calls to splice in when the stop opens ("retry.Do", or "retry.Do >
+// backoff.Next" to nest; "#2" picks the second matching call site).
+export interface TourStop {
+  symbol?: string;
+  file?: string;
+  line?: number; // 1-based, with file
+  expand?: string[];
+  description?: string; // may contain [[SymbolName]] / [[file:path]] references
+}
+
+// A guided reading list, read from <project>/.unfold/tours/<name>.json.
+export interface Tour {
+  name: string;
+  title?: string;
+  description?: string;
+  stops: TourStop[];
+  updatedAt?: string;
+  // Set when the file could not be read as a tour; stops is then empty.
+  error?: string;
+}

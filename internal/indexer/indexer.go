@@ -2673,20 +2673,60 @@ func (i *Indexer) LookupSymbol(name string) (TargetID, error) {
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("no symbol matches %q", name)
 	}
+	// A bare name that several packages define — NewStore, say — picks the
+	// one in this repository over a dependency's, and alphabetical order
+	// only after that: the name as a reader writes it means their code.
 	sort.Slice(candidates, func(a, b int) bool {
+		oa, ob := i.ownsCode(i.funcs[candidates[a]]), i.ownsCode(i.funcs[candidates[b]])
+		if oa != ob {
+			return oa
+		}
 		return string(candidates[a]) < string(candidates[b])
 	})
 	return candidates[0], nil
 }
 
+// matchesSymbol reports whether a go/types full name — "path/to/pkg.Func",
+// "(*path/to/pkg.T).M" or "(path/to/pkg.T).M" — is what query names. The
+// query is any suffix of the dotted form a reader would write, so "M",
+// "T.M", "pkg.T.M", "(*T).M", "pkg.(*T).M", "(*pkg.T).M" and
+// "to/pkg.T.M" all find the method, while "AutoSave" does not find Save
+// and a package name alone finds nothing.
 func matchesSymbol(full, query string) bool {
-	// Match query against the basename: everything after the last '.' for
-	// package functions, after the last ".(*T)." or ".(T)." for methods.
-	dot := strings.LastIndex(full, ".")
-	if dot < 0 {
-		return full == query
+	if full == query {
+		return true
 	}
-	return full[dot+1:] == query || full == query
+	dotted := dottedName(full)
+	q := normalizeSymbolQuery(query)
+	if q == "" {
+		return false
+	}
+	return dotted == q || strings.HasSuffix(dotted, "."+q) || strings.HasSuffix(dotted, "/"+q)
+}
+
+// dottedName flattens a full name to "path/to/pkg.T.M" (or "path/to/pkg.F")
+// so a query can be matched as a plain suffix.
+func dottedName(full string) string {
+	if !strings.HasPrefix(full, "(") {
+		return full
+	}
+	close := strings.Index(full, ")")
+	if close < 0 {
+		return full
+	}
+	recv := strings.TrimPrefix(full[1:close], "*")
+	return recv + full[close+1:]
+}
+
+// normalizeSymbolQuery strips receiver punctuation from the ways a method
+// can be written — "(*T).M", "pkg.(*T).M", "(*pkg.T).M" — to the dotted
+// form dottedName produces.
+func normalizeSymbolQuery(q string) string {
+	q = strings.TrimSpace(q)
+	q = strings.ReplaceAll(q, "(*", "")
+	q = strings.ReplaceAll(q, "(", "")
+	q = strings.ReplaceAll(q, ")", "")
+	return q
 }
 
 // Search returns up to `limit` symbols whose FullName contains query
