@@ -3922,3 +3922,235 @@ body.resizing {
   font-style: italic;
   cursor: help;
 }
+
+/* ---- tours: the sidebar tab, and the stop cards in the code ---- */
+
+.tour {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.3rem 0.2rem;
+  font-size: 0.8rem;
+}
+
+.tour-select {
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--fg);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.2rem 0.3rem;
+}
+
+.tour-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.1rem 0.3rem;
+}
+
+.tour-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tour-nav {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.tour-nav-btn {
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 0 0.35rem;
+  cursor: pointer;
+}
+
+.tour-nav-btn:hover {
+  background: var(--call-bg);
+}
+
+.tour-pos {
+  padding: 0 0.2rem;
+  white-space: nowrap;
+}
+
+.tour-desc {
+  padding: 0 0.3rem 0.2rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.tour-stops {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tour-stop {
+  border-radius: 4px;
+  padding: 0.15rem 0 0.3rem;
+}
+
+.tour-stop + .tour-stop {
+  border-top: 1px solid var(--card-border);
+}
+
+/* The stop you're on: a rail, like the active bookmark, so the row keeps
+   its height and the list doesn't reflow as you step. */
+.tour-stop--current {
+  background: var(--call-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.tour-stop--unresolved .tour-stop-where {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--call-border-disabled);
+}
+
+.tour-stop-open {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0.2rem 0.4rem 0.1rem;
+  cursor: pointer;
+}
+
+.tour-stop-open:hover {
+  background: var(--call-bg);
+}
+
+.tour-stop-n {
+  flex: 0 0 1.2rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-align: right;
+}
+
+.tour-stop-where {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tour-stop-flag {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.tour-stop-desc {
+  padding: 0 0.4rem 0 2rem;
+  color: var(--fg);
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.tour-error {
+  padding: 0.2rem 0.4rem;
+  color: var(--error);
+}
+
+.tour-howto {
+  padding: 0.2rem 0.4rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.tour-howto p {
+  margin: 0 0 0.5rem;
+}
+
+.tour-howto code {
+  color: var(--fg);
+}
+
+.tour-schema {
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 0.7rem;
+  line-height: 1.4;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* A stop's card in the code: a note in the tour's voice. The accent is the
+   same rail the sidebar uses for the current stop. */
+.note--tour {
+  border-color: var(--card-border);
+  border-left-color: var(--muted);
+  background: var(--card-bg);
+}
+
+.note--tour .note-label {
+  color: var(--muted);
+}
+
+.note--tour-current {
+  border-left-color: var(--accent);
+}
+
+.note--tour-current .note-label {
+  color: var(--accent);
+}
+
+.tour-card-pos {
+  color: var(--muted);
+}
+
+.tour-card-title {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.note--tour .note-action:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* The line a tour stop landed on, briefly. */
+.line-row--tour-focus {
+  animation: tour-focus 1.8s ease-out;
+}
+
+@keyframes tour-focus {
+  0%,
+  40% {
+    background: var(--call-bg);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}

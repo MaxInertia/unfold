@@ -735,6 +735,56 @@ anchored line's text changes after an edit, the note shows a **⚠ drifted**
 marker rather than silently pointing at the wrong place. The sidebar's
 **notes** tab lists every note with jump-to.
 
+## Tours
+
+A tour is an ordered list of places to look, each with a reason — written by
+you, a colleague, or an LLM working in the repository — that unfold steps
+through. "Here are the six places the retry logic lives, in the order to
+read them." Tours live as one JSON file each under `.unfold/tours/`, next to
+the notes, and the point of a file is who gets to write it: an agent in the
+repo writes it with its ordinary file tools and the panel updates as the
+file lands (the directory is watched; it doesn't have to exist yet).
+
+```json
+{
+  "title": "How a publish is retried",
+  "description": "Optional. Shown above the list.",
+  "stops": [
+    { "symbol": "pubsub.(*Client).Publish",
+      "description": "Entry point. The ctx deadline is set here, not by callers." },
+    { "file": "internal/pubsub/retry.go", "line": 41,
+      "description": "The backoff table. Jitter is applied *after* the cap — see [[backoff.Next]]." },
+    { "symbol": "Publish",
+      "expand": ["retry.Do", "retry.Do > backoff.Next"],
+      "description": "Same entry point, read with the retry loop spliced in." }
+  ]
+}
+```
+
+A stop names where with either a **symbol** — bare (`Publish`), qualified
+(`pubsub.Publish`, `Client.Publish`, `(*Client).Publish`), or the full
+`go/types` name — or a **file** by any path suffix plus an optional 1-based
+**line**. **expand** is a list of calls to open with the symbol, named as
+they appear at the call site; `>` nests (`retry.Do > backoff.Next` opens
+`backoff.Next` inside `retry.Do`) and `#2` picks the second matching site.
+Descriptions take the same `[[Name]]` / `[[file:path]]` references notes do.
+
+The sidebar's **tour** tab lists the tours (pick one if there are several)
+and every stop with its description; click a stop, or press **]** / **[**
+to step. A symbol stop replaces the view with that function and its
+expansions; a file stop opens the whole-file frame and scrolls to the line.
+Each stop's description also renders as a card in the code at its line, so
+the *why* sits beside the *where*. A stop that no longer resolves — a
+function renamed since the tour was written — stays in the list, dimmed,
+with the reason; an `expand` entry that matches nothing is flagged on the
+stop and the rest still opens. Your position in a tour is remembered per
+project.
+
+`GET /api/tours` lists them and `POST /api/tours` (a tour with a `name`,
+which becomes the filename) writes one, for authors that would rather speak
+HTTP than touch the directory. Where tours are kept is shown in the tab
+when there are none yet.
+
 ## Repository layout
 
 The Go module (CLI + HTTP server + indexers) is the repo root. Clients and

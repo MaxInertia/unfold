@@ -31,6 +31,8 @@ import { matches } from "./keybindings";
 import { useNotes } from "./notes";
 import { openRules } from "./rules";
 import { NoteCard, NoteComposer } from "./NotesUI";
+import { TourStopCard } from "./TourPanel";
+import { useTourStopCards, useTours, type TourStopCardInfo } from "./tours";
 
 export interface FoldRange {
   start: number;
@@ -82,6 +84,49 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const allNotes = useNotes();
   const [composing, setComposing] = useState<NoteAnchor | null>(null);
   const isFileFrame = frame.id.startsWith("file:");
+  const tourCards = useTourStopCards();
+  const tourFocus = useTours().focus;
+
+  // The active tour's stops that fall in this frame, by rendered line index
+  // — anchored in file space exactly as notes are, so a stop's card shows in
+  // the function frame and the whole-file frame alike.
+  const tourCardsByLine = useMemo(() => {
+    const m = new Map<number, TourStopCardInfo[]>();
+    for (const c of tourCards) {
+      if (c.file !== frame.file || c.line < frame.startLine || c.line > frame.endLine) continue;
+      const idx = c.line - frame.startLine;
+      m.set(idx, [...(m.get(idx) ?? []), c]);
+    }
+    return m;
+  }, [tourCards, frame.file, frame.startLine, frame.endLine]);
+
+  // A tour stop asked for a line in this file. Only the root frame answers,
+  // and only once its rows exist — highlighting is asynchronous, so the row
+  // may not be there on the first look.
+  useEffect(() => {
+    if (!tourFocus || path.length !== 0 || tourFocus.file !== frame.file) return;
+    const idx = tourFocus.line - frame.startLine;
+    if (idx < 0 || idx > frame.endLine - frame.startLine) return;
+    let tries = 0;
+    let timer = 0;
+    const attempt = () => {
+      const rootEl = document.querySelector<HTMLElement>('[data-frame-key=""]');
+      const row = rootEl
+        ? [...rootEl.querySelectorAll<HTMLElement>(`[data-line-idx="${idx}"]`)].find(
+            (r) => r.closest("[data-frame-key]") === rootEl,
+          )
+        : undefined;
+      if (row) {
+        row.scrollIntoView({ block: "center" });
+        row.classList.add("line-row--tour-focus");
+        timer = window.setTimeout(() => row.classList.remove("line-row--tour-focus"), 1800);
+        return;
+      }
+      if (++tries < 30) timer = window.setTimeout(attempt, 100);
+    };
+    attempt();
+    return () => window.clearTimeout(timer);
+  }, [tourFocus, frame.file, frame.startLine, frame.endLine, path.length]);
 
   const sourceLines = useMemo(() => frame.source.split("\n"), [frame.source]);
 
@@ -845,6 +890,9 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     }
     for (const n of notesByLine.get(lineIdx) ?? []) {
       extras.push(<NoteCard key={`n:${n.id}`} note={n} drifted={isDrifted(n)} />);
+    }
+    for (const c of tourCardsByLine.get(lineIdx) ?? []) {
+      extras.push(<TourStopCard key={`t:${c.index}`} card={c} />);
     }
     if (
       composing &&

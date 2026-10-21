@@ -22,6 +22,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/prefs"
 	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/server"
+	"github.com/MaxInertia/unfold/internal/tours"
 	"github.com/MaxInertia/unfold/internal/workspace"
 )
 
@@ -133,6 +134,16 @@ func main() {
 	srv.SetProjectDir(projectDir(*dir))
 	// Notes persist to <dir>/.unfold/notes.json (created on first save).
 	srv.SetNotes(notes.NewStore(*dir))
+	// Tours are read from <dir>/.unfold/tours/*.json. They are written there
+	// by agents and people, not (only) the browser, so the directory is
+	// watched and a change is pushed to the page as it happens.
+	tourStore := tours.NewStore(*dir)
+	srv.SetTours(tourStore)
+	if tw, err := tourStore.Watch(srv.NotifyTours); err != nil {
+		log.Printf("tours watch disabled: %v", err)
+	} else {
+		defer tw.Close()
+	}
 	// Linking a repo changes which repositories the engine opens, and that
 	// only takes effect on a rebuild. Reload is the same path watch mode
 	// uses — it swaps atomically and keeps the previous engine on failure.
