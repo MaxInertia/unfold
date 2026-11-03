@@ -42,8 +42,9 @@ the user mentioned unfold).
 }
 ```
 
-Rules the server enforces (a file that breaks one still lists, dimmed,
-with the error, so the reader sees it rather than nothing):
+Rules the server enforces (a file that breaks one still lists in the tour
+tab, marked unreadable, with the error shown, so the reader sees it rather
+than nothing):
 
 - `stops` must have at least one entry.
 - Each stop names **either** `symbol` **or** `file`, never both.
@@ -66,11 +67,19 @@ pubsub.Client.Publish
 (*pubsub.Client).Publish
 ```
 
-A bare name is fine when it is unique in the project. Qualify it when it
-is not: `Save` is ambiguous in most repos, `notes.Store.Save` is not.
-Suffix matching is on dot boundaries, so `Save` does not match `AutoSave`.
+A bare name is fine when it is unique in the project. When several
+symbols match, the server silently picks the first full name
+alphabetically, so qualify anything that might be ambiguous: `Save` is
+ambiguous in most repos, `notes.Store.Save` is not. Suffix matching is on
+dot and slash boundaries, so `Save` does not match `AutoSave`.
 
-For TypeScript, use the exported name, or `Class.method`.
+For TypeScript, symbols are indexed as the function name, `Class.method`
+for methods, or the variable name for an arrow function assigned to a
+const. The query must equal that name or its part after the last dot;
+there are no package or file prefixes.
+
+In a multi-repo workspace, prefix the repo alias with `::`
+(`billing::pubsub.Publish`). Without a prefix the primary repo is searched.
 
 ## `expand`
 
@@ -110,10 +119,15 @@ notes.
 4. Tell the user the tour name and that it is in the tour tab. Do not
    paste the stop list into chat as well.
 
-If the server is running you can check resolution with
-`curl -s localhost:<port>/api/tours`; a stop that failed to resolve
-carries an `error`. `POST /api/tours` with a body that includes `name`
-also writes a tour, for when the file system is not reachable.
+Stops are resolved in the browser, not by the server, so
+`GET /api/tours` returns the files as written plus the tours directory;
+its `error` field only means a file could not be read or failed the rules
+above. To check a symbol name before writing it, ask the server directly:
+`curl -s 'localhost:<port>/api/symbol?name=pubsub.Publish'` returns the
+frame it would open, or an error if nothing matches. `GET /api/files`
+lists the indexed paths a file stop is matched against by suffix.
+`POST /api/tours` with a body that includes `name` also writes a tour,
+for when the file system is not reachable; it works from curl.
 
 ## Keep or discard
 
