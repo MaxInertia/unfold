@@ -394,8 +394,15 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     return () => {
       alive = false;
     };
+    // `frame.id` is a dependency because the slice can change before the
+    // frame does: a tour re-roots the view with a ready-made expansion tree,
+    // the store commits symbol and tree together, and the new root frame
+    // arrives a fetch later. Without it this ran once against the *old*
+    // frame's calls, found none of the ids it wanted, and never ran again —
+    // so an `expand` stop opened with its call site marked expanded and no
+    // body under it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slice.expansions, revision]);
+  }, [slice.expansions, revision, frame.id]);
 
   // Fetch the body of each expanded fan-out receiver, and prune frames for
   // receivers that have since been collapsed. Each receiver resolves to its
