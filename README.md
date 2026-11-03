@@ -785,6 +785,12 @@ which becomes the filename) writes one, for authors that would rather speak
 HTTP than touch the directory. Where tours are kept is shown in the tab
 when there are none yet.
 
+For agents, [`.claude/skills/unfold-tour/SKILL.md`](./.claude/skills/unfold-tour/SKILL.md)
+is the authoring guide Claude Code loads in this repository: when to write
+a tour, the schema, how to name symbols, and the `expand` syntax. Copy it
+into another project's `.claude/skills/` (or `~/.claude/skills/`) to have
+tours written there too.
+
 ## Repository layout
 
 The Go module (CLI + HTTP server + indexers) is the repo root. Clients and
