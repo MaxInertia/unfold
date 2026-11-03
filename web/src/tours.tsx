@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { fetchBodyByCall, fetchFiles, fetchSymbol, fetchTours } from "./api";
 import { resolveStop, type ResolvedStop } from "./tourResolve";
 import type { Tour, TourStop } from "./types";
@@ -225,29 +225,37 @@ export function prevStop() {
 // next, so this waits on it rather than opening nothing.
 export function useTourDriver() {
   const store = useViewStore();
+  // The store context is rebuilt whenever the view changes (its identity
+  // carries symbol/zoom/service), so it must not be an effect dependency:
+  // clicking a [[ref]] in a stop's description used to change the view,
+  // which rebuilt the store, which re-ran this effect with the same openSeq
+  // and re-opened the stop — two root fetches racing, and the reader left
+  // looking at the ref's frame under the stop's URL (or the reverse). Read
+  // the store through a ref and act on each openSeq exactly once.
+  const storeRef = useRef(store);
+  storeRef.current = store;
+  const handled = useRef(0);
   const { openSeq, index, active } = useTours();
   useEffect(() => {
-    if (openSeq === 0 || index < 0) return;
+    if (openSeq === 0 || index < 0 || handled.current === openSeq) return;
+    handled.current = openSeq;
     const tour = activeTour();
     const stop = tour?.stops[index];
     if (!tour || !stop) return;
-    let alive = true;
     ensureResolved(index, stop).then((r) => {
-      if (!alive) return;
+      // A later open supersedes this one.
+      if (state.openSeq !== openSeq) return;
       if (r.kind === "symbol") {
-        store.setView(r.targetId, r.tree);
+        storeRef.current.setView(r.targetId, r.tree);
         set({ focus: { file: r.file, line: r.line, seq: openSeq } });
       } else if (r.kind === "file") {
-        store.setSymbol(`file:${r.file}`);
+        storeRef.current.setSymbol(`file:${r.file}`);
         set({ focus: { file: r.file, line: r.line, seq: openSeq } });
       }
     });
-    return () => {
-      alive = false;
-    };
-    // `active` is a dependency so a stop opened right after switching tours
-    // reads the new tour, not a stale closure over the old one.
-  }, [openSeq, index, active, store]);
+    // `active` stays a dependency so a stop opened right after switching
+    // tours reads the new tour, not a stale closure over the old one.
+  }, [openSeq, index, active]);
 }
 
 // ---- what a frame renders ----
