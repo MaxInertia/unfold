@@ -1,11 +1,15 @@
 import { useEffect, useRef } from "react";
 import { NoteText } from "./NotesUI";
+import { updateSettings, useSettings } from "./settings";
+import { useSpeech } from "./speech";
 import {
   activeTour,
   goToStop,
   nextStop,
   prevStop,
   selectTour,
+  speakStop,
+  speechKey,
   useTours,
   type TourStopCardInfo,
 } from "./tours";
@@ -134,6 +138,8 @@ export function TourPanel() {
 function TourNav({ index, total }: { index: number; total: number }) {
   return (
     <span className="tour-nav">
+      <ReadAloudToggle />
+      <PlayStopButton index={index} className="tour-nav-btn" />
       <button
         type="button"
         className="tour-nav-btn"
@@ -154,6 +160,47 @@ function TourNav({ index, total }: { index: number; total: number }) {
         ›
       </button>
     </span>
+  );
+}
+
+// Whether stops are read aloud as they open. Lives next to the tour rather
+// than in the settings panel because it's decided per sitting: on with
+// headphones, off in a shared room.
+function ReadAloudToggle() {
+  const { tourReadAloud } = useSettings();
+  const { available } = useSpeech();
+  if (!available) return null;
+  return (
+    <button
+      type="button"
+      className={`tour-nav-btn tour-nav-btn--toggle${tourReadAloud ? " tour-nav-btn--on" : ""}`}
+      onClick={() => updateSettings({ tourReadAloud: !tourReadAloud })}
+      aria-pressed={tourReadAloud}
+      title={tourReadAloud ? "stops are read aloud as they open — click to stop" : "read stops aloud as they open"}
+      aria-label="read stops aloud"
+    >
+      {tourReadAloud ? "🔊" : "🔇"}
+    </button>
+  );
+}
+
+// Read one stop on demand; while it plays the same button stops it. Shown
+// for the current stop in the tour header and on every stop's card.
+function PlayStopButton({ index, className }: { index: number; className: string }) {
+  const { speaking, available } = useSpeech();
+  const playing = speaking?.key === speechKey(index);
+  if (!available) return null;
+  return (
+    <button
+      type="button"
+      className={`${className}${playing ? " tour-play--playing" : ""}`}
+      onClick={() => speakStop(index)}
+      disabled={index < 0}
+      title={playing ? "stop reading" : "read this stop aloud"}
+      aria-label={playing ? "stop reading" : "read this stop aloud"}
+    >
+      {playing ? "■" : "▶"}
+    </button>
   );
 }
 
@@ -217,6 +264,7 @@ export function TourStopCard({ card }: { card: TourStopCardInfo }) {
           </span>
         )}
         <span className="note-when" />
+        <PlayStopButton index={index} className="note-action" />
         <button
           type="button"
           className="note-action"

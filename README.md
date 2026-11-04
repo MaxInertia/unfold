@@ -780,6 +780,13 @@ with the reason; an `expand` entry that matches nothing is flagged on the
 stop and the rest still opens. Your position in a tour is remembered per
 project.
 
+Stops can be read aloud. The speaker toggle next to the tour's title reads
+each stop as it opens — its position, its name, then the description, with
+`[[refs]]` spoken as bare names — and the ▶ beside it (and on every stop's
+card) reads one on demand; the same button stops it. This uses the
+browser's own speech synthesis, so it needs no setup; the toggle is a
+reader preference and survives reloads.
+
 `GET /api/tours` lists them and `POST /api/tours` (a tour with a `name`,
 which becomes the filename) writes one, for authors that would rather speak
 HTTP than touch the directory. Where tours are kept is shown in the tab

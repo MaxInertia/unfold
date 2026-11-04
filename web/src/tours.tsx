@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { fetchBodyByCall, fetchFiles, fetchSymbol, fetchTours } from "./api";
+import { currentSettings } from "./settings";
+import { speak, stopSpeaking, stopSpeechText } from "./speech";
 import { resolveStop, type ResolvedStop } from "./tourResolve";
 import type { Tour, TourStop } from "./types";
 import { useViewStore } from "./viewState";
@@ -190,6 +192,7 @@ function ensureResolved(i: number, stop: TourStop): Promise<ResolvedStop> {
 
 export function selectTour(name: string | null) {
   if (name === state.active) return;
+  stopSpeaking();
   set({ active: name, index: -1 });
   resolveAll();
   savePosition();
@@ -200,6 +203,25 @@ export function goToStop(i: number) {
   if (!tour || i < 0 || i >= tour.stops.length) return;
   set({ index: i, openSeq: state.openSeq + 1 });
   savePosition();
+  // Read the stop as it opens, when asked to. Spoken here rather than in
+  // the driver: the text is known without waiting on the resolution, and
+  // an unresolved stop still has a description worth hearing.
+  stopSpeaking();
+  if (currentSettings().tourReadAloud) speakStop(i);
+}
+
+// The identity a stop speaks under, so a play button can tell "this one
+// is playing" from "something else is".
+export function speechKey(i: number): string {
+  return `${state.active}#${i}`;
+}
+
+// Read stop i aloud; pressing it again while it plays stops it.
+export function speakStop(i: number) {
+  const tour = activeTour();
+  const stop = tour?.stops[i];
+  if (!tour || !stop) return;
+  speak(speechKey(i), stopSpeechText(stop, i, tour.stops.length));
 }
 
 export function nextStop() {
