@@ -144,6 +144,14 @@ type Indexer struct {
 	// scanned once however many call sites reach it.
 	invokeCache map[TargetID]invokeResult
 
+	// descs are the generated gRPC service descriptors in the loaded set,
+	// keyed by the variable holding each one — the inbound half of what
+	// generated code states about a service's surface. descCache memoizes the
+	// descriptor a registration function registers, so a helper called from
+	// twenty places is read once.
+	descs     map[types.Object]*serviceDesc
+	descCache map[TargetID]*serviceDesc
+
 	// bindings are the platform edges recognized in this project — routes it
 	// serves, topics it names, calls it makes out. Collected during Load in
 	// the same body walk that resolves call sites.
@@ -181,6 +189,10 @@ type Indexer struct {
 	// leaves is the reading-time classification rules made for call sites,
 	// keyed file:line.
 	leaves map[string]rules.LeafDecision
+	// grpcLeaves is the same classification made by the built-in gRPC pass,
+	// kept apart until they are merged so that a configured rule about a call
+	// site stays the last word about it.
+	grpcLeaves map[string]rules.LeafDecision
 
 	// outboundUnreachable counts outbound call sites excluded because
 	// execution can't reach them from any recognized entrypoint.
@@ -295,6 +307,7 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.bindings = nil
 	i.outboundUnreachable = 0
 	i.invokeCache = make(map[TargetID]invokeResult)
+	i.descCache = make(map[TargetID]*serviceDesc)
 	i.mf = nil
 	i.protoErr = ""
 	i.identify(dir, pkgs)
@@ -409,8 +422,10 @@ func (i *Indexer) Load(dir, pattern string) error {
 		}
 	})
 
-	// Pass 1c: the string a variable starts out holding.
+	// Pass 1c: the string a variable starts out holding, and the service
+	// descriptors generated code declares.
 	i.indexVarStrings(pkgs)
+	i.indexServiceDescs(pkgs)
 
 	// Configured rules run alongside the built-ins: `disabled` switches
 	// built-ins off, and the evaluator collects the facts its two phases need.
@@ -603,14 +618,35 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.applyVisibility()
 	i.bindings = append(i.bindings, i.declaredBindings()...)
 
+	// The served surface read from the registration itself, which is what a
+	// repo has when it has no manifest — the common case outside the platform
+	// this tier was first written against. It runs after the declared surface
+	// so it can stand aside for the keys that already have a stronger source,
+	// and before the outbound pass because these are entrypoints and
+	// reachability is seeded from them.
+	if !disabled[servedRuleID] {
+		served := i.grpcServed(i.declaredKeys())
+		i.titleEndpoints(served)
+		i.bindings = append(i.bindings, served...)
+	}
+
+	// And what the repo simply states it serves, for the surface neither the
+	// manifest nor this index can show. Last of the three, because it is the
+	// only one that knows nothing about where the code is.
+	declaredServes := i.declaredServes()
+	i.titleEndpoints(declaredServes)
+	i.bindings = append(i.bindings, declaredServes...)
+
 	// Outbound gRPC is a call-graph question rather than a per-call-site one,
 	// so it runs as its own pass. It goes *after* the declared surface
 	// because it seeds reachability from the inbound entrypoints, and for a
 	// gRPC-only service those are the proto-declared implementations — seed
 	// before they exist and every outbound edge looks unreachable.
-	grpcOut, unreachable := i.grpcOutbound()
-	i.bindings = append(i.bindings, grpcOut...)
-	i.outboundUnreachable = unreachable
+	if !disabled[callsRuleID] {
+		grpcOut, unreachable := i.grpcOutbound()
+		i.bindings = append(i.bindings, grpcOut...)
+		i.outboundUnreachable = unreachable
+	}
 
 	// Configured rules produce bindings the same way built-ins do, and are
 	// filtered the same way afterwards. Reachability is a property of the
@@ -628,6 +664,15 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.outboundUnreachable += ruleUnreachable
 	i.ruleStats = ev.Stats
 	i.leaves = ev.Leaves()
+	// A built-in boundary fills in where no rule claimed the site. Rules win:
+	// a recognizer someone wrote for their own SDK is a statement about that
+	// call site, and a built-in overruling it would make the rule file the
+	// one place a reader can't change what they see.
+	for site, d := range i.grpcLeaves {
+		if _, taken := i.leaves[site]; !taken {
+			i.leaves[site] = d
+		}
+	}
 	i.indexRuleSites(ev.Matched())
 
 	i.sortBindings()

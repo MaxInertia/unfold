@@ -1,6 +1,8 @@
 package rules
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -239,5 +241,128 @@ func TestOutputIsDeterministic(t *testing.T) {
 		} else if b.String() != first {
 			t.Fatalf("run %d differed:\n%s\n%s", i, first, b.String())
 		}
+	}
+}
+
+// A `serves` entry is a declaration rather than a recognizer: it says a
+// service is the inbound end of some keys, whatever the code does or doesn't
+// show.
+func TestServesEntriesParse(t *testing.T) {
+	f, problems, err := Parse([]byte(`{
+	  "serves": [
+	    {"//": "the whole gRPC service", "kind": "grpc.method", "keys": ["notes.v1.NotesService/*"]},
+	    {"service": "billing", "kind": "http.route", "keys": ["GET /v1/invoices", "POST /v1/invoices"]}
+	  ]
+	}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("expected no problems, got %v", problems)
+	}
+	if len(f.Serves) != 2 {
+		t.Fatalf("expected 2 entries, got %+v", f.Serves)
+	}
+	if f.Serves[1].Service != "billing" || len(f.Serves[1].Keys) != 2 {
+		t.Errorf("an entry may name the service it is about: %+v", f.Serves[1])
+	}
+}
+
+// The refusals, each for a claim far larger than its author meant.
+func TestServesEntriesAreValidated(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+	}{
+		{"no kind", `{"serves": [{"keys": ["a"]}]}`},
+		{"no keys", `{"serves": [{"kind": "grpc.method"}]}`},
+		{"empty key", `{"serves": [{"kind": "grpc.method", "keys": [" "]}]}`},
+		{"every key of its kind", `{"serves": [{"kind": "grpc.method", "keys": ["/*"]}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, problems, err := Parse([]byte(tc.json))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(problems) == 0 {
+				t.Errorf("expected a problem, got none")
+			}
+			if len(f.Serves) != 0 {
+				t.Errorf("an invalid entry must be dropped, got %+v", f.Serves)
+			}
+		})
+	}
+}
+
+func TestKeyMatches(t *testing.T) {
+	cases := []struct {
+		declared, key string
+		want          bool
+	}{
+		{"a.v1.S/Get", "a.v1.S/Get", true},
+		{"a.v1.S/Get", "a.v1.S/Put", false},
+		{"a.v1.S/*", "a.v1.S/Get", true},
+		{"a.v1.S/*", "a.v1.Other/Get", false},
+		// A prefix that stops mid-name is not a match: "a.v1.S" must not
+		// answer for "a.v1.Sidecar".
+		{"a.v1.S/*", "a.v1.S", false},
+	}
+	for _, tc := range cases {
+		if got := KeyMatches(tc.declared, tc.key); got != tc.want {
+			t.Errorf("KeyMatches(%q, %q) = %v, want %v", tc.declared, tc.key, got, tc.want)
+		}
+	}
+}
+
+// An unnamed entry means "the repository this file is in", so a shared file
+// carrying one would say every repository in the workspace serves it.
+func TestAnUnnamedServesEntryNeedsARepoLocalFile(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "org.json")
+	writeFile(t, shared, `{"serves": [{"kind": "grpc.method", "keys": ["a.v1.S/Get"]}]}`)
+
+	repo := t.TempDir()
+	writeFile(t, RepoPath(repo), `{"serves": [{"kind": "grpc.method", "keys": ["b.v1.S/Get"]}]}`)
+
+	set := Load(shared, RepoPath(repo))
+	if len(set.Problems) != 1 {
+		t.Fatalf("the shared file's unnamed entry should be reported, got %v", set.Problems)
+	}
+	if len(set.Serves) != 1 || set.Serves[0].Keys[0] != "b.v1.S/Get" {
+		t.Fatalf("the repo-local entry should survive, got %+v", set.Serves)
+	}
+	// And it applies to the repository it was found in, by no name at all.
+	if got := set.ServesFor(repo); len(got) != 1 {
+		t.Errorf("an unnamed entry belongs to its own repo, got %+v", got)
+	}
+	if got := set.ServesFor(t.TempDir(), "other"); len(got) != 0 {
+		t.Errorf("and to no other, got %+v", got)
+	}
+}
+
+// A named entry applies wherever the service goes by that name — the directory
+// or whatever the manifest calls it.
+func TestServesForMatchesEitherName(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "org.json")
+	writeFile(t, shared, `{"serves": [{"service": "conversation", "kind": "grpc.method", "keys": ["c.v1.S/Get"]}]}`)
+	set := Load(shared)
+
+	if got := set.ServesFor(t.TempDir(), "conversation"); len(got) != 1 {
+		t.Errorf("expected the entry to apply to conversation, got %+v", got)
+	}
+	if got := set.ServesFor(t.TempDir(), "inbox"); len(got) != 0 {
+		t.Errorf("expected nothing for another service, got %+v", got)
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

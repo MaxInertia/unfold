@@ -108,7 +108,12 @@ func main() {
 			log.Fatalf("diff base worktree: %v", err)
 		} else {
 			defer cleanup()
-			baseEng, err := engine.Load(detected, baseDir, target)
+			// Solo: the base is this repository at the merge-base, and it is
+			// not one of the workspace's repos. Loaded as a workspace it
+			// re-read every sibling at its head revision and made one of them
+			// the primary, leaving the revision being diffed against
+			// unindexed and every frame on the branch reported as new.
+			baseEng, err := engine.LoadSolo(detected, baseDir, target)
 			if err != nil {
 				log.Fatalf("diff base index failed: %v", err)
 			}
