@@ -787,6 +787,13 @@ card) reads one on demand; the same button stops it. This uses the
 browser's own speech synthesis, so it needs no setup; the toggle is a
 reader preference and survives reloads.
 
+**Play tour** narrates the whole tour: each stop opens, is read, and the
+next opens when the reading ends. While a stop is narrated a highlight
+follows the narration through the function — it starts at the first line,
+jumps to a call when the description names it with `[[…]]`, and otherwise
+drifts down the body at the pace of the speech — so the eye is where the
+voice is. The speed control (0.8× to 2×) applies to every narration.
+
 `GET /api/tours` lists them and `POST /api/tours` (a tour with a `name`,
 which becomes the filename) writes one, for authors that would rather speak
 HTTP than touch the directory. Where tours are kept is shown in the tab

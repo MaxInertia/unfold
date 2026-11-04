@@ -3989,13 +3989,40 @@ body.resizing {
   white-space: nowrap;
 }
 
-/* Read-aloud: the toggle and the play/stop button share the nav's button
-   shape; the toggle lights up when on, the play button while playing. */
-.tour-nav-btn--toggle {
+/* The voice row under the title: read-aloud toggle, this stop, play the
+   tour, speed. Buttons share the nav's shape; the toggle lights up when
+   on, a play button while playing. */
+.tour-speech {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.3rem 0.25rem;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.tour-speech .tour-nav-btn {
   font-size: 0.8rem;
-  padding: 0.1rem 0.3rem;
+  padding: 0.1rem 0.35rem;
+}
+
+.tour-nav-btn--play-tour {
+  white-space: nowrap;
+}
+
+.tour-rate {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--fg);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.1rem 0.2rem;
+}
+
+.tour-nav-btn--toggle {
   opacity: 0.6;
-  margin-right: 0.2rem;
 }
 
 .tour-nav-btn--on {
@@ -4160,6 +4187,13 @@ body.resizing {
 .note--tour .note-action:disabled {
   opacity: 0.3;
   cursor: default;
+}
+
+/* The line the narration is on while a stop is read aloud. */
+.line-row--karaoke {
+  background: var(--call-bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+  transition: background 0.15s ease-out;
 }
 
 /* The line a tour stop landed on, briefly. */

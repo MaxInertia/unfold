@@ -17,6 +17,8 @@ export interface Settings {
   // or a configured voice). Off by default: a voice that starts unasked is
   // a surprise.
   tourReadAloud: boolean;
+  // Narration speed, 1 = the voice's natural pace.
+  tourSpeechRate: number;
 }
 
 const DEFAULTS: Settings = {
@@ -24,6 +26,7 @@ const DEFAULTS: Settings = {
   depthRuler: false,
   indentMode: "rails",
   tourReadAloud: false,
+  tourSpeechRate: 1,
 };
 
 const KEY = "unfold.settings";

@@ -85,7 +85,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const [composing, setComposing] = useState<NoteAnchor | null>(null);
   const isFileFrame = frame.id.startsWith("file:");
   const tourCards = useTourStopCards();
-  const tourFocus = useTours().focus;
+  const { focus: tourFocus, cursor: tourCursor } = useTours();
 
   // The active tour's stops that fall in this frame, by rendered line index
   // — anchored in file space exactly as notes are, so a stop's card shows in
@@ -127,6 +127,42 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     attempt();
     return () => window.clearTimeout(timer);
   }, [tourFocus, frame.file, frame.startLine, frame.endLine, path.length]);
+
+  // The narration cursor: the line the karaoke highlight sits on. Same
+  // root-only, rows-may-not-exist-yet rules as the focus above, but the
+  // mark stays until the cursor moves, and the view only scrolls when the
+  // line has left the middle of the viewport — a highlight that drags the
+  // scroll position every word is unreadable.
+  useEffect(() => {
+    if (!tourCursor || path.length !== 0 || tourCursor.file !== frame.file) return;
+    const idx = tourCursor.line - frame.startLine;
+    if (idx < 0 || idx > frame.endLine - frame.startLine) return;
+    let timer = 0;
+    let tries = 0;
+    let marked: HTMLElement | null = null;
+    const attempt = () => {
+      const rootEl = document.querySelector<HTMLElement>('[data-frame-key=""]');
+      const row = rootEl
+        ? [...rootEl.querySelectorAll<HTMLElement>(`[data-line-idx="${idx}"]`)].find(
+            (r) => r.closest("[data-frame-key]") === rootEl,
+          )
+        : undefined;
+      if (row) {
+        row.classList.add("line-row--karaoke");
+        marked = row;
+        const rect = row.getBoundingClientRect();
+        const h = window.innerHeight;
+        if (rect.top < h * 0.2 || rect.bottom > h * 0.8) row.scrollIntoView({ block: "center" });
+        return;
+      }
+      if (++tries < 30) timer = window.setTimeout(attempt, 100);
+    };
+    attempt();
+    return () => {
+      window.clearTimeout(timer);
+      marked?.classList.remove("line-row--karaoke");
+    };
+  }, [tourCursor, frame.file, frame.startLine, frame.endLine, path.length]);
 
   const sourceLines = useMemo(() => frame.source.split("\n"), [frame.source]);
 

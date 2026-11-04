@@ -6,10 +6,12 @@ import {
   activeTour,
   goToStop,
   nextStop,
+  playTour,
   prevStop,
   selectTour,
   speakStop,
   speechKey,
+  stopTour,
   useTours,
   type TourStopCardInfo,
 } from "./tours";
@@ -68,6 +70,7 @@ export function TourPanel() {
             </div>
             <TourNav index={s.index} total={tour.stops.length} />
           </div>
+          <SpeechRow index={s.index} playing={s.playing} />
           {tour.description && (
             <div className="tour-desc">
               <NoteText text={tour.description} />
@@ -138,8 +141,6 @@ export function TourPanel() {
 function TourNav({ index, total }: { index: number; total: number }) {
   return (
     <span className="tour-nav">
-      <ReadAloudToggle />
-      <PlayStopButton index={index} className="tour-nav-btn" />
       <button
         type="button"
         className="tour-nav-btn"
@@ -160,6 +161,44 @@ function TourNav({ index, total }: { index: number; total: number }) {
         ›
       </button>
     </span>
+  );
+}
+
+// The voice controls, under the tour's title: read-aloud on/off, this
+// stop on demand, play the whole tour through (karaoke: the highlight
+// follows the narration and the next stop opens when it ends), and the
+// speed. Absent when the browser has no voice.
+function SpeechRow({ index, playing }: { index: number; playing: boolean }) {
+  const { available } = useSpeech();
+  const { tourSpeechRate } = useSettings();
+  if (!available) return null;
+  return (
+    <div className="tour-speech">
+      <ReadAloudToggle />
+      <PlayStopButton index={index} className="tour-nav-btn" />
+      <button
+        type="button"
+        className={`tour-nav-btn tour-nav-btn--play-tour${playing ? " tour-play--playing" : ""}`}
+        onClick={playing ? stopTour : playTour}
+        aria-pressed={playing}
+        title={playing ? "stop playing the tour" : "play the tour: narrate each stop and move on to the next"}
+      >
+        {playing ? "■ stop" : "▶▶ play tour"}
+      </button>
+      <select
+        className="tour-rate"
+        value={String(tourSpeechRate)}
+        onChange={(e) => updateSettings({ tourSpeechRate: Number(e.target.value) })}
+        title="narration speed"
+        aria-label="narration speed"
+      >
+        {[0.8, 1, 1.25, 1.5, 2].map((r) => (
+          <option key={r} value={String(r)}>
+            {r}×
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 
