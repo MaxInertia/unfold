@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { synthesize } from "./api";
 import type { TourStop } from "./types";
 
 // Reading a tour stop aloud. The voice is a pluggable provider so the
@@ -21,15 +22,23 @@ export interface Voice {
   speak(text: string, opts: SpeakOptions): Promise<boolean>;
   stop(): void;
   available(): boolean;
+  // Fetch the audio for text without playing it, so the next stop plays
+  // with no gap. Voices that synthesize locally have nothing to do.
+  prefetch?(text: string): void;
 }
 
 export interface SpeechState {
   // What is being read, so the button that started it can show "stop".
   speaking: { key: string } | null;
   available: boolean;
+  // The voice in use, as the settings name it.
+  voice: string;
+  // Set when the chosen server voice failed and the browser voice spoke
+  // instead; the reason, for the UI to show.
+  fallback: string | null;
 }
 
-let state: SpeechState = { speaking: null, available: false };
+let state: SpeechState = { speaking: null, available: false, voice: "browser", fallback: null };
 const listeners = new Set<() => void>();
 
 function set(patch: Partial<SpeechState>) {
@@ -93,14 +102,93 @@ const browserVoice: Voice = {
   },
 };
 
+// ---- a server voice ----
+
+// Audio synthesized by the server (/api/tts) and played through one shared
+// element. Progress for the karaoke highlight is position in the audio
+// scaled to the text: no word timing, but close enough for a highlight
+// that drifts anyway. A failed fetch falls back to the browser voice for
+// that utterance, so a bad key or a lost network never silences a tour.
+function serverVoice(provider: string, voiceId: string): Voice {
+  let el: HTMLAudioElement | null = null;
+  const audio = () => (el ??= new Audio());
+  // Object URLs by text, most recent last; bounded so a long tour doesn't
+  // pin every utterance in memory.
+  const urls = new Map<string, Promise<string>>();
+  const fetchUrl = (text: string) => {
+    let p = urls.get(text);
+    if (!p) {
+      p = synthesize(provider, voiceId, text).then((blob) => URL.createObjectURL(blob));
+      p.catch(() => urls.delete(text));
+      urls.set(text, p);
+      if (urls.size > 24) {
+        const oldest = urls.keys().next().value!;
+        urls.get(oldest)?.then((u) => URL.revokeObjectURL(u), () => {});
+        urls.delete(oldest);
+      }
+    }
+    return p;
+  };
+  return {
+    available: () => typeof Audio !== "undefined",
+    prefetch: (text) => void fetchUrl(text).catch(() => {}),
+    async speak(text, opts) {
+      let url: string;
+      try {
+        url = await fetchUrl(text);
+      } catch (e) {
+        set({ fallback: e instanceof Error ? e.message : String(e) });
+        return browserVoice.speak(text, opts);
+      }
+      if (state.fallback) set({ fallback: null });
+      const a = audio();
+      return new Promise<boolean>((resolve) => {
+        let done = false;
+        const finish = (natural: boolean) => {
+          if (done) return;
+          done = true;
+          a.ontimeupdate = a.onended = a.onerror = a.onpause = null;
+          resolve(natural);
+        };
+        a.src = url;
+        a.playbackRate = opts.rate;
+        a.ontimeupdate = () => {
+          if (opts.onProgress && a.duration > 0) {
+            opts.onProgress(Math.min(text.length, Math.floor((a.currentTime / a.duration) * text.length)));
+          }
+        };
+        a.onended = () => finish(true);
+        a.onerror = () => finish(false);
+        // stop() pauses; a pause before the end is a cut-off.
+        a.onpause = () => {
+          if (!a.ended) finish(false);
+        };
+        a.play().catch(() => finish(false));
+      });
+    },
+    stop() {
+      if (el && !el.paused) el.pause();
+      browserVoice.stop();
+    },
+  };
+}
+
 let voice: Voice = browserVoice;
 state = { ...state, available: browserVoice.available() };
 
-// Swap the provider (a server-backed voice). Stops anything playing.
-export function setVoice(v: Voice) {
+// Pick the voice the settings name: "browser", or "<provider>:<voiceId>".
+// Stops anything playing when the voice actually changes.
+export function configureVoice(spec: string) {
+  if (spec === state.voice) return;
   stopSpeaking();
-  voice = v;
-  set({ available: v.available() });
+  const sep = spec.indexOf(":");
+  voice = spec === "browser" || sep <= 0 ? browserVoice : serverVoice(spec.slice(0, sep), spec.slice(sep + 1));
+  set({ voice: spec, available: voice.available(), fallback: null });
+}
+
+// Warm the cache for text that is about to be spoken.
+export function prefetchSpeech(text: string) {
+  voice.prefetch?.(text);
 }
 
 // ---- speaking ----

@@ -794,6 +794,17 @@ jumps to a call when the description names it with `[[…]]`, and otherwise
 drifts down the body at the pace of the speech — so the eye is where the
 voice is. The speed control (0.8× to 2×) applies to every narration.
 
+For a better voice than the browser's, start unfold with an ElevenLabs key
+— `ELEVENLABS_API_KEY` in the environment, or `~/.config/unfold/secrets.json`
+containing `{"elevenlabs_api_key": "…"}` (mode 600) — and pick a voice
+under **settings → speech**. The key stays on the server: the page asks
+`POST /api/tts` for audio, which synthesizes with Flash v2.5, caches each
+utterance by content so re-reading a stop or stepping back costs nothing,
+rate-limits misses so a runaway page can't spend the account, and fetches
+the next stop's audio while the current one plays. If the server voice
+fails — a bad key, no network — the browser voice reads that stop and the
+toggle says why. `GET /api/tts` lists the voices on offer.
+
 `GET /api/tours` lists them and `POST /api/tours` (a tour with a `name`,
 which becomes the filename) writes one, for authors that would rather speak
 HTTP than touch the directory. Where tours are kept is shown in the tab

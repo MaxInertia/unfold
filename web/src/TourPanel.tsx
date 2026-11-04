@@ -207,15 +207,19 @@ function SpeechRow({ index, playing }: { index: number; playing: boolean }) {
 // headphones, off in a shared room.
 function ReadAloudToggle() {
   const { tourReadAloud } = useSettings();
-  const { available } = useSpeech();
+  const { available, voice, fallback } = useSpeech();
   if (!available) return null;
+  const which = voice === "browser" ? "browser voice" : voice.slice(0, voice.indexOf(":")) + " voice";
+  const note = fallback ? ` — ${which} failed, using the browser's: ${fallback}` : ` (${which}; change in settings)`;
   return (
     <button
       type="button"
-      className={`tour-nav-btn tour-nav-btn--toggle${tourReadAloud ? " tour-nav-btn--on" : ""}`}
+      className={`tour-nav-btn tour-nav-btn--toggle${tourReadAloud ? " tour-nav-btn--on" : ""}${
+        fallback ? " tour-nav-btn--warn" : ""
+      }`}
       onClick={() => updateSettings({ tourReadAloud: !tourReadAloud })}
       aria-pressed={tourReadAloud}
-      title={tourReadAloud ? "stops are read aloud as they open — click to stop" : "read stops aloud as they open"}
+      title={(tourReadAloud ? "stops are read aloud as they open — click to stop" : "read stops aloud as they open") + note}
       aria-label="read stops aloud"
     >
       {tourReadAloud ? "🔊" : "🔇"}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { fetchBodyByCall, fetchFiles, fetchSymbol, fetchTours } from "./api";
 import { buildTimeline, lineAt, type Waypoint } from "./karaoke";
 import { currentSettings } from "./settings";
-import { speak, stopSpeaking, stopSpeech } from "./speech";
+import { prefetchSpeech, speak, stopSpeaking, stopSpeech } from "./speech";
 import { resolveStop, type ResolvedStop } from "./tourResolve";
 import type { Tour, TourStop } from "./types";
 import { useViewStore } from "./viewState";
@@ -260,6 +260,9 @@ export function speakStop(i: number) {
     if (state.cursor?.file !== r.file || state.cursor.line !== line) set({ cursor: { file: r.file, line } });
   };
   const rate = currentSettings().tourSpeechRate || 1;
+  // The next stop's audio, fetched now so "next" plays without a gap.
+  const next = tour.stops[i + 1];
+  if (next) prefetchSpeech(stopSpeech(next, i + 1, tour.stops.length).text);
   speak(key, spoken.text, { rate, onProgress }).then((natural) => {
     if (state.cursor) set({ cursor: null });
     if (!natural || !state.playing || state.index !== i) return;

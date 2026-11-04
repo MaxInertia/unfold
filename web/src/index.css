@@ -1729,6 +1729,39 @@ body.resizing {
   display: block;
 }
 
+.settings-voice-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  max-width: 100%;
+}
+
+.settings-voice-row select {
+  min-width: 0;
+  max-width: 16rem;
+}
+
+.settings-preview {
+  font: inherit;
+  font-size: 0.8rem;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.settings-preview:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tour-nav-btn--warn {
+  border-color: #c77;
+}
+
 .settings-desc {
   display: block;
   color: var(--muted);

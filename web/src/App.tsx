@@ -10,6 +10,7 @@ import { useSettings } from "./settings";
 import { NotesList } from "./NotesUI";
 import { TourPanel } from "./TourPanel";
 import { loadNotes } from "./notes";
+import { configureVoice } from "./speech";
 import { activeTour, loadTours, nextStop, prevStop, setTourRevision, useTourDriver, useTours } from "./tours";
 import { ServiceView } from "./ServiceView";
 import { PlatformView } from "./PlatformView";
@@ -271,6 +272,10 @@ function AppShell() {
     setTourRevision(revision);
   }, [revision]);
   useTourDriver();
+  // The voice that reads tours is a setting; apply it as it changes.
+  useEffect(() => {
+    configureVoice(settings.voice);
+  }, [settings.voice]);
   const tourStopCount = activeTour(useTours())?.stops.length ?? 0;
 
   // Everything the trail shows comes from one request: the service's name,
