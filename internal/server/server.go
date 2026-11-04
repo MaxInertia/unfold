@@ -25,6 +25,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/prefs"
 	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/tours"
+	"github.com/MaxInertia/unfold/internal/tts"
 )
 
 //go:embed all:static/dist
@@ -37,6 +38,7 @@ type Server struct {
 	differ *diff.Differ // nil = diff mode off
 	notes  *notes.Store // nil = notes disabled
 	tours  *tours.Store // nil = tours disabled
+	tts    *tts.Service // nil = no paid voice configured
 	// projectDir is where per-project prefs are persisted (the proto root a
 	// user picks in the UI). Empty disables persistence.
 	projectDir string
@@ -93,6 +95,11 @@ func (s *Server) SetNotes(n *notes.Store) { s.notes = n }
 // SetTours enables the tours API backed by the given store.
 func (s *Server) SetTours(t *tours.Store) { s.tours = t }
 
+// SetTTS enables server-side speech synthesis. Nil (no key configured)
+// leaves /api/tts answering with no providers, so the UI offers the
+// browser voice alone.
+func (s *Server) SetTTS(t *tts.Service) { s.tts = t }
+
 // SetProjectDir records where to persist choices made in the UI, so a proto
 // root picked once survives a restart.
 func (s *Server) SetProjectDir(dir string) { s.projectDir = dir }
@@ -125,6 +132,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/index-repo", s.handleIndexRepo)
 	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/tours", s.handleTours)
+	mux.HandleFunc("/api/tts", s.handleTTS)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))
@@ -945,6 +953,73 @@ func (s *Server) handleTours(w http.ResponseWriter, r *http.Request) {
 		// that saved should not wait on a debounce to see its own tour.
 		s.NotifyTours()
 		writeJSON(w, http.StatusOK, saved)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "use GET or POST")
+	}
+}
+
+// /api/tts — speech through a paid voice, with the key on the server.
+//
+// GET lists the providers and their voices (none when no key is set).
+// POST {"provider","voice","text"} returns the audio. The POST is guarded
+// like /api/open: same-origin only, since each miss spends the account's
+// credits, and bounded — a stop's description, not a document. The service
+// caches by content and rate-limits misses; a hit is free and is served
+// under the limit.
+func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		infos := []tts.ProviderInfo{}
+		if s.tts != nil {
+			infos = s.tts.Providers(r.Context())
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"providers": infos})
+	case http.MethodPost:
+		if !sameOrigin(r) {
+			writeError(w, http.StatusForbidden, "cross-origin request rejected")
+			return
+		}
+		if s.tts == nil {
+			writeError(w, http.StatusNotImplemented, "no voice provider is configured (set "+tts.ElevenLabsKeyEnv+")")
+			return
+		}
+		var req struct {
+			Provider string `json:"provider"`
+			Voice    string `json:"voice"`
+			Text     string `json:"text"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
+			return
+		}
+		// The browser may already hold this utterance.
+		if tag := tts.ETag(req.Provider, req.Voice, req.Text); r.Header.Get("If-None-Match") == tag {
+			w.Header().Set("ETag", tag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		audio, err := s.tts.Speak(r.Context(), req.Provider, req.Voice, req.Text)
+		if err != nil {
+			status := http.StatusBadGateway
+			switch {
+			case errors.Is(err, tts.ErrNoProvider):
+				status = http.StatusNotFound
+			case errors.Is(err, tts.ErrEmpty), errors.Is(err, tts.ErrTooLong):
+				status = http.StatusBadRequest
+			case errors.Is(err, tts.ErrRateLimit):
+				status = http.StatusTooManyRequests
+			}
+			writeError(w, status, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", audio.ContentType)
+		w.Header().Set("ETag", audio.ETag)
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		if audio.Cached {
+			w.Header().Set("X-Cache", "hit")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(audio.Data)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "use GET or POST")
 	}

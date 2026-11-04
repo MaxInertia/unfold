@@ -272,3 +272,37 @@ export async function fetchTours(): Promise<{ tours: Tour[]; dir: string }> {
   const res = await getJSON<{ tours: Tour[]; dir: string }>("/api/tours");
   return { tours: res.tours ?? [], dir: res.dir ?? "" };
 }
+
+// Server-side voices for reading tours aloud (none unless a key is set).
+export interface VoiceProvider {
+  id: string;
+  label: string;
+  voices: { id: string; name: string }[];
+  error?: string;
+}
+
+export async function fetchVoiceProviders(): Promise<VoiceProvider[]> {
+  const res = await getJSON<{ providers: VoiceProvider[] }>("/api/tts");
+  return res.providers ?? [];
+}
+
+// Synthesize text in a server voice. The audio is cached server-side by
+// content, so asking twice is cheap; the browser cache holds it too.
+export async function synthesize(provider: string, voice: string, text: string): Promise<Blob> {
+  const res = await fetch("/api/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, voice, text }),
+  });
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.error) msg = `${res.status}: ${body.error}`;
+    } catch {
+      /* body wasn't JSON */
+    }
+    throw new Error(msg);
+  }
+  return res.blob();
+}
