@@ -1,59 +1,50 @@
 import type { SpokenStop } from "./speech";
-import { findCall } from "./tourResolve";
+import { callLine, resolveCue, type CueFrame } from "./cues";
 import type { CallSite } from "./types";
 
 // Karaoke: where the eye should be while a stop is narrated. The narration
-// is prose about a function, not the function read out, so the mapping
-// from words to lines is by waypoint: the highlight starts at the
-// function's first line, jumps to a call when the description names it,
-// and otherwise drifts down the body at the pace of the speech, reaching
-// the last line as the narration ends. Pure, so the rules are testable.
+// is prose about a function, not the function read out, so words don't
+// map to lines on their own; the author maps them, with cues (see
+// cues.ts), and a named call — [[Name]] — is a cue for that call's line.
+// The highlight starts on the stop's anchor line, jumps when the
+// narration reaches a cue, and stays there until the next. It never
+// drifts: a line that nobody is talking about should not be lit.
+// Pure, so the rules are testable.
 
 export interface Waypoint {
   char: number; // index into the spoken text
-  line: number; // 0-based line within the frame
+  line: number; // 1-based file line
+  end?: number; // inclusive, for a range cue
 }
 
-export interface TimelineFrame {
-  source: string;
-  calls: CallSite[];
-  lineCount: number; // lines in the frame's source
-}
+export type TimelineFrame = CueFrame & { calls?: CallSite[] };
 
-export function buildTimeline(spoken: SpokenStop, frame: TimelineFrame): Waypoint[] {
-  const last = Math.max(0, frame.lineCount - 1);
-  const points: Waypoint[] = [{ char: 0, line: 0 }];
+export function buildTimeline(
+  spoken: SpokenStop,
+  frame: TimelineFrame,
+): Waypoint[] {
+  const points: Waypoint[] = [{ char: 0, line: frame.anchor }];
   for (const r of spoken.refs) {
     if (r.name.startsWith("file:")) continue;
-    const call = findCall(frame.calls, r.name);
-    if (!call) continue;
-    points.push({ char: r.char, line: lineForOffset(frame.source, call.spanStart) });
+    const line = callLine(r.name, frame);
+    if (line !== null) points.push({ char: r.char, line });
   }
-  points.push({ char: spoken.text.length, line: last });
-  return points;
+  for (const c of spoken.cues) {
+    const t = resolveCue(c.cue, frame);
+    if (t) points.push({ char: c.char, line: t.line, end: t.end });
+  }
+  // Cues and refs are each in text order; merged, keeping that order for
+  // equal positions.
+  return points.sort((a, b) => a.char - b.char);
 }
 
-// The line for a position in the narration: the latest waypoint's line
-// when one was just named, otherwise a linear drift toward the next one.
-// A named call holds the highlight for a moment (`hold` characters) before
-// the drift resumes, so the eye has time to land.
-export function lineAt(timeline: Waypoint[], char: number, hold = 24): number {
-  if (timeline.length === 0) return 0;
-  let i = 0;
-  while (i + 1 < timeline.length && timeline[i + 1].char <= char) i++;
-  const from = timeline[i];
-  const to = timeline[i + 1];
-  if (!to) return from.line;
-  const start = i === 0 ? from.char : from.char + hold;
-  if (char <= start) return from.line;
-  const span = Math.max(1, to.char - start);
-  const t = Math.min(1, (char - start) / span);
-  return Math.round(from.line + (to.line - from.line) * t);
-}
-
-function lineForOffset(source: string, offset: number): number {
-  let line = 0;
-  const stop = Math.min(offset, source.length);
-  for (let i = 0; i < stop; i++) if (source.charCodeAt(i) === 10) line++;
-  return line;
+// The highlight for a position in the narration: the latest waypoint
+// reached.
+export function lineAt(timeline: Waypoint[], char: number): Waypoint | null {
+  let at: Waypoint | null = null;
+  for (const w of timeline) {
+    if (w.char > char) break;
+    at = w;
+  }
+  return at;
 }

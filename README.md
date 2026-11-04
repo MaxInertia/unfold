@@ -788,11 +788,16 @@ browser's own speech synthesis, so it needs no setup; the toggle is a
 reader preference and survives reloads.
 
 **Play tour** narrates the whole tour: each stop opens, is read, and the
-next opens when the reading ends. While a stop is narrated a highlight
-follows the narration through the function — it starts at the first line,
-jumps to a call when the description names it with `[[…]]`, and otherwise
-drifts down the body at the pace of the speech — so the eye is where the
-voice is. The speed control (0.8× to 2×) applies to every narration.
+next opens when the reading ends. While a stop is narrated a highlight in
+the code follows it, going where the description says: it starts on the
+stop's first line, lands on a call when the description names it with
+`[[Name]]`, and jumps to a line or range the author cued with
+`[[line:+3]]`, `[[line:+2-5]]` (relative to the stop's first line),
+`[[line:131]]`, or `[[at:some text on the line]]`. Cues are silent in the
+narration and render as a `⌖` mark the reader can click to light that
+line without playing anything. The highlight never drifts on its own; a
+line nobody is talking about stays unlit. The speed control (0.8× to 2×)
+applies to every narration.
 
 For a better voice than the browser's, start unfold with an ElevenLabs key
 and pick a voice under **settings → speech**. The key is looked for in two

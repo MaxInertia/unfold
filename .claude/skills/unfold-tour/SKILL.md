@@ -98,6 +98,33 @@ card in the code at the stop's line, so write it to be read beside the
 code. `[[Name]]` and `[[file:path]]` make clickable references, same as
 notes.
 
+### Cues: where the eye goes while a stop is read
+
+Tours can be played aloud, with a highlight in the code that follows the
+narration. The narration is your prose, so nothing in it says which line
+it is about — you say it, with a **cue** inline in the description. A cue
+is silent when spoken and renders as a small `⌖` mark the reader can
+click. The highlight jumps to it when the narration gets there and stays
+until the next cue; without cues it sits on the stop's first line.
+
+```
+[[line:+3]]            the stop's anchor line plus 3 — the function's
+                       first line (or a file stop's `line`) is +0
+[[line:+2-5]]          a range, lit whole
+[[line:131]]           an absolute file line (fragile; prefer +N or at:)
+[[at:return nil, err]] the first line of the function containing that
+                       text — survives edits above it
+[[Name]]               a plain reference is a cue too: the highlight
+                       lands on that call when its name is spoken
+```
+
+Put the cue right before the words about that line:
+`"Stats the file for its timestamp [[line:+3-5]], then [[at:json.Unmarshal]]
+parses it, then hands the result to [[Validate]]."` Prefer `at:` for a
+single line and `+N` for a short range near the top; both hold up when
+the file changes elsewhere. One cue per thing you talk about is plenty —
+don't cue every line.
+
 ## Writing it
 
 1. Pick the reading order. Entry point first, then the path a request

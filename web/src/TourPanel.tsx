@@ -14,6 +14,7 @@ import {
   stopTour,
   useTours,
   type TourStopCardInfo,
+  showCue,
 } from "./tours";
 import type { TourStop } from "./types";
 
@@ -28,7 +29,9 @@ export function TourPanel() {
   // Keep the current stop in view as the reader steps with the keyboard.
   useEffect(() => {
     if (s.index < 0) return;
-    const el = listRef.current?.querySelector<HTMLElement>(`[data-stop="${s.index}"]`);
+    const el = listRef.current?.querySelector<HTMLElement>(
+      `[data-stop="${s.index}"]`,
+    );
     el?.scrollIntoView({ block: "nearest" });
   }, [s.index, s.active]);
 
@@ -79,8 +82,10 @@ export function TourPanel() {
           <ol className="tour-stops" ref={listRef}>
             {tour.stops.map((stop, i) => {
               const r = s.resolved[i];
-              const unresolved = r && r !== "pending" && r.kind === "unresolved";
-              const missing = r && r !== "pending" && r.kind === "symbol" ? r.missing : [];
+              const unresolved =
+                r && r !== "pending" && r.kind === "unresolved";
+              const missing =
+                r && r !== "pending" && r.kind === "symbol" ? r.missing : [];
               return (
                 <li
                   key={i}
@@ -105,7 +110,9 @@ export function TourPanel() {
                     <span className="tour-stop-n">{i + 1}</span>
                     <span className="tour-stop-where">
                       {whereLabel(stop)}
-                      {r === "pending" && <span className="tour-stop-flag"> …</span>}
+                      {r === "pending" && (
+                        <span className="tour-stop-flag"> …</span>
+                      )}
                       {unresolved && (
                         <span className="tour-stop-flag" title={r.reason}>
                           {" "}
@@ -125,7 +132,10 @@ export function TourPanel() {
                   </button>
                   {stop.description && (
                     <div className="tour-stop-desc">
-                      <NoteText text={stop.description} />
+                      <NoteText
+                        text={stop.description}
+                        onCue={(c) => showCue(i, c)}
+                      />
                     </div>
                   )}
                 </li>
@@ -150,7 +160,9 @@ function TourNav({ index, total }: { index: number; total: number }) {
       >
         ‹
       </button>
-      <span className="tour-pos">{index < 0 ? `${total} stops` : `${index + 1} of ${total}`}</span>
+      <span className="tour-pos">
+        {index < 0 ? `${total} stops` : `${index + 1} of ${total}`}
+      </span>
       <button
         type="button"
         className="tour-nav-btn"
@@ -181,14 +193,20 @@ function SpeechRow({ index, playing }: { index: number; playing: boolean }) {
         className={`tour-nav-btn tour-nav-btn--play-tour${playing ? " tour-play--playing" : ""}`}
         onClick={playing ? stopTour : playTour}
         aria-pressed={playing}
-        title={playing ? "stop playing the tour" : "play the tour: narrate each stop and move on to the next"}
+        title={
+          playing
+            ? "stop playing the tour"
+            : "play the tour: narrate each stop and move on to the next"
+        }
       >
         {playing ? "■ stop" : "▶▶ play tour"}
       </button>
       <select
         className="tour-rate"
         value={String(tourSpeechRate)}
-        onChange={(e) => updateSettings({ tourSpeechRate: Number(e.target.value) })}
+        onChange={(e) =>
+          updateSettings({ tourSpeechRate: Number(e.target.value) })
+        }
         title="narration speed"
         aria-label="narration speed"
       >
@@ -209,8 +227,13 @@ function ReadAloudToggle() {
   const { tourReadAloud } = useSettings();
   const { available, voice, fallback } = useSpeech();
   if (!available) return null;
-  const which = voice === "browser" ? "browser voice" : voice.slice(0, voice.indexOf(":")) + " voice";
-  const note = fallback ? ` — ${which} failed, using the browser's: ${fallback}` : ` (${which}; change in settings)`;
+  const which =
+    voice === "browser"
+      ? "browser voice"
+      : voice.slice(0, voice.indexOf(":")) + " voice";
+  const note = fallback
+    ? ` — ${which} failed, using the browser's: ${fallback}`
+    : ` (${which}; change in settings)`;
   return (
     <button
       type="button"
@@ -219,7 +242,11 @@ function ReadAloudToggle() {
       }`}
       onClick={() => updateSettings({ tourReadAloud: !tourReadAloud })}
       aria-pressed={tourReadAloud}
-      title={(tourReadAloud ? "stops are read aloud as they open — click to stop" : "read stops aloud as they open") + note}
+      title={
+        (tourReadAloud
+          ? "stops are read aloud as they open — click to stop"
+          : "read stops aloud as they open") + note
+      }
       aria-label="read stops aloud"
     >
       {tourReadAloud ? "🔊" : "🔇"}
@@ -229,7 +256,13 @@ function ReadAloudToggle() {
 
 // Read one stop on demand; while it plays the same button stops it. Shown
 // for the current stop in the tour header and on every stop's card.
-function PlayStopButton({ index, className }: { index: number; className: string }) {
+function PlayStopButton({
+  index,
+  className,
+}: {
+  index: number;
+  className: string;
+}) {
   const { speaking, available } = useSpeech();
   const playing = speaking?.key === speechKey(index);
   if (!available) return null;
@@ -261,12 +294,12 @@ function TourHowTo({ dir }: { dir: string }) {
   return (
     <div className="tour-howto">
       <p>
-        No tours yet. A tour is an ordered list of places to look, each with a reason — written by
-        you, a colleague, or an LLM working in the repo.
+        No tours yet. A tour is an ordered list of places to look, each with a
+        reason — written by you, a colleague, or an LLM working in the repo.
       </p>
       <p>
-        Put one at <code>{dir || ".unfold/tours"}/&lt;name&gt;.json</code>; it shows up here as soon
-        as the file lands:
+        Put one at <code>{dir || ".unfold/tours"}/&lt;name&gt;.json</code>; it
+        shows up here as soon as the file lands:
       </p>
       <pre className="tour-schema">{`{
   "title": "How a publish is retried",
@@ -281,9 +314,10 @@ function TourHowTo({ dir }: { dir: string }) {
   ]
 }`}</pre>
       <p>
-        A stop is a <code>symbol</code> (qualified or bare) or a <code>file</code> + <code>line</code>.{" "}
-        <code>expand</code> names calls to open with it; <code>&gt;</code> nests. Descriptions may
-        reference code with <code>[[Name]]</code>.
+        A stop is a <code>symbol</code> (qualified or bare) or a{" "}
+        <code>file</code> + <code>line</code>. <code>expand</code> names calls
+        to open with it; <code>&gt;</code> nests. Descriptions may reference
+        code with <code>[[Name]]</code>.
       </p>
     </div>
   );
@@ -302,7 +336,10 @@ export function TourStopCard({ card }: { card: TourStopCardInfo }) {
         </span>
         <span className="tour-card-title">{card.tourTitle}</span>
         {missing.length > 0 && (
-          <span className="note-drifted" title={`couldn't expand: ${missing.join(", ")}`}>
+          <span
+            className="note-drifted"
+            title={`couldn't expand: ${missing.join(", ")}`}
+          >
             ⚠ {missing.length} not expanded
           </span>
         )}
@@ -331,7 +368,7 @@ export function TourStopCard({ card }: { card: TourStopCardInfo }) {
       </div>
       {stop.description && (
         <div className="note-body">
-          <NoteText text={stop.description} />
+          <NoteText text={stop.description} onCue={(c) => showCue(index, c)} />
         </div>
       )}
     </div>
