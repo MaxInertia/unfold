@@ -27,6 +27,61 @@ import (
 type File struct {
 	Comment string `json:"//,omitempty"`
 	Rules   []Rule `json:"rules"`
+	// Serves is what a repository states it serves without any code in it
+	// saying so. See Serve.
+	Serves []Serve `json:"serves,omitempty"`
+}
+
+// Serve is an API a service states it serves.
+//
+// It is the general form of what `microservice.yaml` + `--proto-root` does for
+// one organisation's gRPC: a *declaration* that a service is the inbound end
+// of a set of keys. Declarations matter even now that a registration is read
+// from code, and for two reasons that code can't cover:
+//
+//   - They cost no index. The whole point of the declared tier is that a
+//     workspace can answer "who serves this key" for repositories nobody has
+//     opened yet — which is the difference between a cross-repo hop that works
+//     immediately and one that works after a minute of indexing.
+//   - They cover what this index can't read: a service in a language unfold
+//     doesn't index, an API served by a gateway rather than by code, a
+//     transport nobody has written a recognizer for.
+//
+// A declared key that the code *does* corroborate is not stated twice: the
+// binding read from code wins, since it knows where the implementation is.
+type Serve struct {
+	Comment string `json:"//,omitempty"`
+	// Service names the repository this entry is about, by directory name or
+	// by the name its manifest gives it. Empty means "the repository this file
+	// belongs to", which is the only thing a repo-local file can sensibly mean
+	// — and the reason an entry in a shared file must name one.
+	Service string `json:"service,omitempty"`
+	// Kind namespaces the key, exactly as a rule's emit does: "grpc.method",
+	// "http.route", "pubsub.subscription", or a kind of your own.
+	Kind string `json:"kind"`
+	// Keys are the keys served. A key ending in "/*" stands for every key
+	// under that prefix — "notes.v1.NotesService/*" is the whole service —
+	// which is what makes declaring a gRPC surface a line rather than a list.
+	//
+	// A pattern answers "does this service serve this key" and cannot
+	// enumerate: nothing here knows the method names, so a wildcard is shown
+	// as itself rather than expanded into a surface it would be inventing.
+	Keys []string `json:"keys"`
+	// From is the file this entry was read from, filled in by Load. It is what
+	// makes "why does unfold think billing serves this" answerable.
+	From string `json:"-"`
+}
+
+// Wildcard is the suffix that makes a key a prefix pattern.
+const Wildcard = "/*"
+
+// Matches reports whether a declared key covers the key being looked up.
+func KeyMatches(declared, key string) bool {
+	if declared == key {
+		return true
+	}
+	prefix, ok := strings.CutSuffix(declared, Wildcard)
+	return ok && strings.HasPrefix(key, prefix+"/")
 }
 
 // Rule is one recognizer: a predicate over call sites, and what to emit when
@@ -195,7 +250,39 @@ func Parse(data []byte) (*File, []error, error) {
 		kept = append(kept, r)
 	}
 	f.Rules = kept
+
+	keptServes := f.Serves[:0]
+	for _, sv := range f.Serves {
+		if err := sv.validate(); err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		keptServes = append(keptServes, sv)
+	}
+	f.Serves = keptServes
 	return &f, problems, nil
+}
+
+func (s Serve) validate() error {
+	if strings.TrimSpace(s.Kind) == "" {
+		return fmt.Errorf("serves entry: kind is required — it namespaces the key")
+	}
+	if len(s.Keys) == 0 {
+		return fmt.Errorf("serves entry for kind %q: no keys, so it declares nothing", s.Kind)
+	}
+	for _, k := range s.Keys {
+		if strings.TrimSpace(k) == "" {
+			return fmt.Errorf("serves entry for kind %q: an empty key joins to nothing", s.Kind)
+		}
+		// A bare "*" would make one service the answer for every key of its
+		// kind, which is never what anyone means and looks like a tool bug
+		// rather than a config mistake — the same reason an empty match is
+		// refused at the door.
+		if k == Wildcard || k == "*" {
+			return fmt.Errorf("serves entry for kind %q: %q claims every key of its kind", s.Kind, k)
+		}
+	}
+	return nil
 }
 
 func (r Rule) validate(seen map[string]bool) error {

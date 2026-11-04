@@ -106,7 +106,25 @@ your expansion state is exactly as you left it.
 The service view is a two-sided card, not a graph:
 
 - **inbound** — where work enters: HTTP routes registered with `net/http`,
-  Pub/Sub subscriptions. Click one to open its handler as a new root frame.
+  Pub/Sub subscriptions, the gRPC methods this service registers an
+  implementation for. Click one to open its handler as a new root frame.
+
+  A gRPC service is read from the registration itself — `RegisterFooServer(s,
+  impl)`, or the `s.RegisterService(&Foo_ServiceDesc, impl)` inside it. The
+  generated descriptor carries the fully qualified service name and one entry
+  per RPC, which is the same key the generated *client* names on the other
+  side, so both ends of a cross-service edge come from generated code and meet
+  on a key neither invented. Nothing has to be declared for this: it needs no
+  `microservice.yaml` and no proto root.
+
+  The registration that counts is the one your service performs. The generated
+  helper hands its own parameter to `RegisterService`, so its body is shaped
+  exactly like a registration and isn't one — reading it as one would describe
+  every service twice and name no implementation either time.
+
+  Where a manifest *does* declare the same RPC, the declared tier describes it
+  (see below): it knows the proto file and whether the method is excluded from
+  SDK generation, and this pass stands aside for those keys.
 - **outbound** — where the service reaches out: gRPC calls through a generated
   client, `http.Get`/`Post` calls with a statically known URL, Pub/Sub topics it
   names. These have no in-repo target (the far end lives in another service) so
@@ -131,6 +149,12 @@ The service view is a two-sided card, not a graph:
   A hand-written function that issues the call itself is the call site, since
   it's business logic talking to grpc rather than a client standing in for an
   RPC.
+
+  Each such call site is also a **boundary**: the call carries the key, so a
+  reader standing in the handler that makes it is offered the implementation in
+  the repository that serves it — to navigate to, or to splice in where the
+  call is. A recognizer rule of your own about the same call site wins over
+  this, since a rule is your last word about what a call is.
 
   Finally, a call site only counts if execution can **reach** it from one of
   the service's entrypoints — its route handlers, the implementations of the
@@ -231,6 +255,11 @@ propagating a mark from a service to its callers requires knowing, per repo,
 which inbound key leads to which outbound call.
 
 ### What the service declares about itself
+
+A repo needs none of this: the gRPC surface above is read from code, and the
+manifest is a second, cheaper source for the same fact — cheap because it is
+read without indexing anyone's Go, which is what lets a large workspace answer
+"who serves this key" before the repository that serves it has been opened.
 
 If the repo root has a `microservice.yaml`, unfold reads it. Declared facts are
 the *strongest* resolution tier — a proto is the contract both a server and its
@@ -336,8 +365,8 @@ resolved, and anything short of `exact` is badged:
 - **inferred** — the key is literal but something about it is a guess. A
   `client.Topic("orders-v1")` handle is marked this way: the topic name is
   certain, whether the code publishes to it is not.
-- **declared** — asserted by `microservice.yaml`: a proto-declared RPC, or a
-  route in `publicRoutes`.
+- **declared** — asserted rather than found: a proto-declared RPC, a route in
+  `publicRoutes`, or a `serves` entry (below).
 
 Recognizers currently cover `net/http` route registration (including Go 1.22
 `"POST /path"` patterns, host-qualified patterns, and handlers wrapped in
@@ -377,6 +406,55 @@ collide across modules. The pointer is part of the pattern.
 The **recognize as…** form on a hover card offers these as checkboxes over the
 call's own resolved types, so the usual path is picking which facts to insist
 on rather than writing any of this by hand.
+
+### Declaring what a service serves
+
+Reading the surface from code covers what code says. Two things it can't: a
+service in a language this index doesn't read, or an API fronted by a gateway
+rather than by a handler — and, in a large workspace, the surface of every
+repository nobody has opened yet, since reading code means indexing it.
+
+A `serves` entry states it instead. It is the general form of what
+`microservice.yaml` + `--proto-root` does for one organisation's gRPC, for any
+kind of key:
+
+```json
+{
+  "serves": [
+    {"//": "the whole gRPC service, in a line",
+     "kind": "grpc.method", "keys": ["notes.v1.NotesService/*"]},
+
+    {"service": "billing",
+     "kind": "http.route", "keys": ["GET /v1/invoices", "POST /v1/invoices"]}
+  ]
+}
+```
+
+- **`kind`** namespaces the key exactly as a rule's `emit` does, so a
+  declaration and a recognized call meet on the same join.
+- **`keys`** are the keys served. A key ending in `/*` covers everything under
+  that prefix — the whole gRPC service in one line. A pattern answers "does
+  this service serve this key" and never enumerates: nothing here knows the
+  method names, so it is shown as itself rather than expanded into a surface it
+  would be inventing. A bare `*` is refused; it would make one service the
+  answer for every key of its kind.
+- **`service`** names the repository the entry is about, by directory name or
+  by the name its manifest gives it. Omit it in a repo's own
+  `.unfold/recognizers.json` and it means that repo. In a *shared* file it is
+  required — without it, every repository loading that file would be said to
+  serve those keys.
+
+A declaration sits behind both other sources. Anything the code shows is
+described by the code, which knows where the implementation is; a `serves`
+entry that repeats it is dropped rather than shown twice, and so is a pattern
+whose keys the code already covers. It is also the one source that costs no
+index, which is what lets a lazy workspace answer "who serves this" for a
+repository it hasn't read.
+
+Unlike the manifest, an uncorroborated `serves` entry is *not* badged stale.
+protoPaths are generated from the same repo's build, so an RPC nothing
+implements is real drift; a `serves` entry is written precisely for surface
+this index cannot see.
 
 ### Where a key can come from
 

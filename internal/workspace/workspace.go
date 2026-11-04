@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -114,6 +115,12 @@ type Workspace struct {
 	// an end of, while readers answer platform queries throughout.
 	channelMu sync.RWMutex
 	channels  map[string]*channelEnds
+	// patterns are declared ends whose key stands for a set — "svc.Notes/*".
+	// Kept apart from channels because the two are looked up differently: an
+	// exact key is a map lookup, and a pattern has to be tried against the key
+	// being asked about. There are a handful of them at most (one per line
+	// anyone wrote), so a scan on a miss costs nothing worth avoiding.
+	patterns []patternEnd
 
 	// bg tracks the background eager load, so WaitIndexed can join it.
 	bg sync.WaitGroup
@@ -409,6 +416,9 @@ func uniqueAlias(existing map[string]*repo, base string) string {
 // without indexing anyone's Go code.
 func (w *Workspace) readDeclarations() {
 	for _, alias := range w.order {
+		w.readServes(alias)
+	}
+	for _, alias := range w.order {
 		r := w.repos[alias]
 		mf, err := manifest.Read(r.dir)
 		if err != nil || mf == nil {
@@ -436,6 +446,50 @@ func (w *Workspace) readDeclarations() {
 			w.publish("grpc.method", m.FullName, alias, model.RoleInbound)
 		}
 	}
+}
+
+// readServes publishes what a repository *states* it serves, from the rules
+// files that apply to it.
+//
+// This is the general form of the proto tier, and it is here for the same
+// reason: it needs no Go index, so a workspace can answer "who serves this
+// key" for a repository nobody has opened. Reading the manifest is what makes
+// a gRPC hop work immediately for one organisation's platform; reading this
+// makes it work for anyone else's, and for kinds of key that have no protos at
+// all.
+//
+// The manifest is read for the repo's own name first only in the sense that
+// both run before any code does — an entry naming a service by its manifest
+// name is matched here against the alias too, since the name is not known
+// until the manifest is read and the alias always is.
+func (w *Workspace) readServes(alias string) {
+	r := w.repos[alias]
+	set := rules.Load(append(append([]string{}, w.rulePaths...), rules.RepoPath(r.dir))...)
+	mf, _ := manifest.Read(r.dir)
+	name := r.name
+	if mf != nil && mf.Name != "" {
+		name = mf.Name
+	}
+	for _, e := range set.ServesFor(r.dir, name, r.alias) {
+		for _, key := range e.Keys {
+			if strings.HasSuffix(key, rules.Wildcard) {
+				w.publishPattern(e.Kind, key, alias)
+				continue
+			}
+			w.publish(e.Kind, key, alias, model.RoleInbound)
+		}
+	}
+}
+
+// publishPattern records a declared end whose key stands for a set.
+func (w *Workspace) publishPattern(kind, pattern, alias string) {
+	w.channelMu.Lock()
+	defer w.channelMu.Unlock()
+	p := patternEnd{channel: channelOf(kind), pattern: pattern, alias: alias}
+	if slices.Contains(w.patterns, p) {
+		return
+	}
+	w.patterns = append(w.patterns, p)
 }
 
 // declKey is the join identity: what an outbound edge asks for, and what an
@@ -612,6 +666,19 @@ type channelEnds struct {
 	outbound []string
 }
 
+// patternEnd is a declared end whose key is a prefix pattern: the channel it
+// is in, the pattern, and the service that stated it.
+//
+// Only inbound: a pattern says "this service serves all of these", which is a
+// statement someone can make about a surface. The outbound side is always a
+// call site with a key in hand, so there is nothing for a pattern to mean
+// there.
+type patternEnd struct {
+	channel string
+	pattern string
+	alias   string
+}
+
 // publishBindings registers which sides of which channels this repo is on,
 // according to its *code*.
 //
@@ -685,16 +752,43 @@ func (w *Workspace) publish(kind, key, alias string, role model.BindingRole) {
 func (w *Workspace) endsOf(kind, key string, role model.BindingRole) []string {
 	w.channelMu.RLock()
 	defer w.channelMu.RUnlock()
-	ends := w.channels[declKey(kind, key)]
-	if ends == nil {
-		return nil
-	}
-	side := ends.inbound
-	if role == model.RoleOutbound {
-		side = ends.outbound
+	return w.endsOfLocked(kind, key, role)
+}
+
+// endsOfLocked is endsOf with the channel lock already held.
+func (w *Workspace) endsOfLocked(kind, key string, role model.BindingRole) []string {
+	var side []string
+	if ends := w.channels[declKey(kind, key)]; ends != nil {
+		side = ends.inbound
+		if role == model.RoleOutbound {
+			side = ends.outbound
+		}
 	}
 	out := append([]string(nil), side...)
+	if role != model.RoleOutbound {
+		out = append(out, w.patternEndsLocked(kind, key, out)...)
+	}
 	sort.Strings(out)
+	return out
+}
+
+// patternEndsLocked returns the services that declared a pattern covering this
+// key and aren't already among the exact ends.
+func (w *Workspace) patternEndsLocked(kind, key string, have []string) []string {
+	if len(w.patterns) == 0 {
+		return nil
+	}
+	channel := channelOf(kind)
+	var out []string
+	for _, p := range w.patterns {
+		if p.channel != channel || !rules.KeyMatches(p.pattern, key) {
+			continue
+		}
+		if slices.Contains(have, p.alias) || slices.Contains(out, p.alias) {
+			continue
+		}
+		out = append(out, p.alias)
+	}
 	return out
 }
 
@@ -722,10 +816,28 @@ func (w *Workspace) Channels() []model.Channel {
 	sides := make(map[string]channelEnds, len(w.channels))
 	for k, ends := range w.channels {
 		keys = append(keys, k)
+		in := append([]string(nil), ends.inbound...)
+		// A key covered by a declared pattern has that service as an end here
+		// too, or the index would disagree with the join it is an index of:
+		// the hop resolves and the row says nobody serves it.
+		if channel, key, ok := splitDeclKey(k); ok {
+			in = append(in, w.patternEndsLocked(channel, key, in)...)
+		}
 		sides[k] = channelEnds{
-			inbound:  append([]string(nil), ends.inbound...),
+			inbound:  in,
 			outbound: append([]string(nil), ends.outbound...),
 		}
+	}
+	// A pattern nobody has called yet is a row of its own: a declared surface
+	// with no traffic is exactly what someone opening this list is looking
+	// for, and it is also the only place the pattern itself is visible.
+	for _, p := range w.patterns {
+		k := p.channel + "\x00" + p.pattern
+		if _, ok := sides[k]; ok {
+			continue
+		}
+		keys = append(keys, k)
+		sides[k] = channelEnds{inbound: []string{p.alias}}
 	}
 	w.channelMu.RUnlock()
 

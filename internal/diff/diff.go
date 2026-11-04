@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/MaxInertia/unfold/internal/model"
+	"github.com/MaxInertia/unfold/internal/workspace"
 )
 
 // lineDiffCap bounds the O(n*m) LCS: above it we still report "modified" but
@@ -32,11 +33,16 @@ func New(base model.Engine) *Differ {
 // Annotate sets f.Diff describing how f differs from the same function in the
 // base. File frames (whole-file views) are left unannotated — their ids are
 // path-based and don't match across the two engine roots.
+//
+// So is a frame from another repository of a workspace. The base is one
+// repository at its merge-base, and a sibling repo's code isn't in it at any
+// revision — looking it up would find nothing and report "added", which is a
+// claim about a branch that doesn't touch that repository at all.
 func (d *Differ) Annotate(f *model.Frame) {
 	if f == nil || d == nil || d.base == nil {
 		return
 	}
-	if strings.HasPrefix(string(f.ID), "file:") {
+	if strings.HasPrefix(string(f.ID), "file:") || strings.Contains(string(f.ID), workspace.Sep) {
 		return
 	}
 	baseFrame, err := d.base.Frame(f.ID)

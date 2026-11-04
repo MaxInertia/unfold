@@ -199,6 +199,38 @@ func Load(lang Lang, dir, target string) (model.Engine, error) {
 	return Rebuild(nil, lang, dir, target, nil)
 }
 
+// LoadSolo loads one directory as a single repository, whatever workspace is
+// configured. It exists for diff mode's base.
+//
+// The base is a throwaway worktree of *this* repo at the merge-base, and it is
+// not one of the workspace's repositories. Loading it the ordinary way built a
+// second whole workspace out of the siblings at their *head* revisions, found
+// the worktree in none of them, and fell back to calling the alphabetically
+// first repo the primary — so the revision being diffed against was never
+// indexed, and every frame in the repo being read came back "added".
+func LoadSolo(lang Lang, dir, target string) (model.Engine, error) {
+	return loadSingle(lang, dir, target)
+}
+
+// loadSingle is the one-repository path, shared by LoadSolo and by Rebuild
+// when no workspace is open.
+func loadSingle(lang Lang, dir, target string) (model.Engine, error) {
+	switch lang {
+	case LangGo:
+		idx := indexer.New()
+		idx.SetRules(rules.Load(RecognizerFiles...))
+		_ = idx.SetProtoRoot(ProtoRoot)
+		if err := idx.Load(dir, target); err != nil {
+			return nil, err
+		}
+		return idx, nil
+	case LangTS:
+		return tsengine.Load(dir, target)
+	default:
+		return nil, fmt.Errorf("unsupported language %q", lang)
+	}
+}
+
 // Rebuild is Load, carrying over what prev already read.
 //
 // rebuild names repository directories whose index must be discarded — the one
@@ -223,15 +255,9 @@ func Rebuild(prev model.Engine, lang Lang, dir, target string, rebuild map[strin
 			prevWs, _ := prev.(*workspace.Workspace)
 			return workspace.Reopen(prevWs, dirs, projectDir(dir), ProtoRoot, IndexMode, rebuild)
 		}
-		idx := indexer.New()
-		idx.SetRules(rules.Load(RecognizerFiles...))
-		_ = idx.SetProtoRoot(ProtoRoot)
-		if err := idx.Load(dir, target); err != nil {
-			return nil, err
-		}
-		return idx, nil
+		return loadSingle(lang, dir, target)
 	case LangTS:
-		return tsengine.Load(dir, target)
+		return loadSingle(lang, dir, target)
 	default:
 		return nil, fmt.Errorf("unsupported language %q", lang)
 	}

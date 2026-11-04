@@ -114,6 +114,14 @@ var Builtins = []Builtin{
 	{ID: "builtin.http.routes", Doc: "net/http route registration (inbound)", Fn: HTTPRoutes},
 	{ID: "builtin.pubsub", Doc: "GCP Pub/Sub topics and subscriptions", Fn: PubSub},
 	{ID: "builtin.http.calls", Doc: "http.Get/Post with a statically known URL (outbound)", Fn: HTTPClientCalls},
+	// The two gRPC passes are call-graph questions rather than per-call-site
+	// ones, so they live in the indexer and have no Fn here. They are listed
+	// anyway because the id is what makes a recognizer addressable — countable
+	// in the rules report, switchable from a rules file — and being the two
+	// that draw most of a platform's edges is a reason to be addressable, not
+	// an excuse from it.
+	{ID: "builtin.grpc.server", Doc: "gRPC service registration: the RPCs this service implements (inbound)"},
+	{ID: "builtin.grpc.calls", Doc: "gRPC calls made through a generated client (outbound)"},
 }
 
 // Extract runs every enabled built-in over one call site. A disabled built-in
@@ -123,7 +131,7 @@ var Builtins = []Builtin{
 func Extract(c Call, disabled map[string]bool) []model.Binding {
 	var out []model.Binding
 	for _, b := range Builtins {
-		if disabled[b.ID] {
+		if b.Fn == nil || disabled[b.ID] {
 			continue
 		}
 		// Stamped here rather than in each recognizer: a rule that has to

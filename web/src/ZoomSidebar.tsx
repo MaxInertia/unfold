@@ -115,25 +115,33 @@ export function ServiceFilterPanel({
   );
 }
 
+// The platform level's filter. What it filters depends on which reading is
+// showing, so the copy follows the mode rather than naming services while the
+// list under it is APIs.
 export function PlatformFilterPanel({
   text,
   onChange,
+  mode = "graph",
 }: {
   text: string;
   onChange: (text: string) => void;
+  mode?: "graph" | "calls" | "keys";
 }) {
+  const calls = mode === "calls";
   return (
     <div className="filters">
       <input
         type="text"
         className="filters-text"
-        placeholder="filter services…"
+        placeholder={calls ? "filter APIs…" : "filter services…"}
         value={text}
         onChange={(e) => onChange(e.target.value)}
         spellCheck={false}
       />
       <p className="filters-hint">
-        Pick a service to see the slice around it — who calls it, and what it calls.
+        {calls
+          ? "Click an API to focus the graph on its chain — everything that reaches it, and everything it reaches."
+          : "Pick a service to see the slice around it — who calls it, and what it calls."}
       </p>
     </div>
   );

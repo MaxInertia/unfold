@@ -330,12 +330,22 @@ func TestBuiltinsAreAddressableAndDisablable(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, b := range Builtins {
-		if b.ID == "" || b.Fn == nil {
-			t.Errorf("built-in needs an id and a function: %+v", b)
+		// An id and a doc, always. A function only for the recognizers that
+		// run over a call site: the two gRPC passes are call-graph questions
+		// and live in the indexer, and they are listed here because being
+		// addressable is what the id is for — not because Extract can run
+		// them.
+		if b.ID == "" || b.Doc == "" {
+			t.Errorf("built-in needs an id and a doc: %+v", b)
 		}
 		if seen[b.ID] {
 			t.Errorf("duplicate built-in id %q", b.ID)
 		}
 		seen[b.ID] = true
+	}
+	// A listed recognizer with no function is skipped rather than run, which
+	// is the difference between listing one and crashing on it.
+	if got := Extract(route, nil); len(got) != 1 {
+		t.Errorf("expected the route binding and nothing from the id-only entries, got %+v", got)
 	}
 }

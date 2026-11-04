@@ -94,4 +94,14 @@ func TestAnnotate(t *testing.T) {
 			t.Fatalf("file frame should not be annotated, got %+v", f.Diff)
 		}
 	})
+	// A frame spliced in from another repository of the workspace. The base is
+	// this repo at its merge-base and contains no revision of that code at all,
+	// so "added" would be a claim about a branch that never touched it.
+	t.Run("another repo's frame skipped", func(t *testing.T) {
+		f := &model.Frame{ID: "conversation::pkg.Handler", Source: "func Handler() {}"}
+		d.Annotate(f)
+		if f.Diff != nil {
+			t.Fatalf("a frame from another repo should not be annotated, got %+v", f.Diff)
+		}
+	})
 }

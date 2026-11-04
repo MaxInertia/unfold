@@ -15,4 +15,8 @@ func (s *ConversationServer) StreamConversation(ctx context.Context) error {
 	return nil
 }
 
-func main() {}
+// main registers the implementation, which is where this service says what it
+// serves without a manifest saying it for them.
+func main() {
+	RegisterConversationServiceServer(&server{}, &ConversationServer{})
+}

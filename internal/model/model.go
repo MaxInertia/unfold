@@ -471,8 +471,8 @@ type RepoInfo struct {
 	Alias   string `json:"alias"` // stable key used to namespace ids
 	Name    string `json:"name"`  // display name (the manifest's, usually)
 	Dir     string `json:"dir"`
-	Primary bool `json:"primary,omitempty"` // the repo unfold was pointed at
-	Indexed bool `json:"indexed,omitempty"` // its Go code is loaded
+	Primary bool   `json:"primary,omitempty"` // the repo unfold was pointed at
+	Indexed bool   `json:"indexed,omitempty"` // its Go code is loaded
 	// Indexing is true while its Go code is being read. Distinct from
 	// !Indexed, which is the resting state of a repo nobody has opened: one
 	// is "not yet", the other is "not unless you ask", and a reader waiting on
@@ -648,6 +648,141 @@ type PlatformCall struct {
 	SiteTitle     string   `json:"siteTitle,omitempty"`
 	File          string   `json:"file,omitempty"`
 	Line          int      `json:"line,omitempty"`
+}
+
+// CallGraph is the platform's API surface as one graph: every entrypoint any
+// service serves, every call any service makes, and the edges joining them.
+//
+// It is the same data L0 draws, one granularity finer, and the difference is
+// the point. L0 answers "does inbox call conversation"; this answers "hitting
+// POST /threads is what makes that call, and it lands on GetConversation" —
+// the chain a reader is actually tracing. Neither the service view nor the
+// platform view can state that: the crossing relation joins one service's two
+// columns, and the channel join links one call to its handler, but nothing
+// composed the two into a walk that crosses repos.
+//
+// Nodes are APIs, not services, and an outbound call is not a node of its
+// own: a call whose key some service serves *is* that service's entrypoint
+// node. Identifying the two is what makes chains fall out of plain graph
+// reachability instead of needing a second edge type to hop the boundary.
+type CallGraph struct {
+	Nodes []CallGraphNode `json:"nodes"`
+	Edges []CallGraphEdge `json:"edges"`
+
+	// Anchor is the frame this was zoomed out from, carried up like every
+	// other level's. Here it marks the nodes whose execution reaches it —
+	// transitively, across repos, which is the question the L0 marking
+	// approximates by service.
+	Anchor      TargetID `json:"anchor,omitempty"`
+	AnchorTitle string   `json:"anchorTitle,omitempty"`
+
+	// Unindexed names the services whose code hasn't been read. Their
+	// entrypoints are known from declarations, but what those entrypoints go
+	// on to call is not — so a chain that stops at one has stopped for want
+	// of indexing, not because it ended, and the UI has to be able to say so.
+	Unindexed []string `json:"unindexed,omitempty"`
+}
+
+// CallGraphOrigin says what a node is, which is really a statement about
+// where execution can enter it.
+type CallGraphOrigin string
+
+const (
+	// OriginEntrypoint is an API some service in the workspace serves: a
+	// route, an implemented RPC, a subscription.
+	OriginEntrypoint CallGraphOrigin = "entrypoint"
+	// OriginRoot is a service's own unattributed origin — the calls it makes
+	// from main, init, or a package-level initializer, which no entrypoint of
+	// its own causes. Without this node those calls have no source and the
+	// service vanishes from the graph despite driving half of it: the
+	// fixture's gateway is exactly that shape.
+	OriginRoot CallGraphOrigin = "root"
+	// OriginExternal is a key this workspace calls but nothing in it serves —
+	// a third-party API, or a service that simply isn't checked out. Kept as
+	// a node because "the chain leaves here" is information, and dropping it
+	// would quietly redraw a call to Stripe as a call to nothing.
+	OriginExternal CallGraphOrigin = "external"
+)
+
+// CallGraphNode is one API in the workspace.
+type CallGraphNode struct {
+	ID     string          `json:"id"`
+	Origin CallGraphOrigin `json:"origin"`
+	// Service is the alias serving this API, empty for an external one.
+	Service string `json:"service,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	Key     string `json:"key,omitempty"`
+	Title   string `json:"title"`
+
+	Visibility BindingVisibility `json:"visibility,omitempty"`
+	Confidence BindingConfidence `json:"confidence,omitempty"`
+	Stale      bool              `json:"stale,omitempty"`
+
+	// Target opens the handler, Site the registration — the same fallback
+	// the binding rows make, so every node in the graph opens as code.
+	// Candidates carries the implementations when several match and none is
+	// unambiguous, for the same reason a binding does: a declared RPC fronted
+	// by a decorator has no single Target, and enumerating beats guessing.
+	Target     TargetID    `json:"target,omitempty"`
+	Candidates []Candidate `json:"candidates,omitempty"`
+	Site       TargetID    `json:"site,omitempty"`
+	SiteTitle  string      `json:"siteTitle,omitempty"`
+	File       string      `json:"file,omitempty"`
+	Line       int         `json:"line,omitempty"`
+
+	// OutboundKnown reports whether this node's outgoing edges were
+	// determined. False means no handler could be walked, so "calls nothing"
+	// was never established — the same distinction Binding.CrossingKnown
+	// carries, and it has to survive into the graph or a node with no
+	// outgoing edges reads as a leaf when it is really an unread page.
+	OutboundKnown bool `json:"outboundKnown,omitempty"`
+
+	// ReachesAnchor marks a node from which execution can arrive at the
+	// anchor.
+	ReachesAnchor bool `json:"reachesAnchor,omitempty"`
+	// Entry marks a node nothing else in the workspace reaches — where work
+	// enters the platform rather than being passed along.
+	Entry bool `json:"entry,omitempty"`
+}
+
+// CallGraphEdge is "serving From makes this call, and it lands on To".
+type CallGraphEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	// Kind is the outbound binding's kind, which is not always the inbound
+	// one's: a publish is a pubsub.topic and its subscriber a
+	// pubsub.subscription. The edge is named for the call being made.
+	Kind string `json:"kind"`
+	Key  string `json:"key"`
+
+	// Sites are the call sites behind this edge, so a line opens as code.
+	// Plural because one entrypoint can reach the same API from several
+	// places, and collapsing them to the first would hide the others.
+	Sites []CallGraphSite `json:"sites,omitempty"`
+
+	Confidence BindingConfidence `json:"confidence,omitempty"`
+	// Fanout marks an edge whose key has more than one receiver — a topic
+	// with several subscribers. All of them run, so all the edges are drawn,
+	// and saying which are fanned out stops the picture reading as a choice.
+	Fanout bool `json:"fanout,omitempty"`
+
+	ReachesAnchor bool `json:"reachesAnchor,omitempty"`
+}
+
+// CallGraphSite is one call site on an edge.
+type CallGraphSite struct {
+	Site      TargetID `json:"site,omitempty"`
+	SiteTitle string   `json:"siteTitle,omitempty"`
+	File      string   `json:"file,omitempty"`
+	Line      int      `json:"line,omitempty"`
+}
+
+// CallGrapher is implemented by engines that can join entrypoints to calls
+// across every repo they hold. Separate from WorkspaceEngine so the server
+// can answer 501 precisely rather than hiding the level behind a broader
+// capability check.
+type CallGrapher interface {
+	CallGraph(anchor TargetID) (*CallGraph, error)
 }
 
 // WorkspaceEngine is implemented by engines that can describe a whole

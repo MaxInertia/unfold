@@ -1,0 +1,531 @@
+import { useEffect, useMemo, useState } from "react";
+import { fetchCallGraph, indexRepo } from "./api";
+import {
+  bucketOf,
+  bucketsOf,
+  EXTERNAL_GROUP,
+  project,
+  servicesOnChain,
+  visibleNodes,
+  type ProjectedEdge,
+  type ProjectedNode,
+} from "./callGraphProjection";
+import {
+  layoutGraph,
+  linkLabelPoint,
+  linkPath,
+  type GraphLink,
+  type GraphNode,
+} from "./graphLayout";
+import type { CallGraph, TargetID } from "./types";
+
+// The platform read as APIs rather than as services.
+//
+// L0 answers "does inbox call conversation". The question underneath it is
+// almost always "what makes that call, and where does it land" — and neither
+// existing level can state it: the crossing relation joins one service's two
+// columns and stops at the repo boundary, the channel join links a call to its
+// handler but never says what caused it. This view is the two composed, so a
+// path reads end to end:
+//
+//   gateway (main) → inbox ShowThread → conversation GetConversation
+//
+// Drawn literally that is one node per API, which on a twelve-service
+// workspace measured 168 nodes, a canvas six times taller than the window, a
+// single column holding 72 entry points, and 2662 crossing edge pairs. Every
+// node was correct and the picture was useless.
+//
+// So the graph is not drawn literally. A service is one node standing for its
+// APIs until you expand it, which makes the default at most one node per
+// service — the same order as L0 — and the *mixed* state the useful one: real
+// APIs where you are reading, folded context everywhere else. The arithmetic
+// of that folding lives in callGraphProjection.ts, where it can be tested.
+
+const NODE_W = 208;
+const NODE_H = 56;
+const DEFAULT_HOPS = 2;
+
+// Roughly what's left below the header and mode switch. A floor keeps a short
+// window from squashing the graph rather than scrolling it.
+//
+// It is also the graph container's `max-height`, applied inline rather than in
+// CSS because the bound can't be inherited: this view's ancestors are not a
+// bounded flex column, so `flex: 1` had nothing to divide against and the
+// container grew to fit a 5900px canvas — scrolling the whole app and carrying
+// the header, the fold chips and the focus control off the top of the screen.
+// The controls for making a graph smaller have to stay on screen while you use
+// them, so the one number actually known — how much window is left — is used
+// directly.
+function availableHeight(): number {
+  if (typeof window === "undefined") return 0;
+  return Math.max(360, window.innerHeight - 320);
+}
+
+// What to call an API on a node an inch and a half wide. The key is the
+// identity and stays in the tooltip; the label is the part that isn't already
+// said by the service beside it.
+export function shortKey(title: string, origin?: string): string {
+  if (origin === "root") return title;
+  const slash = title.lastIndexOf("/");
+  // A gRPC key is "<proto package>.<Service>/<Method>", and the package half
+  // is the service you are already looking at.
+  if (slash > 0 && !title.includes(" ")) return title.slice(slash + 1);
+  return title;
+}
+
+export function CallGraphView({
+  anchor,
+  filter,
+  onOpen,
+}: {
+  anchor: TargetID | null;
+  filter: string;
+  onOpen: (id: TargetID) => void;
+}) {
+  const [graph, setGraph] = useState<CallGraph | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hover, setHover] = useState<string | null>(null);
+  const [focus, setFocus] = useState<string | null>(null);
+  const [hops, setHops] = useState(DEFAULT_HOPS);
+  // Which services are drawn as their APIs rather than as one node. Everything
+  // starts folded: a workspace you have just opened is one you have no
+  // question about yet, and 168 boxes is not an answer to "no question".
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // With an anchor the chain reaching it is the point, so the rest starts
+  // hidden rather than merely dimmed.
+  const [onlyReaching, setOnlyReaching] = useState(true);
+  const [room, setRoom] = useState(() => availableHeight());
+  const [indexing, setIndexing] = useState(false);
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    const onResize = () => setRoom(availableHeight());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    fetchCallGraph(anchor)
+      .then((g) => {
+        if (!alive) return;
+        setGraph(g);
+        setFocus(null);
+        // Arriving with an anchor, the services its chain runs through are the
+        // ones worth opening: the answer as real APIs, the platform around it
+        // still folded.
+        setExpanded(new Set(g.anchorTitle ? servicesOnChain(g) : []));
+      })
+      .catch((e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [anchor, revision]);
+
+  // Reading the remaining services. This view degrades further than L0 does
+  // without them: a service's *declared* RPCs are known unread, but nothing
+  // declares a subscription — only the subscriber's own body says it
+  // subscribes — so on a lazy workspace half the joins simply aren't there
+  // yet, and every publish looks like a call out of the platform.
+  async function indexAll(aliases: string[]) {
+    setIndexing(true);
+    try {
+      for (const alias of aliases) await indexRepo(alias);
+      setRevision((n) => n + 1);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setIndexing(false);
+    }
+  }
+
+  const anchored = !!graph?.anchorTitle;
+
+  // A focused node has to be drawn as itself, so its own service is open
+  // whatever the fold state says. Everything else stays as the user left it —
+  // expanding the whole focus set would undo the narrowing that focusing is
+  // for, on exactly the dense graphs where it matters.
+  const effectiveExpanded = useMemo(() => {
+    if (!focus || !graph) return expanded;
+    const n = graph.nodes.find((x) => x.id === focus);
+    return n ? new Set([...expanded, bucketOf(n)]) : expanded;
+  }, [expanded, focus, graph]);
+
+  const projection = useMemo(() => {
+    if (!graph) return null;
+    const visible = visibleNodes(graph, { filter, anchored, onlyReaching, focus, hops });
+    return project(graph, visible, effectiveExpanded);
+  }, [graph, filter, anchored, onlyReaching, focus, hops, effectiveExpanded]);
+
+  const laid = useMemo(() => {
+    if (!projection) return null;
+    const nodes: GraphNode[] = projection.nodes.map((n) => ({
+      id: n.id,
+      label: `${n.sub} ${n.label}`,
+      height: NODE_H,
+    }));
+    const links: GraphLink[] = projection.edges.map((e) => ({
+      key: e.key,
+      from: e.from,
+      to: e.to,
+      weight: e.calls,
+    }));
+    return layoutGraph(nodes, links, { nodeW: NODE_W, nodeH: NODE_H, minHeight: room });
+  }, [projection, room]);
+
+  if (error) return <div className="app-error">{error}</div>;
+  if (!graph || !projection || !laid) return <div className="app-loading">loading call graph…</div>;
+
+  const byId = new Map(projection.nodes.map((n) => [n.id, n]));
+  const buckets = bucketsOf(graph);
+  const unindexed = graph.unindexed ?? [];
+  // "Nothing here serves this" is only a fact once everything has been read.
+  // While any service is unindexed the classification is provisional, and
+  // saying "outside the workspace" would assert the stronger claim from the
+  // weaker evidence.
+  const externalIsProvisional = unindexed.length > 0;
+  const shownApis = projection.nodes.reduce((sum, n) => sum + (n.group?.apis ?? 1), 0);
+
+  function toggle(service: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(service)) next.delete(service);
+      else next.add(service);
+      return next;
+    });
+  }
+
+  // Hovering dims everything not directly connected. Focus is the transitive
+  // version, applied by hiding rather than fading, because at this granularity
+  // fading isn't enough.
+  const lit = new Set<string>();
+  if (hover) {
+    lit.add(hover);
+    for (const e of projection.edges) {
+      if (e.from === hover) lit.add(e.to);
+      if (e.to === hover) lit.add(e.from);
+    }
+  }
+  const dimNode = (id: string) => (hover === null ? false : !lit.has(id));
+  const dimEdge = (e: ProjectedEdge) =>
+    hover === null ? false : e.from !== hover && e.to !== hover;
+
+  const focusNode = focus ? graph.nodes.find((n) => n.id === focus) : null;
+
+  return (
+    <div className="callgraph">
+      <header className="platform-header">
+        <h2 className="platform-title">calls</h2>
+        <span className="platform-counts">
+          {projection.nodes.length} node{projection.nodes.length === 1 ? "" : "s"} ·{" "}
+          {shownApis} API{shownApis === 1 ? "" : "s"} · {projection.edges.length} call
+          {projection.edges.length === 1 ? "" : "s"}
+        </span>
+        {graph.anchorTitle && (
+          <span className="service-anchor" title="the frame you zoomed out from">
+            anchored on <b>{graph.anchorTitle}</b>
+          </span>
+        )}
+        {anchored && (
+          <button
+            type="button"
+            className="callgraph-toggle"
+            onClick={() => setOnlyReaching((v) => !v)}
+          >
+            {onlyReaching ? "show the whole platform" : "show only what reaches the anchor"}
+          </button>
+        )}
+        {focusNode && (
+          <span className="callgraph-focus">
+            focused on <b>{shortKey(focusNode.title, focusNode.origin)}</b>
+            {/* Focus used to keep a node's entire two-way closure, which on a
+                dense graph is most of the graph — it stopped narrowing exactly
+                where narrowing was needed. Bounded, with the bound visible and
+                adjustable, because how far out you want to look is the actual
+                question and it changes per node. */}
+            <button
+              type="button"
+              className="callgraph-step"
+              onClick={() => setHops((h) => Math.max(1, h - 1))}
+              disabled={hops <= 1}
+              title="fewer hops"
+            >
+              −
+            </button>
+            <span className="callgraph-hops">{hops} hop{hops === 1 ? "" : "s"}</span>
+            <button
+              type="button"
+              className="callgraph-step"
+              onClick={() => setHops((h) => h + 1)}
+              title="more hops"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="callgraph-toggle"
+              onClick={() => {
+                setFocus(null);
+                setHops(DEFAULT_HOPS);
+              }}
+            >
+              clear
+            </button>
+          </span>
+        )}
+        {unindexed.length > 0 && (
+          <span className="platform-warn">
+            {unindexed.length} service{unindexed.length === 1 ? "" : "s"} not indexed — chains
+            reaching {unindexed.length === 1 ? "it" : "them"} stop there, and calls{" "}
+            {unindexed.length === 1 ? "it serves" : "they serve"} have no receiver yet{" "}
+            <button
+              type="button"
+              className="callgraph-toggle"
+              disabled={indexing}
+              onClick={() => void indexAll(unindexed)}
+            >
+              {indexing ? "reading…" : "read them"}
+            </button>
+          </span>
+        )}
+      </header>
+
+      {/* The fold controls. A service you have never expanded is still
+          nameable here, which is what keeps "where is X" answerable without
+          drawing X and everything around it first. */}
+      <div className="callgraph-buckets">
+        <span className="callgraph-buckets-label">expand:</span>
+        {buckets.map((b) => (
+          <button
+            key={b.service}
+            type="button"
+            className={`callgraph-chip${expanded.has(b.service) ? " callgraph-chip--on" : ""}`}
+            onClick={() => toggle(b.service)}
+            title={
+              expanded.has(b.service)
+                ? `fold ${b.service} back to one node`
+                : `draw ${b.service}'s ${b.apis} APIs`
+            }
+          >
+            {b.service === EXTERNAL_GROUP ? "outside" : b.service}
+            <span className="callgraph-chip-count">{b.apis}</span>
+          </button>
+        ))}
+        {expanded.size > 0 && (
+          <button
+            type="button"
+            className="callgraph-toggle"
+            onClick={() => setExpanded(new Set())}
+          >
+            fold all
+          </button>
+        )}
+      </div>
+
+      {projection.nodes.length === 0 ? (
+        <p className="platform-empty">
+          {anchored && onlyReaching
+            ? "No recognized entrypoint reaches the anchored frame. It may be reached only through helpers, or by a router unfold can't read yet."
+            : filter.trim()
+              ? `No API matches “${filter}”.`
+              : "No recognized API surface in this workspace yet."}
+        </p>
+      ) : (
+        <div className="graph-scroll callgraph-scroll" style={{ maxHeight: room }}>
+          <div className="graph" style={{ width: laid.width, height: laid.height }}>
+            <svg className="graph-edges" width={laid.width} height={laid.height} aria-hidden="true">
+              {laid.links.map((l) => {
+                const e = projection.edges.find((x) => x.key === l.key);
+                if (!e) return null;
+                const faded = dimEdge(e);
+                // Labels appear only once something has narrowed the picture —
+                // a hover or a focus — because at this node count a label on
+                // every edge is noise you have to read past.
+                const show = !faded && (hover !== null || !!focus);
+                // What the label says, and what it deliberately doesn't. The
+                // key is already the node the edge points at, so printing it
+                // again duplicates the destination — and a key is far wider
+                // than the column gap the label sits in, so it ran over the
+                // very node it was naming. A bundle's size is the part visible
+                // nowhere else.
+                const text = e.calls > 1 ? String(e.calls) : e.fanout ? "fan-out" : null;
+                const at = show && text ? linkLabelPoint(l) : null;
+                return (
+                  <g key={l.key}>
+                    <path
+                      d={linkPath(l)}
+                      className={`graph-edge${l.back ? " graph-edge--back" : ""}${
+                        faded ? " graph-edge--faded" : ""
+                      }${!faded && anchored && e.reachesAnchor ? " graph-edge--reaches" : ""}`}
+                      strokeWidth={Math.min(4, 1 + Math.log2(e.calls + 1))}
+                      strokeDasharray={e.inferred ? "5 3" : undefined}
+                    />
+                    {at && (
+                      <text className="graph-edge-label" x={at.x} y={at.y + 3}>
+                        {text}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
+            </svg>
+
+            {laid.nodes.map((p) => {
+              const n = byId.get(p.id);
+              if (!n) return null;
+              return n.group ? (
+                <GroupBox
+                  key={n.id}
+                  n={n}
+                  x={p.x}
+                  y={p.y}
+                  dim={dimNode(n.id)}
+                  anchored={anchored}
+                  onHover={setHover}
+                  onExpand={() => toggle(n.group!.service)}
+                />
+              ) : (
+                <ApiBox
+                  key={n.id}
+                  n={n}
+                  x={p.x}
+                  y={p.y}
+                  dim={dimNode(n.id)}
+                  anchored={anchored}
+                  focused={focus === n.id}
+                  provisional={externalIsProvisional}
+                  onHover={setHover}
+                  onFocus={() => setFocus((f) => (f === n.id ? null : n.id))}
+                  onOpen={onOpen}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One service, standing for its APIs. Clicking draws them.
+function GroupBox({
+  n,
+  x,
+  y,
+  dim,
+  anchored,
+  onHover,
+  onExpand,
+}: {
+  n: ProjectedNode;
+  x: number;
+  y: number;
+  dim: boolean;
+  anchored: boolean;
+  onHover: (id: string | null) => void;
+  onExpand: () => void;
+}) {
+  const g = n.group!;
+  return (
+    <div
+      className={`graph-node callgraph-node callgraph-node--group${dim ? " graph-node--dim" : ""}${
+        anchored && n.reachesAnchor ? " graph-node--reaches" : ""
+      }`}
+      style={{ left: x, top: y, width: NODE_W, height: NODE_H }}
+      onMouseEnter={() => onHover(n.id)}
+      onMouseLeave={() => onHover(null)}
+      onClick={onExpand}
+      title={`${g.apis} API${g.apis === 1 ? "" : "s"} — click to draw them${
+        g.unread > 0 ? `\n\n${g.unread} with no handler that could be walked` : ""
+      }`}
+    >
+      <span className="callgraph-node-label">{n.label}</span>
+      <span className="callgraph-node-meta">
+        {n.sub}
+        {anchored && g.reaching > 0 && (
+          <b className="callgraph-badge">{g.reaching} on the chain</b>
+        )}
+        {g.unread > 0 && <b className="callgraph-badge callgraph-badge--warn">{g.unread} unread</b>}
+      </span>
+      <span className="callgraph-expand" aria-hidden="true">
+        +
+      </span>
+    </div>
+  );
+}
+
+// One API.
+function ApiBox({
+  n,
+  x,
+  y,
+  dim,
+  anchored,
+  focused,
+  provisional,
+  onHover,
+  onFocus,
+  onOpen,
+}: {
+  n: ProjectedNode;
+  x: number;
+  y: number;
+  dim: boolean;
+  anchored: boolean;
+  focused: boolean;
+  provisional: boolean;
+  onHover: (id: string | null) => void;
+  onFocus: () => void;
+  onOpen: (id: TargetID) => void;
+}) {
+  const api = n.node!;
+  const open = api.target || api.candidates?.[0]?.targetId || api.site;
+  return (
+    <div
+      className={`graph-node callgraph-node callgraph-node--${api.origin}${
+        dim ? " graph-node--dim" : ""
+      }${anchored && n.reachesAnchor ? " graph-node--reaches" : ""}${
+        focused ? " callgraph-node--focus" : ""
+      }`}
+      style={{ left: x, top: y, width: NODE_W, height: NODE_H }}
+      onMouseEnter={() => onHover(n.id)}
+      onMouseLeave={() => onHover(null)}
+      onClick={onFocus}
+      title={`${api.kind ? `${api.kind} ` : ""}${api.key ?? api.title}${
+        !api.outboundKnown && api.origin !== "external"
+          ? "\n\nno handler could be walked, so what this calls is unknown"
+          : ""
+      }${
+        api.origin === "external" && provisional
+          ? "\n\nno service that has been read serves this — one of the unindexed services still might"
+          : ""
+      }`}
+    >
+      <span className="callgraph-node-label">{shortKey(api.title, api.origin)}</span>
+      <span className="callgraph-node-meta">
+        {api.service ?? (provisional ? "no receiver read yet" : "outside the workspace")}
+        {n.entry && api.origin !== "root" && <b className="callgraph-badge">entry</b>}
+        {api.stale && <b className="callgraph-badge callgraph-badge--warn">stale</b>}
+        {/* "Calls nothing" and "couldn't be walked" are different claims, and
+            only one of them is a fact about the code. A node with no outgoing
+            edges has to say which. */}
+        {!api.outboundKnown && api.origin !== "external" && (
+          <b className="callgraph-badge callgraph-badge--warn">unread</b>
+        )}
+      </span>
+      {open && (
+        <button
+          type="button"
+          className="callgraph-open"
+          title="open this API's code"
+          onClick={(ev) => {
+            ev.stopPropagation();
+            onOpen(open);
+          }}
+        >
+          ↗
+        </button>
+      )}
+    </div>
+  );
+}
