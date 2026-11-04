@@ -3989,6 +3989,30 @@ body.resizing {
   white-space: nowrap;
 }
 
+/* Read-aloud: the toggle and the play/stop button share the nav's button
+   shape; the toggle lights up when on, the play button while playing. */
+.tour-nav-btn--toggle {
+  font-size: 0.8rem;
+  padding: 0.1rem 0.3rem;
+  opacity: 0.6;
+  margin-right: 0.2rem;
+}
+
+.tour-nav-btn--on {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
+.tour-nav-btn.tour-play--playing,
+.note-action.tour-play--playing {
+  color: var(--accent);
+}
+
+.tour-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 .tour-desc {
   padding: 0 0.3rem 0.2rem;
   color: var(--muted);

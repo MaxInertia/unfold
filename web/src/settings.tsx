@@ -13,12 +13,17 @@ export interface Settings {
   // full reading width (the rails carry the cue); "indent" restores the
   // classic per-level indent.
   indentMode: "rails" | "indent";
+  // Read each tour stop aloud as it opens (the browser's speech synthesis,
+  // or a configured voice). Off by default: a voice that starts unasked is
+  // a surprise.
+  tourReadAloud: boolean;
 }
 
 const DEFAULTS: Settings = {
   depthRails: true,
   depthRuler: false,
   indentMode: "rails",
+  tourReadAloud: false,
 };
 
 const KEY = "unfold.settings";
@@ -36,6 +41,11 @@ function read(): Settings {
 }
 
 let cache: Settings = read();
+
+// The current settings for code that runs outside React (stores, drivers).
+export function currentSettings(): Settings {
+  return cache;
+}
 
 export function updateSettings(patch: Partial<Settings>) {
   cache = { ...cache, ...patch };
