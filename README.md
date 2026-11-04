@@ -787,6 +787,47 @@ card) reads one on demand; the same button stops it. This uses the
 browser's own speech synthesis, so it needs no setup; the toggle is a
 reader preference and survives reloads.
 
+**Play tour** narrates the whole tour: each stop opens, is read, and the
+next opens when the reading ends. While a stop is narrated a highlight
+follows the narration through the function — it starts at the first line,
+jumps to a call when the description names it with `[[…]]`, and otherwise
+drifts down the body at the pace of the speech — so the eye is where the
+voice is. The speed control (0.8× to 2×) applies to every narration.
+
+For a better voice than the browser's, start unfold with an ElevenLabs key
+and pick a voice under **settings → speech**. The key is looked for in two
+places, in this order, and the first non-empty one wins:
+
+1. `ELEVENLABS_API_KEY` in the environment of the `unfold` process
+   (`ELEVENLABS_API_KEY=… unfold ./...`, or export it in your shell).
+2. `~/.config/unfold/secrets.json`, a JSON file containing
+   `{"elevenlabs_api_key": "…"}`. Make it mode 600; unfold warns at startup
+   if it is readable by others.
+
+Whitespace around the key is ignored. The startup log says which source
+was used (`tts: ElevenLabs voice available (key from …)`), never the value.
+No `.env` file is read.
+
+**Where the key goes, and nowhere else:** it is sent as the `xi-api-key`
+header of requests to `https://api.elevenlabs.io`, to list voices and to
+synthesize. It is never logged, never included in an error message or an
+API response, never sent to the browser, and never written to `.unfold/`,
+the vault, or any file an agent reads — so the tour skill and any LLM
+working in the repository never see it. Redirects are not followed, so a
+3xx from the API can't carry the header to another host. The one way to
+change its destination is `UNFOLD_ELEVENLABS_URL`, which points the
+provider at a different base URL (a stub, for testing); when it is set
+the startup log says so. `internal/tts` has a test, `TestKeyNeverLeaks`,
+that pins these guarantees.
+
+The page asks `POST /api/tts` for audio, which synthesizes with Flash
+v2.5, caches each utterance by content so re-reading a stop or stepping
+back costs nothing, rate-limits misses so a runaway page can't spend the
+account, and fetches the next stop's audio while the current one plays. If
+the server voice fails — a bad key, no network — the browser voice reads
+that stop and the toggle says why. `GET /api/tts` lists the voices on
+offer.
+
 `GET /api/tours` lists them and `POST /api/tours` (a tour with a `name`,
 which becomes the filename) writes one, for authors that would rather speak
 HTTP than touch the directory. Where tours are kept is shown in the tab

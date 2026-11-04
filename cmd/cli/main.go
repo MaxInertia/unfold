@@ -23,6 +23,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/server"
 	"github.com/MaxInertia/unfold/internal/tours"
+	"github.com/MaxInertia/unfold/internal/tts"
 	"github.com/MaxInertia/unfold/internal/workspace"
 )
 
@@ -143,6 +144,15 @@ func main() {
 		log.Printf("tours watch disabled: %v", err)
 	} else {
 		defer tw.Close()
+	}
+	// A paid voice for reading tours aloud, when a key is configured. The
+	// key never reaches the browser: the page asks this server for audio.
+	if voices, keySource := tts.FromEnvironment(); voices != nil {
+		srv.SetTTS(voices)
+		log.Printf("tts: ElevenLabs voice available (key from %s)", keySource)
+		if u := os.Getenv(tts.ElevenLabsURLEnv); u != "" {
+			log.Printf("tts: %s is set: ElevenLabs requests, key included, go to %s", tts.ElevenLabsURLEnv, u)
+		}
 	}
 	// Linking a repo changes which repositories the engine opens, and that
 	// only takes effect on a rebuild. Reload is the same path watch mode

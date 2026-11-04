@@ -19,6 +19,9 @@ export type ResolvedStop =
       title: string;
       file: string;
       line: number; // the function's first line — where the card renders
+      // The frame itself, for anything that needs its body or calls
+      // without another fetch (the karaoke highlight).
+      frame: Frame;
       tree: FrameSlice;
       // Expand entries that matched no call site, so the panel can say which
       // part of the stop it couldn't do rather than quietly showing less.
@@ -44,6 +47,7 @@ export async function resolveStop(stop: TourStop, r: Resolvers): Promise<Resolve
       title: frame.title ?? frame.id,
       file: frame.file,
       line: frame.startLine,
+      frame,
       tree,
       missing,
     };

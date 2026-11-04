@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { fetchBodyByCall, fetchFiles, fetchSymbol, fetchTours } from "./api";
+import { buildTimeline, lineAt, type Waypoint } from "./karaoke";
 import { currentSettings } from "./settings";
-import { speak, stopSpeaking, stopSpeechText } from "./speech";
+import { prefetchSpeech, speak, stopSpeaking, stopSpeech } from "./speech";
 import { resolveStop, type ResolvedStop } from "./tourResolve";
 import type { Tour, TourStop } from "./types";
 import { useViewStore } from "./viewState";
@@ -31,6 +32,12 @@ export interface TourState {
   resolved: Record<number, ResolvedStop | "pending">;
   // A line the root frame should scroll to once it shows that file.
   focus: { file: string; line: number; seq: number } | null;
+  // Karaoke: the tour is being played through — each stop narrated, the
+  // next opened when the narration ends.
+  playing: boolean;
+  // Where the narration is right now, as a line in a file, for the root
+  // frame to highlight and keep in view. Null when nothing is narrating.
+  cursor: { file: string; line: number } | null;
 }
 
 let state: TourState = {
@@ -42,6 +49,8 @@ let state: TourState = {
   openSeq: 0,
   resolved: {},
   focus: null,
+  playing: false,
+  cursor: null,
 };
 const listeners = new Set<() => void>();
 // The index revision the current resolutions were made under; a rebuild
@@ -192,7 +201,7 @@ function ensureResolved(i: number, stop: TourStop): Promise<ResolvedStop> {
 
 export function selectTour(name: string | null) {
   if (name === state.active) return;
-  stopSpeaking();
+  stopTour();
   set({ active: name, index: -1 });
   resolveAll();
   savePosition();
@@ -207,7 +216,7 @@ export function goToStop(i: number) {
   // the driver: the text is known without waiting on the resolution, and
   // an unresolved stop still has a description worth hearing.
   stopSpeaking();
-  if (currentSettings().tourReadAloud) speakStop(i);
+  if (state.playing || currentSettings().tourReadAloud) speakStop(i);
 }
 
 // The identity a stop speaks under, so a play button can tell "this one
@@ -216,12 +225,71 @@ export function speechKey(i: number): string {
   return `${state.active}#${i}`;
 }
 
-// Read stop i aloud; pressing it again while it plays stops it.
+// Read stop i aloud; pressing it again while it plays stops it. While the
+// narration runs, the cursor follows it through the stop's frame — see
+// karaoke.ts for how words map to lines — and when the tour is being
+// played through, the end of one stop opens the next.
 export function speakStop(i: number) {
   const tour = activeTour();
   const stop = tour?.stops[i];
   if (!tour || !stop) return;
-  speak(speechKey(i), stopSpeechText(stop, i, tour.stops.length));
+  const spoken = stopSpeech(stop, i, tour.stops.length);
+  const key = speechKey(i);
+  // The timeline needs the resolved frame; it may still be in flight when
+  // the narration starts, so it's built on first use rather than up front.
+  let timeline: Waypoint[] | null | undefined;
+  const onProgress = (char: number) => {
+    if (timeline === undefined) {
+      const r = state.resolved[i];
+      if (!r || r === "pending") return; // not yet — try on the next word
+      timeline =
+        r.kind === "symbol"
+          ? buildTimeline(spoken, {
+              source: r.frame.source,
+              calls: r.frame.calls,
+              lineCount: r.frame.endLine - r.frame.startLine + 1,
+            })
+          : r.kind === "file"
+            ? [{ char: 0, line: 0 }]
+            : null;
+    }
+    if (!timeline) return;
+    const r = state.resolved[i];
+    if (!r || r === "pending" || r.kind === "unresolved") return;
+    const line = r.line + lineAt(timeline, char);
+    if (state.cursor?.file !== r.file || state.cursor.line !== line) set({ cursor: { file: r.file, line } });
+  };
+  const rate = currentSettings().tourSpeechRate || 1;
+  // The next stop's audio, fetched now so "next" plays without a gap.
+  const next = tour.stops[i + 1];
+  if (next) prefetchSpeech(stopSpeech(next, i + 1, tour.stops.length).text);
+  speak(key, spoken.text, { rate, onProgress }).then((natural) => {
+    if (state.cursor) set({ cursor: null });
+    if (!natural || !state.playing || state.index !== i) return;
+    if (i + 1 >= tour.stops.length) {
+      set({ playing: false });
+      return;
+    }
+    // A beat between stops, shorter at higher speeds.
+    window.setTimeout(() => {
+      if (state.playing && state.index === i) goToStop(i + 1);
+    }, 700 / rate);
+  });
+}
+
+// Play the tour through from the current stop (or the first), narrating
+// each and moving on when the narration ends.
+export function playTour() {
+  const tour = activeTour();
+  if (!tour) return;
+  set({ playing: true });
+  goToStop(state.index < 0 ? 0 : state.index);
+}
+
+export function stopTour() {
+  if (state.playing) set({ playing: false });
+  stopSpeaking();
+  if (state.cursor) set({ cursor: null });
 }
 
 export function nextStop() {

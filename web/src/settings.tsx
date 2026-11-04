@@ -17,6 +17,11 @@ export interface Settings {
   // or a configured voice). Off by default: a voice that starts unasked is
   // a surprise.
   tourReadAloud: boolean;
+  // Narration speed, 1 = the voice's natural pace.
+  tourSpeechRate: number;
+  // Which voice reads: "browser" for the browser's own speech synthesis,
+  // or "<provider>:<voiceId>" for one the server offers (/api/tts).
+  voice: string;
 }
 
 const DEFAULTS: Settings = {
@@ -24,6 +29,8 @@ const DEFAULTS: Settings = {
   depthRuler: false,
   indentMode: "rails",
   tourReadAloud: false,
+  tourSpeechRate: 1,
+  voice: "browser",
 };
 
 const KEY = "unfold.settings";
