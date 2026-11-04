@@ -147,9 +147,12 @@ func main() {
 	}
 	// A paid voice for reading tours aloud, when a key is configured. The
 	// key never reaches the browser: the page asks this server for audio.
-	if voices := tts.FromEnvironment(); voices != nil {
+	if voices, keySource := tts.FromEnvironment(); voices != nil {
 		srv.SetTTS(voices)
-		log.Printf("tts: ElevenLabs voice available")
+		log.Printf("tts: ElevenLabs voice available (key from %s)", keySource)
+		if u := os.Getenv(tts.ElevenLabsURLEnv); u != "" {
+			log.Printf("tts: %s is set: ElevenLabs requests, key included, go to %s", tts.ElevenLabsURLEnv, u)
+		}
 	}
 	// Linking a repo changes which repositories the engine opens, and that
 	// only takes effect on a rebuild. Reload is the same path watch mode

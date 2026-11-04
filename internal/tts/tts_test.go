@@ -1,11 +1,15 @@
 package tts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -105,11 +109,11 @@ func TestService(t *testing.T) {
 		if len(infos) != 1 || infos[0].ID != "elevenlabs" || len(infos[0].Voices) != 2 || infos[0].Error != "" {
 			t.Fatalf("infos: %+v", infos)
 		}
-		p.Key = "wrong" // a later fetch would fail, but the hour isn't up
+		p.key = "wrong" // a later fetch would fail, but the hour isn't up
 		if infos := s.Providers(ctx); infos[0].Error != "" {
 			t.Errorf("expected cached list, got error %q", infos[0].Error)
 		}
-		p.Key = "k"
+		p.key = "k"
 	})
 
 	t.Run("speak, then from cache without a second call", func(t *testing.T) {
@@ -177,18 +181,109 @@ func TestService(t *testing.T) {
 func TestElevenLabsKeyFromFile(t *testing.T) {
 	t.Setenv(ElevenLabsKeyEnv, "")
 	t.Setenv("HOME", t.TempDir())
-	if k := ElevenLabsKey(); k != "" {
-		t.Errorf("no file: got %q", k)
+	if k, src := ElevenLabsKey(); k != "" || src != "" {
+		t.Errorf("no file: got %q from %q", k, src)
 	}
 	path := SecretsPath()
-	if err := writeFile(path, `{"elevenlabs_api_key":"from-file"}`); err != nil {
+	if err := writeFile(path, "{\"elevenlabs_api_key\":\"from-file\\n\"}"); err != nil {
 		t.Fatal(err)
 	}
-	if k := ElevenLabsKey(); k != "from-file" {
-		t.Errorf("file: got %q", k)
+	if k, src := ElevenLabsKey(); k != "from-file" || src != path {
+		t.Errorf("file: got %q from %q", k, src)
 	}
-	t.Setenv(ElevenLabsKeyEnv, "from-env")
-	if k := ElevenLabsKey(); k != "from-env" {
-		t.Errorf("env wins: got %q", k)
+	t.Setenv(ElevenLabsKeyEnv, "from-env\n")
+	if k, src := ElevenLabsKey(); k != "from-env" || src != "$"+ElevenLabsKeyEnv {
+		t.Errorf("env wins: got %q from %q", k, src)
 	}
+}
+
+// The key goes to ElevenLabs and nowhere else: not into logs, not into
+// error messages, not into a formatted provider, and not across a redirect.
+func TestKeyNeverLeaks(t *testing.T) {
+	const secret = "sk-very-secret-key-value"
+	leaked := func(what, s string) {
+		t.Helper()
+		if strings.Contains(s, secret) {
+			t.Errorf("%s contains the key: %q", what, s)
+		}
+	}
+
+	t.Run("formatting a provider", func(t *testing.T) {
+		p := NewElevenLabs(secret, "")
+		leaked("%v", fmt.Sprintf("%v", p))
+		leaked("%+v", fmt.Sprintf("%+v", p))
+		leaked("%#v", fmt.Sprintf("%#v", p))
+		leaked("%s", fmt.Sprintf("%s", p))
+		leaked("%v of struct", fmt.Sprintf("%v", *p))
+	})
+
+	t.Run("errors from the API", func(t *testing.T) {
+		var calls int32
+		ts := stub(t, &calls)
+		defer ts.Close()
+		p := NewElevenLabs(secret, ts.URL+"/v1")
+		if _, err := p.Voices(context.Background()); err == nil {
+			t.Fatal("expected a 401")
+		} else {
+			leaked("voices error", err.Error())
+		}
+		if _, _, err := p.Synth(context.Background(), "v1", "hi"); err == nil {
+			t.Fatal("expected a 401")
+		} else {
+			leaked("synth error", err.Error())
+		}
+		p = NewElevenLabs(secret, "http://127.0.0.1:1/v1")
+		if _, err := p.Voices(context.Background()); err == nil {
+			t.Fatal("expected a connection error")
+		} else {
+			leaked("transport error", err.Error())
+		}
+	})
+
+	t.Run("a redirect is not followed", func(t *testing.T) {
+		var gotKey atomic.Value
+		gotKey.Store("")
+		elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotKey.Store(r.Header.Get("xi-api-key"))
+			_, _ = w.Write([]byte(`{"voices":[]}`))
+		}))
+		defer elsewhere.Close()
+		eleven := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
+		}))
+		defer eleven.Close()
+		p := NewElevenLabs(secret, eleven.URL+"/v1")
+		_, err := p.Voices(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "HTTP 307") {
+			t.Errorf("redirect should surface as an error, got %v", err)
+		}
+		if gotKey.Load().(string) != "" {
+			t.Error("the key followed the redirect to another host")
+		}
+	})
+
+	t.Run("reading the key logs the source, not the value", func(t *testing.T) {
+		t.Setenv(ElevenLabsKeyEnv, "")
+		t.Setenv("HOME", t.TempDir())
+		var logs bytes.Buffer
+		log.SetOutput(&logs)
+		defer log.SetOutput(os.Stderr)
+		path := SecretsPath()
+		if err := writeFile(path, `{"elevenlabs_api_key":"`+secret+`"}`); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Chmod(path, 0o644) // provokes the mode warning
+		if k, _ := ElevenLabsKey(); k != secret {
+			t.Fatalf("got %q", k)
+		}
+		if !strings.Contains(logs.String(), "chmod 600") {
+			t.Errorf("expected the mode warning, got %q", logs.String())
+		}
+		// A malformed file logs a fixed message, not the decoder's quote of it.
+		if err := writeFile(path, secret); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = ElevenLabsKey()
+		leaked("log output", logs.String())
+	})
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,12 +17,21 @@ import (
 // voice list, and text-to-speech in one of them. Flash v2.5 is the model:
 // the lowest latency they offer and half the credits of Multilingual v2,
 // which is the right trade for a sentence or two per stop.
+//
+// The key goes exactly one place: the xi-api-key header of requests to
+// BaseURL. It is unexported so nothing outside this file can read it, the
+// formatters below keep it out of %v and %#v, the client refuses redirects
+// so a 3xx can't carry the header to another host, and no error this
+// type returns includes it.
 type ElevenLabs struct {
-	Key     string
+	key     string
 	BaseURL string // "https://api.elevenlabs.io/v1" unless overridden (tests)
 	Model   string
 	Client  *http.Client
 }
+
+// keyHeader is the one header the key is ever written to.
+const keyHeader = "xi-api-key"
 
 const (
 	elevenBase  = "https://api.elevenlabs.io/v1"
@@ -37,11 +47,24 @@ func NewElevenLabs(key, baseURL string) *ElevenLabs {
 		baseURL = elevenBase
 	}
 	return &ElevenLabs{
-		Key:     key,
+		key:     key,
 		BaseURL: strings.TrimRight(baseURL, "/"),
 		Model:   elevenModel,
-		Client:  &http.Client{Timeout: 30 * time.Second},
+		Client: &http.Client{
+			Timeout: 30 * time.Second,
+			// Go strips Authorization on a cross-host redirect but not custom
+			// headers; not following redirects at all is the simple guarantee.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
+}
+
+// String and GoString describe the provider without the key, so a %v in a
+// log line or a %#v in a test failure never prints it. Value receivers,
+// so they apply to the struct as well as a pointer to it.
+func (e ElevenLabs) String() string { return "ElevenLabs(" + e.BaseURL + ")" }
+func (e ElevenLabs) GoString() string {
+	return "&tts.ElevenLabs{BaseURL: " + strconv.Quote(e.BaseURL) + ", key: <redacted>}"
 }
 
 func (e *ElevenLabs) ID() string    { return "elevenlabs" }
@@ -52,7 +75,7 @@ func (e *ElevenLabs) Voices(ctx context.Context) ([]Voice, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("xi-api-key", e.Key)
+	req.Header.Set(keyHeader, e.key)
 	body, _, err := e.do(req)
 	if err != nil {
 		return nil, err
@@ -97,7 +120,7 @@ func (e *ElevenLabs) Synth(ctx context.Context, voiceID, text string) ([]byte, s
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("xi-api-key", e.Key)
+	req.Header.Set(keyHeader, e.key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "audio/mpeg")
 	body, ctype, err := e.do(req)
