@@ -798,6 +798,34 @@ a tour, the schema, how to name symbols, and the `expand` syntax. Copy it
 into another project's `.claude/skills/` (or `~/.claude/skills/`) to have
 tours written there too.
 
+## Sonify
+
+Optionally, the code has a sound, so your ears carry the structure while your
+eyes read the text. Off by default; turn it on under **sound** in settings
+(the gear) or press **m**, and set the volume there — it is quiet even at full.
+Everything is a short tone from a pentatonic set, so nothing clashes:
+
+- **unfold** — a tone, lower the deeper the frame you opened sits; **fold** is
+  the same pitch, softer.
+- **new root** — two rising notes when the view re-roots on a function
+  (search, a caller, a tour stop).
+- **tour step** — a tick on **]** / **[**.
+- **narration** — while a stop is read aloud and the highlight moves through
+  the function, a quiet grain per line it lands on, pitched by that line's
+  indentation, so you can follow it without looking.
+- **s** — a scan of the view: every line of the root function as a short
+  grain in order, pitch by indentation (deeper is lower), timbre by kind —
+  plain lines are a sine, call sites brighter, `if err != nil` blocks dark,
+  returns ring a little longer; blank lines and lone braces are rests. A
+  forty-line function takes about two seconds, so "flat with one deep nest
+  and three returns" is something you hear. Callees you have unfolded play
+  in their place, two steps lower, between short rests. In diff mode the
+  lines your branch changed are played with a brighter timbre. Press **s**
+  again to stop.
+
+Browsers refuse to make sound before you have clicked or typed in the page,
+so the first cue after a fresh load follows your first gesture.
+
 ## Repository layout
 
 The Go module (CLI + HTTP server + indexers) is the repo root. Clients and

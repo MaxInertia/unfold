@@ -15,7 +15,7 @@ export type KeyLike = {
   shiftKey: boolean;
 };
 
-export type KeyScope = "zoom" | "history" | "reading" | "search" | "notes" | "tour";
+export type KeyScope = "zoom" | "history" | "reading" | "search" | "notes" | "tour" | "sound";
 
 export interface Keybinding {
   id: string;
@@ -111,6 +111,20 @@ export const KEYBINDINGS: Keybinding[] = [
     matches: bare("["),
   },
   {
+    id: "sound.scan",
+    scope: "sound",
+    keys: ["s"],
+    description: "play the shape of the view: a grain per line, pitch by indentation (again to stop)",
+    matches: bare("s"),
+  },
+  {
+    id: "sound.mute",
+    scope: "sound",
+    keys: ["m"],
+    description: "sound on / off",
+    matches: bare("m"),
+  },
+  {
     id: "ui.dismiss",
     scope: "reading",
     keys: ["esc"],
@@ -136,6 +150,7 @@ export const SCOPE_LABELS: Record<KeyScope, string> = {
   search: "search",
   notes: "notes",
   tour: "tour",
+  sound: "sound",
 };
 
 // Bindings grouped for display, in the order scopes are declared above.

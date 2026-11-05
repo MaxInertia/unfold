@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import * as sonify from "./sonify";
 import type { CallID } from "./types";
 import { LEVELS, type ZoomLevel } from "./zoom";
 
@@ -142,6 +143,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
   const setSymbol = useCallback(
     (s: string | null) => {
       commit({ symbol: s, zoom: "frame", service: null }, "push");
+      if (s) sonify.enteredRoot();
     },
     [commit],
   );
@@ -174,6 +176,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
       // Re-rooting is a lateral move, not a zoom: it replaces the view, so it
       // earns a history entry the same way opening a symbol does.
       commit({ symbol: s, tree, zoom: "frame", service: null }, "push");
+      if (s) sonify.enteredRoot();
     },
     [commit],
   );
@@ -220,6 +223,9 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
           [callId]: { folds: [], expansions: {}, choice },
         },
       }));
+      // The sound cues sit here, on the store, because every way of
+      // unfolding — a call site, the tree, "+1 level" — comes through it.
+      sonify.unfolded(path.length + 1);
     },
     [updatePath],
   );
@@ -250,6 +256,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
         delete next[callId];
         return dropDeadElision({ ...s, expansions: next });
       });
+      sonify.folded(path.length + 1);
     },
     [updatePath],
   );
@@ -262,6 +269,7 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
         // The elision goes, because it only ever described a subtree.
         return { folds: s.folds, expansions: {} };
       });
+      sonify.folded(path.length + 1);
     },
     [updatePath],
   );
@@ -276,6 +284,9 @@ export function ViewStoreProvider({ children }: { children: ReactNode }) {
         }
         return { ...s, expansions };
       });
+      // One cue for the batch: the depth is the same for all of them, and a
+      // dozen tones on one keypress would be a chord, not a cue.
+      sonify.unfolded(path.length + 1);
     },
     [updatePath],
   );

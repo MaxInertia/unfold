@@ -25,6 +25,7 @@ import {
 } from "./ZoomSidebar";
 import { repoOf, zoomIn, zoomOut } from "./zoom";
 import { inTextField, matches } from "./keybindings";
+import { scanView, toggleSound } from "./sonify";
 import { fetchServiceView, fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult, ServiceView as ServiceViewT } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
@@ -318,6 +319,16 @@ function AppShell() {
         if (matches("tour.prev", e)) {
           e.preventDefault();
           prevStop();
+          return;
+        }
+        if (matches("sound.scan", e)) {
+          e.preventDefault();
+          scanView();
+          return;
+        }
+        if (matches("sound.mute", e)) {
+          e.preventDefault();
+          toggleSound();
           return;
         }
       }
