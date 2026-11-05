@@ -1895,6 +1895,31 @@ body.resizing {
   border-bottom: 1px dashed var(--call-border-disabled);
 }
 
+/* A cue in a description: where the narration highlight goes. */
+.note-cue {
+  display: inline-block;
+  padding: 0 0.2em;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  line-height: 1;
+  cursor: default;
+  opacity: 0.8;
+}
+button.note-cue {
+  cursor: pointer;
+}
+button.note-cue:hover {
+  background: var(--call-bg);
+  opacity: 1;
+}
+.note-cue--invalid {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
 .note-ref-card {
   position: fixed;
   display: block;

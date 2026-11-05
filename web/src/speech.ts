@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { synthesize } from "./api";
+import { parseCue, type Cue } from "./cues";
 import type { TourStop } from "./types";
 
 // Reading a tour stop aloud. The voice is a pluggable provider so the
@@ -38,7 +39,12 @@ export interface SpeechState {
   fallback: string | null;
 }
 
-let state: SpeechState = { speaking: null, available: false, voice: "browser", fallback: null };
+let state: SpeechState = {
+  speaking: null,
+  available: false,
+  voice: "browser",
+  fallback: null,
+};
 const listeners = new Set<() => void>();
 
 function set(patch: Partial<SpeechState>) {
@@ -54,7 +60,11 @@ function subscribe(fn: () => void) {
 }
 
 export function useSpeech(): SpeechState {
-  return useSyncExternalStore(subscribe, () => state, () => state);
+  return useSyncExternalStore(
+    subscribe,
+    () => state,
+    () => state,
+  );
 }
 
 // ---- the browser voice ----
@@ -66,7 +76,9 @@ export function useSpeech(): SpeechState {
 const CHARS_PER_SECOND = 14;
 
 const browserVoice: Voice = {
-  available: () => typeof speechSynthesis !== "undefined" && typeof SpeechSynthesisUtterance !== "undefined",
+  available: () =>
+    typeof speechSynthesis !== "undefined" &&
+    typeof SpeechSynthesisUtterance !== "undefined",
   speak(text, opts) {
     return new Promise<boolean>((resolve) => {
       const u = new SpeechSynthesisUtterance(text);
@@ -77,7 +89,10 @@ const browserVoice: Voice = {
       const clock = opts.onProgress
         ? window.setInterval(() => {
             if (sawBoundary || done) return;
-            const est = ((performance.now() - started) / 1000) * CHARS_PER_SECOND * opts.rate;
+            const est =
+              ((performance.now() - started) / 1000) *
+              CHARS_PER_SECOND *
+              opts.rate;
             opts.onProgress!(Math.min(Math.floor(est), text.length));
           }, 100)
         : 0;
@@ -118,12 +133,17 @@ function serverVoice(provider: string, voiceId: string): Voice {
   const fetchUrl = (text: string) => {
     let p = urls.get(text);
     if (!p) {
-      p = synthesize(provider, voiceId, text).then((blob) => URL.createObjectURL(blob));
+      p = synthesize(provider, voiceId, text).then((blob) =>
+        URL.createObjectURL(blob),
+      );
       p.catch(() => urls.delete(text));
       urls.set(text, p);
       if (urls.size > 24) {
         const oldest = urls.keys().next().value!;
-        urls.get(oldest)?.then((u) => URL.revokeObjectURL(u), () => {});
+        urls.get(oldest)?.then(
+          (u) => URL.revokeObjectURL(u),
+          () => {},
+        );
         urls.delete(oldest);
       }
     }
@@ -154,7 +174,12 @@ function serverVoice(provider: string, voiceId: string): Voice {
         a.playbackRate = opts.rate;
         a.ontimeupdate = () => {
           if (opts.onProgress && a.duration > 0) {
-            opts.onProgress(Math.min(text.length, Math.floor((a.currentTime / a.duration) * text.length)));
+            opts.onProgress(
+              Math.min(
+                text.length,
+                Math.floor((a.currentTime / a.duration) * text.length),
+              ),
+            );
           }
         };
         a.onended = () => finish(true);
@@ -182,7 +207,10 @@ export function configureVoice(spec: string) {
   if (spec === state.voice) return;
   stopSpeaking();
   const sep = spec.indexOf(":");
-  voice = spec === "browser" || sep <= 0 ? browserVoice : serverVoice(spec.slice(0, sep), spec.slice(sep + 1));
+  voice =
+    spec === "browser" || sep <= 0
+      ? browserVoice
+      : serverVoice(spec.slice(0, sep), spec.slice(sep + 1));
   set({ voice: spec, available: voice.available(), fallback: null });
 }
 
@@ -199,7 +227,11 @@ let seq = 0;
 // that is already playing stops it instead — one button is play and stop.
 // Resolves true when the text was read to the end, false when it was
 // stopped, superseded, or couldn't start.
-export function speak(key: string, text: string, opts: Partial<SpeakOptions> = {}): Promise<boolean> {
+export function speak(
+  key: string,
+  text: string,
+  opts: Partial<SpeakOptions> = {},
+): Promise<boolean> {
   if (state.speaking?.key === key) {
     stopSpeaking();
     return Promise.resolve(false);
@@ -234,29 +266,58 @@ export interface SpokenRef {
   name: string; // as written: a symbol name, or "file:path"
 }
 
+// A cue the description placed, and where in the spoken text the
+// narration reaches it. Cues are silent: they only move the highlight.
+export interface SpokenCue {
+  char: number;
+  cue: Cue;
+}
+
 export interface SpokenStop {
   text: string;
   refs: SpokenRef[];
+  cues: SpokenCue[];
 }
 
 // The spoken form of a stop: where it is, then why. Descriptions are written
 // for the eye — "[[pkg.(*T).Method]]" is a link — so references are read as
 // the bare name, and the code-ish punctuation that would be spelled out
 // letter by letter is dropped.
-export function stopSpeech(stop: TourStop, index: number, total: number): SpokenStop {
-  const where = stop.symbol ? spokenName(stop.symbol) : stop.file ? spokenPath(stop.file, stop.line) : "";
+export function stopSpeech(
+  stop: TourStop,
+  index: number,
+  total: number,
+): SpokenStop {
+  const where = stop.symbol
+    ? spokenName(stop.symbol)
+    : stop.file
+      ? spokenPath(stop.file, stop.line)
+      : "";
   const head = `Stop ${index + 1} of ${total}${where ? `: ${where}` : ""}.`;
-  if (!stop.description) return { text: head, refs: [] };
+  if (!stop.description) return { text: head, refs: [], cues: [] };
   const desc = spokenDescriptionParts(stop.description);
-  if (!desc.text) return { text: head, refs: [] };
+  if (!desc.text)
+    return {
+      text: head,
+      refs: [],
+      cues: desc.cues.map((c) => ({ ...c, char: head.length })),
+    };
   const offset = head.length + 1;
   return {
     text: `${head} ${desc.text}`,
     refs: desc.refs.map((r) => ({ ...r, char: r.char + offset })),
+    cues: desc.cues.map((c) => ({
+      ...c,
+      char: Math.min(c.char + offset, head.length + 1 + desc.text.length),
+    })),
   };
 }
 
-export function stopSpeechText(stop: TourStop, index: number, total: number): string {
+export function stopSpeechText(
+  stop: TourStop,
+  index: number,
+  total: number,
+): string {
   return stopSpeech(stop, index, total).text;
 }
 
@@ -284,17 +345,23 @@ export function spokenDescription(text: string): string {
   return spokenDescriptionParts(text).text;
 }
 
-// The description as speech, remembering where each [[ref]] landed. Built
-// piece by piece rather than by regex replacement so the positions are
-// exact after whitespace is collapsed.
+// The description as speech, remembering where each [[ref]] landed and
+// where each cue sits. Built piece by piece rather than by regex
+// replacement so the positions are exact after whitespace is collapsed. A
+// cue says nothing; the words after it close up over it, so "here
+// [[line:3]]." reads "here." with the cue at the end of "here".
 function spokenDescriptionParts(text: string): SpokenStop {
   const refs: SpokenRef[] = [];
+  const cues: SpokenCue[] = [];
   let out = "";
   const push = (s: string) => {
     // Collapse runs of whitespace across piece boundaries as one.
-    const cleaned = s.replace(/`([^`]*)`/g, "$1").replace(/\s+/g, " ");
-    if (cleaned.startsWith(" ") && (out === "" || out.endsWith(" "))) out += cleaned.slice(1);
-    else out += cleaned;
+    let cleaned = s.replace(/`([^`]*)`/g, "$1").replace(/\s+/g, " ");
+    if (cleaned.startsWith(" ") && (out === "" || out.endsWith(" ")))
+      cleaned = cleaned.slice(1);
+    // Punctuation after a cue closes up: "here [[line:3]]." → "here."
+    if (/^[.,;:!?)]/.test(cleaned) && out.endsWith(" ")) out = out.trimEnd();
+    out += cleaned;
   };
   const parts = text.split(/(\[\[[^\]]+\]\])/g);
   for (const p of parts) {
@@ -304,9 +371,22 @@ function spokenDescriptionParts(text: string): SpokenStop {
       continue;
     }
     const ref = m[1].trim();
-    const spoken = ref.startsWith("file:") ? spokenPath(ref.slice(5).trim()) : spokenName(ref);
+    const cue = parseCue(ref);
+    if (cue === "invalid") continue;
+    if (cue) {
+      cues.push({ char: out.trimEnd().length, cue });
+      continue;
+    }
+    const spoken = ref.startsWith("file:")
+      ? spokenPath(ref.slice(5).trim())
+      : spokenName(ref);
     refs.push({ char: out.length, name: ref });
     out += spoken;
   }
-  return { text: out.trim(), refs };
+  const trimmed = out.trim();
+  return {
+    text: trimmed,
+    refs,
+    cues: cues.map((c) => ({ ...c, char: Math.min(c.char, trimmed.length) })),
+  };
 }

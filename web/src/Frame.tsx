@@ -11,7 +11,15 @@ import type { Root as HastRoot } from "hast";
 import { fetchBodyByCall, fetchTypeInfo, openInEditor } from "./api";
 import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
-import type { CallID, CallSite, Frame as FrameT, Note, NoteAnchor, TargetID, TypeInfo } from "./types";
+import type {
+  CallID,
+  CallSite,
+  Frame as FrameT,
+  Note,
+  NoteAnchor,
+  TargetID,
+  TypeInfo,
+} from "./types";
 import {
   expandedReceivers,
   isFanoutOpen,
@@ -53,29 +61,48 @@ interface FrameProps {
   onZoomOut?: () => void;
 }
 
-export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: FrameProps) {
+export function Frame({
+  frame,
+  path,
+  onClose,
+  ancestors = [],
+  onZoomOut,
+}: FrameProps) {
   const store = useViewStore();
   const slice = useFrameSlice(path);
   const bookmarks = useBookmarks();
   const [hast, setHast] = useState<HastRoot | null>(null);
   // Loaded child frames are component-local; the URL only persists the
   // intent (which calls are expanded with what choice).
-  const [loadedChildren, setLoadedChildren] = useState<Map<CallID, FrameT>>(new Map());
+  const [loadedChildren, setLoadedChildren] = useState<Map<CallID, FrameT>>(
+    new Map(),
+  );
   const [loading, setLoading] = useState<Set<CallID>>(new Set());
   const [errors, setErrors] = useState<Map<CallID, string>>(new Map());
   // Fan-out receiver frames, keyed by `${callId}#${receiverIndex}` (a fan-out
   // call can have many receivers open at once, unlike a normal expansion which
   // has a single child). Errors share the same composite key.
-  const [fanoutChildren, setFanoutChildren] = useState<Map<string, FrameT>>(new Map());
-  const [fanoutErrors, setFanoutErrors] = useState<Map<string, string>>(new Map());
+  const [fanoutChildren, setFanoutChildren] = useState<Map<string, FrameT>>(
+    new Map(),
+  );
+  const [fanoutErrors, setFanoutErrors] = useState<Map<string, string>>(
+    new Map(),
+  );
   const fanoutLoading = useRef<Set<string>>(new Set());
-  const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
+  const [selection, setSelection] = useState<{
+    anchor: number;
+    head: number;
+  } | null>(null);
   const [callersOpen, setCallersOpen] = useState(false);
   const settings = useSettings();
   // A rebuilt index is a reason to refetch a body, not to throw the view away.
   const revision = useReloadRevision();
   const depth = path.length;
-  const [typeCard, setTypeCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
+  const [typeCard, setTypeCard] = useState<{
+    x: number;
+    y: number;
+    info: TypeInfo;
+  } | null>(null);
   const [recognizing, setRecognizing] = useState(false);
   // gen stamps hover lookups so a reply that arrives after the pointer has
   // moved on can be discarded instead of overwriting what's on screen.
@@ -93,7 +120,12 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const tourCardsByLine = useMemo(() => {
     const m = new Map<number, TourStopCardInfo[]>();
     for (const c of tourCards) {
-      if (c.file !== frame.file || c.line < frame.startLine || c.line > frame.endLine) continue;
+      if (
+        c.file !== frame.file ||
+        c.line < frame.startLine ||
+        c.line > frame.endLine
+      )
+        continue;
       const idx = c.line - frame.startLine;
       m.set(idx, [...(m.get(idx) ?? []), c]);
     }
@@ -104,7 +136,8 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   // and only once its rows exist — highlighting is asynchronous, so the row
   // may not be there on the first look.
   useEffect(() => {
-    if (!tourFocus || path.length !== 0 || tourFocus.file !== frame.file) return;
+    if (!tourFocus || path.length !== 0 || tourFocus.file !== frame.file)
+      return;
     const idx = tourFocus.line - frame.startLine;
     if (idx < 0 || idx > frame.endLine - frame.startLine) return;
     let tries = 0;
@@ -112,14 +145,17 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     const attempt = () => {
       const rootEl = document.querySelector<HTMLElement>('[data-frame-key=""]');
       const row = rootEl
-        ? [...rootEl.querySelectorAll<HTMLElement>(`[data-line-idx="${idx}"]`)].find(
-            (r) => r.closest("[data-frame-key]") === rootEl,
-          )
+        ? [
+            ...rootEl.querySelectorAll<HTMLElement>(`[data-line-idx="${idx}"]`),
+          ].find((r) => r.closest("[data-frame-key]") === rootEl)
         : undefined;
       if (row) {
         row.scrollIntoView({ block: "center" });
         row.classList.add("line-row--tour-focus");
-        timer = window.setTimeout(() => row.classList.remove("line-row--tour-focus"), 1800);
+        timer = window.setTimeout(
+          () => row.classList.remove("line-row--tour-focus"),
+          1800,
+        );
         return;
       }
       if (++tries < 30) timer = window.setTimeout(attempt, 100);
@@ -128,39 +164,51 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     return () => window.clearTimeout(timer);
   }, [tourFocus, frame.file, frame.startLine, frame.endLine, path.length]);
 
-  // The narration cursor: the line the karaoke highlight sits on. Same
-  // root-only, rows-may-not-exist-yet rules as the focus above, but the
-  // mark stays until the cursor moves, and the view only scrolls when the
-  // line has left the middle of the viewport — a highlight that drags the
-  // scroll position every word is unreadable.
+  // The narration cursor: the line (or range) the karaoke highlight sits
+  // on. Same root-only, rows-may-not-exist-yet rules as the focus above,
+  // but the mark stays until the cursor moves, and the view only scrolls
+  // when the line has left the middle of the viewport — a highlight that
+  // drags the scroll position every word is unreadable.
   useEffect(() => {
-    if (!tourCursor || path.length !== 0 || tourCursor.file !== frame.file) return;
-    const idx = tourCursor.line - frame.startLine;
-    if (idx < 0 || idx > frame.endLine - frame.startLine) return;
+    if (!tourCursor || path.length !== 0 || tourCursor.file !== frame.file)
+      return;
+    const first = tourCursor.line - frame.startLine;
+    const last = Math.min(
+      (tourCursor.end ?? tourCursor.line) - frame.startLine,
+      frame.endLine - frame.startLine,
+    );
+    if (first < 0 || first > frame.endLine - frame.startLine) return;
     let timer = 0;
     let tries = 0;
-    let marked: HTMLElement | null = null;
+    let marked: HTMLElement[] = [];
     const attempt = () => {
       const rootEl = document.querySelector<HTMLElement>('[data-frame-key=""]');
-      const row = rootEl
-        ? [...rootEl.querySelectorAll<HTMLElement>(`[data-line-idx="${idx}"]`)].find(
-            (r) => r.closest("[data-frame-key]") === rootEl,
-          )
-        : undefined;
-      if (row) {
-        row.classList.add("line-row--karaoke");
-        marked = row;
-        const rect = row.getBoundingClientRect();
-        const h = window.innerHeight;
-        if (rect.top < h * 0.2 || rect.bottom > h * 0.8) row.scrollIntoView({ block: "center" });
+      if (!rootEl) {
+        if (++tries < 30) timer = window.setTimeout(attempt, 100);
         return;
       }
-      if (++tries < 30) timer = window.setTimeout(attempt, 100);
+      const rows: HTMLElement[] = [];
+      for (let idx = first; idx <= last; idx++) {
+        const row = [
+          ...rootEl.querySelectorAll<HTMLElement>(`[data-line-idx="${idx}"]`),
+        ].find((r) => r.closest("[data-frame-key]") === rootEl);
+        if (row) rows.push(row);
+      }
+      if (rows.length === 0) {
+        if (++tries < 30) timer = window.setTimeout(attempt, 100);
+        return;
+      }
+      for (const row of rows) row.classList.add("line-row--karaoke");
+      marked = rows;
+      const rect = rows[0].getBoundingClientRect();
+      const h = window.innerHeight;
+      if (rect.top < h * 0.2 || rect.bottom > h * 0.8)
+        rows[0].scrollIntoView({ block: "center" });
     };
     attempt();
     return () => {
       window.clearTimeout(timer);
-      marked?.classList.remove("line-row--karaoke");
+      for (const row of marked) row.classList.remove("line-row--karaoke");
     };
   }, [tourCursor, frame.file, frame.startLine, frame.endLine, path.length]);
 
@@ -198,10 +246,14 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   }, [allNotes, frame.file, frame.startLine, frame.endLine]);
 
   const fileStartNotes = isFileFrame
-    ? allNotes.filter((n) => n.anchor.file === frame.file && n.anchor.kind === "file-start")
+    ? allNotes.filter(
+        (n) => n.anchor.file === frame.file && n.anchor.kind === "file-start",
+      )
     : [];
   const fileEndNotes = isFileFrame
-    ? allNotes.filter((n) => n.anchor.file === frame.file && n.anchor.kind === "file-end")
+    ? allNotes.filter(
+        (n) => n.anchor.file === frame.file && n.anchor.kind === "file-end",
+      )
     : [];
 
   // A note is drifted when its anchored line's text no longer matches the
@@ -292,7 +344,10 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
 
   function scheduleHide() {
     cancelHover();
-    hoverRef.current.hideTimer = window.setTimeout(() => setTypeCard(null), 200);
+    hoverRef.current.hideTimer = window.setTimeout(
+      () => setTypeCard(null),
+      200,
+    );
   }
 
   // Dismissing the card also drops the authoring form. Without this the flag
@@ -356,7 +411,10 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     const at = info.definedAt;
     if (!at) return;
     const i = at.lastIndexOf(":");
-    if (i > 0) openInEditor(at.slice(0, i), Number(at.slice(i + 1)) || 1).catch(() => {});
+    if (i > 0)
+      openInEditor(at.slice(0, i), Number(at.slice(i + 1)) || 1).catch(
+        () => {},
+      );
   }
 
   // Fetch any expanded children we don't have loaded yet, and prune any
@@ -386,14 +444,18 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       const want = slice.expansions[cid];
       if (!want || !own.has(cid)) continue;
       const loaded = loadedChildren.get(cid) as
-        | (FrameT & { __choice?: number; __rev?: number })
-        | undefined;
+        (FrameT & { __choice?: number; __rev?: number }) | undefined;
       // Refetch when it isn't loaded, when the chosen implementation changed,
       // or when the index has been rebuilt under it. The old body stays on
       // screen until the new one arrives: a reindex used to remount the whole
       // tree, so every open frame vanished and came back seconds later, which
       // is a redraw the reader has to recover from rather than a refresh.
-      if (loaded && loaded.__choice === want.choice && loaded.__rev === revision) continue;
+      if (
+        loaded &&
+        loaded.__choice === want.choice &&
+        loaded.__rev === revision
+      )
+        continue;
       if (loading.has(cid)) continue;
       setLoading((s) => new Set(s).add(cid));
       fetchBodyByCall(cid, want.choice)
@@ -401,10 +463,13 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
           if (!alive) return;
           // Tag with the choice and the index revision it came from, so both
           // a switched implementation and a rebuilt index are detectable.
-          Object.assign(child as FrameT & { __choice?: number; __rev?: number }, {
-            __choice: want.choice,
-            __rev: revision,
-          });
+          Object.assign(
+            child as FrameT & { __choice?: number; __rev?: number },
+            {
+              __choice: want.choice,
+              __rev: revision,
+            },
+          );
           setLoading((s) => {
             const n = new Set(s);
             n.delete(cid);
@@ -465,7 +530,8 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
 
     let alive = true;
     for (const w of wanted) {
-      if (fanoutChildren.has(w.key) || fanoutLoading.current.has(w.key)) continue;
+      if (fanoutChildren.has(w.key) || fanoutLoading.current.has(w.key))
+        continue;
       fanoutLoading.current.add(w.key);
       fetchBodyByCall(w.callId, w.index)
         .then((child) => {
@@ -495,21 +561,38 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   useEffect(() => {
     let alive = true;
     setHast(null);
-    highlightToHast({ source: frame.source, language: frame.language, calls: frame.calls })
+    highlightToHast({
+      source: frame.source,
+      language: frame.language,
+      calls: frame.calls,
+    })
       .then((h) => alive && setHast(h))
       .catch((e) => {
         if (!alive) return;
         const fallback: HastRoot = {
           type: "root",
           children: [
-            { type: "element", tagName: "pre", properties: { className: ["shiki", "shiki-fallback"] }, children: [
-              { type: "element", tagName: "code", properties: {}, children: [
-                { type: "text", value: frame.source },
-              ]},
-            ]},
-            { type: "element", tagName: "div", properties: { className: ["frame-error"] }, children: [
-              { type: "text", value: `highlight failed: ${String(e)}` },
-            ]},
+            {
+              type: "element",
+              tagName: "pre",
+              properties: { className: ["shiki", "shiki-fallback"] },
+              children: [
+                {
+                  type: "element",
+                  tagName: "code",
+                  properties: {},
+                  children: [{ type: "text", value: frame.source }],
+                },
+              ],
+            },
+            {
+              type: "element",
+              tagName: "div",
+              properties: { className: ["frame-error"] },
+              children: [
+                { type: "text", value: `highlight failed: ${String(e)}` },
+              ],
+            },
           ],
         };
         setHast(fallback);
@@ -546,7 +629,10 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     if (!el || !typeCard) return;
     el.style.top = `${typeCard.y + 16}px`;
     const h = el.getBoundingClientRect().height;
-    const top = Math.max(8, Math.min(typeCard.y + 16, window.innerHeight - h - 8));
+    const top = Math.max(
+      8,
+      Math.min(typeCard.y + 16, window.innerHeight - h - 8),
+    );
     el.style.top = `${top}px`;
   }, [typeCard, recognizing]);
 
@@ -563,7 +649,10 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
 
   // The recursion chain for calls inside this frame: every frame above
   // plus this one. A call resolving back into it is marked ↻.
-  const chainIds = useMemo(() => new Set([...ancestors, frame.id]), [ancestors, frame.id]);
+  const chainIds = useMemo(
+    () => new Set([...ancestors, frame.id]),
+    [ancestors, frame.id],
+  );
 
   function isRecursive(call: CallSite): boolean {
     if (call.kind === "direct" || call.kind === "ref") {
@@ -578,7 +667,8 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   function isExpandableCall(call: CallSite): boolean {
     // A reference names either one function or, when it goes through an
     // interface, any of its implementations — the same two shapes a call has.
-    if (call.kind === "ref") return !!call.targetId || (call.candidates?.length ?? 0) > 0;
+    if (call.kind === "ref")
+      return !!call.targetId || (call.candidates?.length ?? 0) > 0;
     if (call.kind === "direct") return !!call.targetId;
     if (call.kind === "interface") return (call.candidates?.length ?? 0) > 0;
     return false; // indirect never; fanout has its own receiver semantics
@@ -607,7 +697,8 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   );
 
   const childCount =
-    Object.keys(slice.expansions).length + Object.keys(slice.fanouts ?? {}).length;
+    Object.keys(slice.expansions).length +
+    Object.keys(slice.fanouts ?? {}).length;
 
   function toggleCall(call: CallSite) {
     if (call.kind === "fanout") {
@@ -620,7 +711,8 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       return;
     }
     if (call.kind === "indirect") return;
-    if (call.kind === "interface" && (call.candidates?.length ?? 0) === 0) return;
+    if (call.kind === "interface" && (call.candidates?.length ?? 0) === 0)
+      return;
     if (!isExpandableCall(call)) return;
 
     if (slice.expansions[call.id]) {
@@ -768,12 +860,17 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
           {receivers.length > 1 && (
             <button
               className="fanout-expand-all"
-              onClick={() => (allOpen ? collapseAllReceivers(call) : expandAllReceivers(call))}
+              onClick={() =>
+                allOpen ? collapseAllReceivers(call) : expandAllReceivers(call)
+              }
             >
               {allOpen ? "collapse all" : "expand all"}
             </button>
           )}
-          <button className="fanout-close" onClick={() => store.closeFanout(path, call.id)}>
+          <button
+            className="fanout-close"
+            onClick={() => store.closeFanout(path, call.id)}
+          >
             ✕
           </button>
         </div>
@@ -783,7 +880,10 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             const key = `${call.id}#${i}`;
             const child = fanoutChildren.get(key);
             const err = fanoutErrors.get(key);
-            const childPath: FramePath = [...path, { callId: call.id, choice: i }];
+            const childPath: FramePath = [
+              ...path,
+              { callId: call.id, choice: i },
+            ];
             return (
               <li key={i} className="fanout-receiver">
                 <button
@@ -797,11 +897,16 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
                   <span className="fanout-twisty">{isOpen ? "▾" : "▸"}</span>
                   <span className="fanout-label">{r.label}</span>
                   {r.confidence === "tentative" && (
-                    <span className="fanout-badge" title="resolved heuristically">
+                    <span
+                      className="fanout-badge"
+                      title="resolved heuristically"
+                    >
                       tentative
                     </span>
                   )}
-                  {r.provenance && <span className="fanout-prov">{r.provenance}</span>}
+                  {r.provenance && (
+                    <span className="fanout-prov">{r.provenance}</span>
+                  )}
                 </button>
                 {isOpen && child && (
                   <div className="fanout-body">
@@ -813,7 +918,9 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
                     />
                   </div>
                 )}
-                {isOpen && err && <div className="call-error">expand failed: {err}</div>}
+                {isOpen && err && (
+                  <div className="call-error">expand failed: {err}</div>
+                )}
               </li>
             );
           })}
@@ -872,7 +979,10 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       const want = slice.expansions[call.id];
       const child = loadedChildren.get(call.id);
       if (want && child) {
-        const childPath: FramePath = [...path, { callId: call.id, choice: want.choice }];
+        const childPath: FramePath = [
+          ...path,
+          { callId: call.id, choice: want.choice },
+        ];
         extras.push(
           <InlineChild
             key={`x:${call.id}:${want.choice}`}
@@ -899,17 +1009,26 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   }
 
   function renderLineExtras(lineIdx: number): ReactNode {
-    const extras: ReactNode[] = renderChildren(lineCallsCache.get(lineIdx) ?? []);
+    const extras: ReactNode[] = renderChildren(
+      lineCallsCache.get(lineIdx) ?? [],
+    );
     // The selection action bar renders right at the selection (after its
     // last line), not at the frame top — a selection made deep in a long
     // frame would otherwise have its actions scrolled out of view.
     if (selection && lineIdx === Math.max(selection.anchor, selection.head)) {
       extras.push(
-        <div key="selectbar" className="frame-selectbar frame-selectbar--inline">
+        <div
+          key="selectbar"
+          className="frame-selectbar frame-selectbar--inline"
+        >
           <span className="frame-selectbar-info">
             {selectionCount} {selectionCount === 1 ? "line" : "lines"} selected
           </span>
-          <button type="button" onClick={foldSelection} className="frame-selectbar-fold">
+          <button
+            type="button"
+            onClick={foldSelection}
+            className="frame-selectbar-fold"
+          >
             fold
           </button>
           <button
@@ -927,12 +1046,16 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
           >
             cancel
           </button>
-          <span className="frame-selectbar-hint">shift-click to extend · esc to cancel</span>
+          <span className="frame-selectbar-hint">
+            shift-click to extend · esc to cancel
+          </span>
         </div>,
       );
     }
     for (const n of notesByLine.get(lineIdx) ?? []) {
-      extras.push(<NoteCard key={`n:${n.id}`} note={n} drifted={isDrifted(n)} />);
+      extras.push(
+        <NoteCard key={`n:${n.id}`} note={n} drifted={isDrifted(n)} />,
+      );
     }
     for (const c of tourCardsByLine.get(lineIdx) ?? []) {
       extras.push(<TourStopCard key={`t:${c.index}`} card={c} />);
@@ -943,10 +1066,16 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       (composing.endLine ?? 0) - frame.startLine === lineIdx
     ) {
       extras.push(
-        <NoteComposer key="compose" anchor={composing} onDone={() => setComposing(null)} />,
+        <NoteComposer
+          key="compose"
+          anchor={composing}
+          onDone={() => setComposing(null)}
+        />,
       );
     }
-    return extras.length ? <Fragment key={`extras:${lineIdx}`}>{extras}</Fragment> : null;
+    return extras.length ? (
+      <Fragment key={`extras:${lineIdx}`}>{extras}</Fragment>
+    ) : null;
   }
 
   const lineCallsCache = useMemo(() => buildLineCalls(frame), [frame]);
@@ -967,7 +1096,10 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     );
   }
 
-  function renderFoldPlaceholder(startLine: number, endLine: number): ReactNode {
+  function renderFoldPlaceholder(
+    startLine: number,
+    endLine: number,
+  ): ReactNode {
     const count = endLine - startLine + 1;
     const fileStart = frame.startLine + startLine;
     const fileEnd = frame.startLine + endLine;
@@ -978,7 +1110,8 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
         onClick={() => unfoldRange(startLine)}
         title={`unfold lines ${fileStart}–${fileEnd}`}
       >
-        ··· {count} {count === 1 ? "line" : "lines"} hidden ({fileStart}–{fileEnd})
+        ··· {count} {count === 1 ? "line" : "lines"} hidden ({fileStart}–
+        {fileEnd})
       </button>
     );
   }
@@ -1049,12 +1182,18 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             type="button"
             className="frame-loc frame-loc--link"
             title="open in editor"
-            onClick={() => openInEditor(frame.file, frame.startLine).catch(() => {})}
+            onClick={() =>
+              openInEditor(frame.file, frame.startLine).catch(() => {})
+            }
           >
             {shortPath(frame.file)}:{frame.startLine}
           </button>
           {onClose && (
-            <button className="frame-close" onClick={onClose} aria-label="collapse">
+            <button
+              className="frame-close"
+              onClick={onClose}
+              aria-label="collapse"
+            >
               ×
             </button>
           )}
@@ -1087,7 +1226,11 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               line: frame.startLine,
             })
           }
-          title={bookmarks.isBookmarked(frame.id) ? "remove bookmark" : "bookmark this function"}
+          title={
+            bookmarks.isBookmarked(frame.id)
+              ? "remove bookmark"
+              : "bookmark this function"
+          }
           aria-label="toggle bookmark"
         >
           {bookmarks.isBookmarked(frame.id) ? "★" : "☆"}
@@ -1135,7 +1278,9 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             <button
               type="button"
               className="frame-tool"
-              onClick={() => setComposing({ file: frame.file, kind: "file-start" })}
+              onClick={() =>
+                setComposing({ file: frame.file, kind: "file-start" })
+              }
               title="add a note at the top of this file"
             >
               note @ top
@@ -1143,7 +1288,9 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             <button
               type="button"
               className="frame-tool"
-              onClick={() => setComposing({ file: frame.file, kind: "file-end" })}
+              onClick={() =>
+                setComposing({ file: frame.file, kind: "file-end" })
+              }
               title="add a note at the end of this file"
             >
               note @ end
@@ -1186,29 +1333,43 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
           type="button"
           className="frame-loc frame-loc--link"
           title="open in editor"
-          onClick={() => openInEditor(frame.file, frame.startLine).catch(() => {})}
+          onClick={() =>
+            openInEditor(frame.file, frame.startLine).catch(() => {})
+          }
         >
           {frameLoc(frame)}:{frame.startLine}
         </button>
         {onClose && (
-          <button className="frame-close" onClick={onClose} aria-label="collapse">
+          <button
+            className="frame-close"
+            onClick={onClose}
+            aria-label="collapse"
+          >
             ×
           </button>
         )}
       </header>
       {callersOpen && (
-        <CallersPanel frame={frame} path={path} onClose={() => setCallersOpen(false)} />
+        <CallersPanel
+          frame={frame}
+          path={path}
+          onClose={() => setCallersOpen(false)}
+        />
       )}
-      {isFileFrame && (fileStartNotes.length > 0 || composing?.kind === "file-start") && (
-        <div className="frame-notes">
-          {fileStartNotes.map((n) => (
-            <NoteCard key={n.id} note={n} />
-          ))}
-          {composing?.kind === "file-start" && (
-            <NoteComposer anchor={composing} onDone={() => setComposing(null)} />
-          )}
-        </div>
-      )}
+      {isFileFrame &&
+        (fileStartNotes.length > 0 || composing?.kind === "file-start") && (
+          <div className="frame-notes">
+            {fileStartNotes.map((n) => (
+              <NoteCard key={n.id} note={n} />
+            ))}
+            {composing?.kind === "file-start" && (
+              <NoteComposer
+                anchor={composing}
+                onDone={() => setComposing(null)}
+              />
+            )}
+          </div>
+        )}
       <div className="frame-body">
         {hast ? (
           <div
@@ -1232,16 +1393,20 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
           <div className="frame-loading">loading…</div>
         )}
       </div>
-      {isFileFrame && (fileEndNotes.length > 0 || composing?.kind === "file-end") && (
-        <div className="frame-notes">
-          {fileEndNotes.map((n) => (
-            <NoteCard key={n.id} note={n} />
-          ))}
-          {composing?.kind === "file-end" && (
-            <NoteComposer anchor={composing} onDone={() => setComposing(null)} />
-          )}
-        </div>
-      )}
+      {isFileFrame &&
+        (fileEndNotes.length > 0 || composing?.kind === "file-end") && (
+          <div className="frame-notes">
+            {fileEndNotes.map((n) => (
+              <NoteCard key={n.id} note={n} />
+            ))}
+            {composing?.kind === "file-end" && (
+              <NoteComposer
+                anchor={composing}
+                onDone={() => setComposing(null)}
+              />
+            )}
+          </div>
+        )}
       {typeCard && (
         <div
           ref={typeCardRef}
@@ -1263,17 +1428,23 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             <span className="type-card-kind">{typeCard.info.kind}</span>
             <span className="type-card-name">{typeCard.info.name}</span>
           </div>
-          {typeCard.info.type && <div className="type-card-type">{typeCard.info.type}</div>}
+          {typeCard.info.type && (
+            <div className="type-card-type">{typeCard.info.type}</div>
+          )}
           {typeCard.info.definition && (
             <pre className="type-card-def">{typeCard.info.definition}</pre>
           )}
-          {typeCard.info.doc && <div className="type-card-doc">{typeCard.info.doc}</div>}
+          {typeCard.info.doc && (
+            <div className="type-card-doc">{typeCard.info.doc}</div>
+          )}
           {typeCard.info.definedAt && (
             <button
               type="button"
               className="type-card-loc"
               onClick={() => openDefinition(typeCard.info)}
-              title={typeCard.info.targetId ? "open as root frame" : "open in editor"}
+              title={
+                typeCard.info.targetId ? "open as root frame" : "open in editor"
+              }
             >
               {shortDefined(typeCard.info.definedAt)}
             </button>
@@ -1320,7 +1491,9 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               onClick={() => setRecognizing(true)}
               title="teach unfold that this call shape is a platform edge"
             >
-              {typeCard.info.rules?.length ? "recognize as something else…" : "recognize as…"}
+              {typeCard.info.rules?.length
+                ? "recognize as something else…"
+                : "recognize as…"}
             </button>
           )}
         </div>
@@ -1358,7 +1531,10 @@ function InlineChild({
       {showSwitcher && (
         <div className="impl-switcher" onClick={(e) => e.stopPropagation()}>
           <span className="impl-switcher-label">impl:</span>
-          <select value={choice} onChange={(e) => onChoose(Number(e.target.value))}>
+          <select
+            value={choice}
+            onChange={(e) => onChoose(Number(e.target.value))}
+          >
             {candidates.map((c, i) => (
               <option key={c.targetId} value={i}>
                 {c.label}
@@ -1370,12 +1546,20 @@ function InlineChild({
           </span>
         </div>
       )}
-      <Frame frame={childFrame} path={childPath} onClose={onClose} ancestors={ancestors} />
+      <Frame
+        frame={childFrame}
+        path={childPath}
+        onClose={onClose}
+        ancestors={ancestors}
+      />
     </div>
   );
 }
 
-function mergeRange(current: [number, number][], add: [number, number]): [number, number][] {
+function mergeRange(
+  current: [number, number][],
+  add: [number, number],
+): [number, number][] {
   const all = [...current, add].sort((a, b) => a[0] - b[0]);
   const out: [number, number][] = [];
   for (const r of all) {
@@ -1405,7 +1589,8 @@ function buildLineCalls(frame: FrameT): Map<number, CallSite[]> {
     list.push(c);
     map.set(idx, list);
   }
-  for (const list of map.values()) list.sort((a, b) => a.spanStart - b.spanStart);
+  for (const list of map.values())
+    list.sort((a, b) => a.spanStart - b.spanStart);
   return map;
 }
 
@@ -1421,10 +1606,16 @@ function frameTitle(frame: FrameT): string {
 }
 
 // Cross-browser caret position from screen coordinates (for hover→offset).
-function caretFromPoint(x: number, y: number): { node: Node; offset: number } | null {
+function caretFromPoint(
+  x: number,
+  y: number,
+): { node: Node; offset: number } | null {
   const doc = document as Document & {
     caretRangeFromPoint?: (x: number, y: number) => Range | null;
-    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretPositionFromPoint?: (
+      x: number,
+      y: number,
+    ) => { offsetNode: Node; offset: number } | null;
   };
   if (doc.caretRangeFromPoint) {
     const r = doc.caretRangeFromPoint(x, y);

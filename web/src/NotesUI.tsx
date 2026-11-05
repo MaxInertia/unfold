@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { cueLabel, parseCue, type Cue } from "./cues";
 import { matches } from "./keybindings";
 import { createPortal } from "react-dom";
 import { fetchFiles, fetchTypeInfo, search } from "./api";
@@ -15,18 +16,29 @@ import { useViewStore } from "./viewState";
 // notes re-resolve on reload, which is the same staleness contract the
 // rest of the UI has.
 
-const symbolCache = new Map<string, Promise<{ targetId: TargetID; label: string } | null>>();
+const symbolCache = new Map<
+  string,
+  Promise<{ targetId: TargetID; label: string } | null>
+>();
 let filesCache: Promise<string[]> | null = null;
 
-function resolveSymbol(name: string): Promise<{ targetId: TargetID; label: string } | null> {
+function resolveSymbol(
+  name: string,
+): Promise<{ targetId: TargetID; label: string } | null> {
   let p = symbolCache.get(name);
   if (!p) {
     p = search(name, 25)
       .then((results) => {
         if (results.length === 0) return null;
         const exact = results.find((r) => {
-          const base = r.label.includes(".") ? r.label.slice(r.label.lastIndexOf(".") + 1) : r.label;
-          return r.label === name || base === name || String(r.targetId).endsWith(name);
+          const base = r.label.includes(".")
+            ? r.label.slice(r.label.lastIndexOf(".") + 1)
+            : r.label;
+          return (
+            r.label === name ||
+            base === name ||
+            String(r.targetId).endsWith(name)
+          );
         });
         const hit = exact ?? results[0];
         return { targetId: hit.targetId, label: hit.label };
@@ -48,8 +60,16 @@ function resolveFile(path: string): Promise<string | null> {
 // ---- note text rendering ----
 
 // NoteText renders a note body, turning [[...]] tokens into live
-// references styled like the code view.
-export function NoteText({ text }: { text: string }) {
+// references styled like the code view. Cue tokens ([[line:…]], [[at:…]])
+// render as a small mark; with `onCue`, clicking one puts the narration
+// highlight there.
+export function NoteText({
+  text,
+  onCue,
+}: {
+  text: string;
+  onCue?: (cue: Cue) => void;
+}) {
   const parts = text.split(/(\[\[[^\]]+\]\])/g);
   return (
     <span className="note-text">
@@ -57,6 +77,36 @@ export function NoteText({ text }: { text: string }) {
         const m = p.match(/^\[\[([^\]]+)\]\]$/);
         if (!m) return <span key={i}>{p}</span>;
         const ref = m[1].trim();
+        const cue = parseCue(ref);
+        if (cue === "invalid") {
+          return (
+            <span
+              key={i}
+              className="note-cue note-cue--invalid"
+              title={`not a cue: [[${ref}]]`}
+            >
+              ⌖
+            </span>
+          );
+        }
+        if (cue) {
+          const label = cueLabel(cue);
+          return onCue ? (
+            <button
+              key={i}
+              type="button"
+              className="note-cue"
+              title={`${label} — click to highlight`}
+              onClick={() => onCue(cue)}
+            >
+              ⌖
+            </button>
+          ) : (
+            <span key={i} className="note-cue" title={label}>
+              ⌖
+            </span>
+          );
+        }
         return ref.startsWith("file:") ? (
           <FileRef key={i} path={ref.slice(5).trim()} />
         ) : (
@@ -72,8 +122,14 @@ export function NoteText({ text }: { text: string }) {
 // declaration mode), click opens it as the root frame.
 function SymbolRef({ name }: { name: string }) {
   const store = useViewStore();
-  const [resolved, setResolved] = useState<{ targetId: TargetID; label: string } | null | "pending">("pending");
-  const [card, setCard] = useState<{ x: number; y: number; info: TypeInfo } | null>(null);
+  const [resolved, setResolved] = useState<
+    { targetId: TargetID; label: string } | null | "pending"
+  >("pending");
+  const [card, setCard] = useState<{
+    x: number;
+    y: number;
+    info: TypeInfo;
+  } | null>(null);
   const hoverTimer = useRef(0);
 
   useEffect(() => {
@@ -86,10 +142,14 @@ function SymbolRef({ name }: { name: string }) {
     };
   }, [name]);
 
-  if (resolved === "pending") return <span className="note-ref note-ref--pending">{name}</span>;
+  if (resolved === "pending")
+    return <span className="note-ref note-ref--pending">{name}</span>;
   if (!resolved) {
     return (
-      <span className="note-ref note-ref--unresolved" title="no indexed symbol matches this name">
+      <span
+        className="note-ref note-ref--unresolved"
+        title="no indexed symbol matches this name"
+      >
         {name}
       </span>
     );
@@ -134,13 +194,19 @@ function SymbolRef({ name }: { name: string }) {
               <span className="type-card-kind">{card.info.kind}</span>
               <span className="type-card-name">{card.info.name}</span>
             </span>
-            {card.info.type && <span className="type-card-type">{card.info.type}</span>}
+            {card.info.type && (
+              <span className="type-card-type">{card.info.type}</span>
+            )}
             {card.info.definition && (
               <pre className="type-card-def">{card.info.definition}</pre>
             )}
-            {card.info.doc && <span className="type-card-doc">{card.info.doc}</span>}
+            {card.info.doc && (
+              <span className="type-card-doc">{card.info.doc}</span>
+            )}
             {card.info.definedAt && (
-              <span className="type-card-loc-text">{shortDefined(card.info.definedAt)}</span>
+              <span className="type-card-loc-text">
+                {shortDefined(card.info.definedAt)}
+              </span>
             )}
           </span>,
           document.body,
@@ -164,10 +230,14 @@ function FileRef({ path }: { path: string }) {
     };
   }, [path]);
 
-  if (abs === "pending") return <span className="note-ref note-ref--pending">{path}</span>;
+  if (abs === "pending")
+    return <span className="note-ref note-ref--pending">{path}</span>;
   if (!abs) {
     return (
-      <span className="note-ref note-ref--unresolved" title="no indexed file matches this path">
+      <span
+        className="note-ref note-ref--unresolved"
+        title="no indexed file matches this path"
+      >
         {path}
       </span>
     );
@@ -280,7 +350,12 @@ export function NoteComposer({
       />
       {error && <div className="note-error">save failed: {error}</div>}
       <div className="note-compose-bar">
-        <button type="button" className="note-save" onClick={save} disabled={busy}>
+        <button
+          type="button"
+          className="note-save"
+          onClick={save}
+          disabled={busy}
+        >
           save
         </button>
         <button type="button" className="note-cancel" onClick={onDone}>
@@ -300,7 +375,11 @@ export function NotesList() {
   const notes = useNotes();
   const store = useViewStore();
   if (notes.length === 0) {
-    return <p className="tree-placeholder">No notes yet — select a line and hit "note".</p>;
+    return (
+      <p className="tree-placeholder">
+        No notes yet — select a line and hit "note".
+      </p>
+    );
   }
   const sorted = [...notes].sort((a, b) =>
     a.anchor.file !== b.anchor.file

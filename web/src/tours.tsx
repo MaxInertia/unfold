@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { fetchBodyByCall, fetchFiles, fetchSymbol, fetchTours } from "./api";
-import { buildTimeline, lineAt, type Waypoint } from "./karaoke";
+import { resolveCue, type Cue } from "./cues";
+import {
+  buildTimeline,
+  lineAt,
+  type TimelineFrame,
+  type Waypoint,
+} from "./karaoke";
 import { currentSettings } from "./settings";
 import { prefetchSpeech, speak, stopSpeaking, stopSpeech } from "./speech";
 import { resolveStop, type ResolvedStop } from "./tourResolve";
@@ -37,7 +43,7 @@ export interface TourState {
   playing: boolean;
   // Where the narration is right now, as a line in a file, for the root
   // frame to highlight and keep in view. Null when nothing is narrating.
-  cursor: { file: string; line: number } | null;
+  cursor: { file: string; line: number; end?: number } | null;
 }
 
 let state: TourState = {
@@ -74,7 +80,11 @@ function subscribe(fn: () => void) {
 }
 
 export function useTours(): TourState {
-  return useSyncExternalStore(subscribe, () => state, () => state);
+  return useSyncExternalStore(
+    subscribe,
+    () => state,
+    () => state,
+  );
 }
 
 export function activeTour(s: TourState = state): Tour | null {
@@ -93,7 +103,10 @@ function positionKey(): string {
 function savePosition() {
   if (!state.dir) return;
   try {
-    localStorage.setItem(positionKey(), JSON.stringify({ active: state.active, index: state.index }));
+    localStorage.setItem(
+      positionKey(),
+      JSON.stringify({ active: state.active, index: state.index }),
+    );
   } catch {
     /* unavailable — position just doesn't survive the tab */
   }
@@ -128,7 +141,8 @@ export function loadTours(): Promise<void> {
         const saved = loadPosition();
         if (saved) ({ active, index } = saved);
       }
-      const stillThere = active !== null && tours.some((t) => t.name === active);
+      const stillThere =
+        active !== null && tours.some((t) => t.name === active);
       if (!stillThere) {
         // One tour and nothing picked: it's the tour. Picking is not
         // opening, so the view is untouched.
@@ -142,7 +156,11 @@ export function loadTours(): Promise<void> {
       // rewrite of the file is a new updatedAt.
       if (!after) {
         set({ resolved: {} });
-      } else if (!before || before.name !== after.name || before.updatedAt !== after.updatedAt) {
+      } else if (
+        !before ||
+        before.name !== after.name ||
+        before.updatedAt !== after.updatedAt
+      ) {
         if (index >= after.stops.length) set({ index: -1 });
         resolveAll();
       }
@@ -243,21 +261,16 @@ export function speakStop(i: number) {
       const r = state.resolved[i];
       if (!r || r === "pending") return; // not yet — try on the next word
       timeline =
-        r.kind === "symbol"
-          ? buildTimeline(spoken, {
-              source: r.frame.source,
-              calls: r.frame.calls,
-              lineCount: r.frame.endLine - r.frame.startLine + 1,
-            })
-          : r.kind === "file"
-            ? [{ char: 0, line: 0 }]
-            : null;
+        r.kind === "unresolved" ? null : buildTimeline(spoken, cueFrame(r));
     }
     if (!timeline) return;
     const r = state.resolved[i];
     if (!r || r === "pending" || r.kind === "unresolved") return;
-    const line = r.line + lineAt(timeline, char);
-    if (state.cursor?.file !== r.file || state.cursor.line !== line) set({ cursor: { file: r.file, line } });
+    const at = lineAt(timeline, char);
+    if (!at) return;
+    const c = state.cursor;
+    if (c?.file !== r.file || c.line !== at.line || c.end !== at.end)
+      set({ cursor: { file: r.file, line: at.line, end: at.end } });
   };
   const rate = currentSettings().tourSpeechRate || 1;
   // The next stop's audio, fetched now so "next" plays without a gap.
@@ -275,6 +288,27 @@ export function speakStop(i: number) {
       if (state.playing && state.index === i) goToStop(i + 1);
     }, 700 / rate);
   });
+}
+
+// The frame a stop's cues resolve against: its anchor line, and its source
+// and calls when it is a symbol.
+export function cueFrame(
+  r: Exclude<ResolvedStop, "unresolved" | { kind: "unresolved" }>,
+): TimelineFrame {
+  return r.kind === "symbol"
+    ? { anchor: r.line, source: r.frame.source, calls: r.frame.calls }
+    : { anchor: r.line };
+}
+
+// Put the narration highlight on a line of stop i's file by hand — a
+// clicked cue — whether or not anything is being read.
+export function showCue(i: number, cue: Cue) {
+  const r = state.resolved[i];
+  if (!r || r === "pending" || r.kind === "unresolved") return;
+  const t = resolveCue(cue, cueFrame(r));
+  if (!t) return;
+  if (state.index !== i) goToStop(i);
+  set({ cursor: { file: r.file, line: t.line, end: t.end } });
 }
 
 // Play the tour through from the current stop (or the first), narrating
@@ -303,7 +337,9 @@ export function prevStop() {
   if (!tour) return;
   // From "not started", back is the last stop: the tour is a ring you can
   // enter from either end.
-  goToStop(state.index < 0 ? tour.stops.length - 1 : Math.max(state.index - 1, 0));
+  goToStop(
+    state.index < 0 ? tour.stops.length - 1 : Math.max(state.index - 1, 0),
+  );
 }
 
 // ---- driving the view ----
