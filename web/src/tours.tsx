@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { fetchBodyByCall, fetchFiles, fetchSymbol, fetchTours } from "./api";
 import { currentSettings } from "./settings";
+import { stepped } from "./sonify";
 import { speak, stopSpeaking, stopSpeechText } from "./speech";
 import { resolveStop, type ResolvedStop } from "./tourResolve";
 import type { Tour, TourStop } from "./types";
@@ -31,6 +32,9 @@ export interface TourState {
   resolved: Record<number, ResolvedStop | "pending">;
   // A line the root frame should scroll to once it shows that file.
   focus: { file: string; line: number; seq: number } | null;
+  // Where a narration is right now, as a line in a file, for the root
+  // frame to follow (karaoke). Null when nothing is narrating.
+  cursor: { file: string; line: number } | null;
 }
 
 let state: TourState = {
@@ -42,6 +46,7 @@ let state: TourState = {
   openSeq: 0,
   resolved: {},
   focus: null,
+  cursor: null,
 };
 const listeners = new Set<() => void>();
 // The index revision the current resolutions were made under; a rebuild
@@ -203,11 +208,19 @@ export function goToStop(i: number) {
   if (!tour || i < 0 || i >= tour.stops.length) return;
   set({ index: i, openSeq: state.openSeq + 1 });
   savePosition();
+  stepped();
   // Read the stop as it opens, when asked to. Spoken here rather than in
   // the driver: the text is known without waiting on the resolution, and
   // an unresolved stop still has a description worth hearing.
   stopSpeaking();
   if (currentSettings().tourReadAloud) speakStop(i);
+}
+
+// Move the narration cursor; a narrator that maps its words to lines calls
+// this as it goes, and clears it (null) when it is done.
+export function setTourCursor(cursor: TourState["cursor"]) {
+  if (cursor?.file === state.cursor?.file && cursor?.line === state.cursor?.line) return;
+  set({ cursor });
 }
 
 // The identity a stop speaks under, so a play button can tell "this one

@@ -32,6 +32,7 @@ import { useNotes } from "./notes";
 import { openRules } from "./rules";
 import { NoteCard, NoteComposer } from "./NotesUI";
 import { TourStopCard } from "./TourPanel";
+import { cursorMoved, registerFrame, unregisterFrame } from "./sonify";
 import { useTourStopCards, useTours, type TourStopCardInfo } from "./tours";
 
 export interface FoldRange {
@@ -85,7 +86,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const [composing, setComposing] = useState<NoteAnchor | null>(null);
   const isFileFrame = frame.id.startsWith("file:");
   const tourCards = useTourStopCards();
-  const tourFocus = useTours().focus;
+  const { focus: tourFocus, cursor: tourCursor } = useTours();
 
   // The active tour's stops that fall in this frame, by rendered line index
   // — anchored in file space exactly as notes are, so a stop's card shows in
@@ -129,6 +130,34 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   }, [tourFocus, frame.file, frame.startLine, frame.endLine, path.length]);
 
   const sourceLines = useMemo(() => frame.source.split("\n"), [frame.source]);
+
+  // The narration cursor moved onto a line of this frame: a grain whose
+  // pitch is the line's indentation, so the ear follows the highlight.
+  // Root only, like the focus above — the cursor is in file space and a
+  // callee frame of the same file would answer for it too.
+  useEffect(() => {
+    if (!tourCursor || path.length !== 0 || tourCursor.file !== frame.file) return;
+    const idx = tourCursor.line - frame.startLine;
+    if (idx < 0 || idx >= sourceLines.length) return;
+    cursorMoved(sourceLines[idx]);
+  }, [tourCursor, frame.file, frame.startLine, sourceLines, path.length]);
+
+  // Known to the sound layer while mounted, so the `s` scan can play the
+  // view as it stands: this frame's lines, with each unfolded callee's in
+  // their place.
+  const frameKey = pathKey(path);
+  useEffect(() => {
+    const last = path[path.length - 1];
+    registerFrame({
+      key: frameKey,
+      parentKey: path.length ? pathKey(path.slice(0, -1)) : null,
+      callId: last ? last.callId : null,
+      frame,
+    });
+    return () => unregisterFrame(frameKey);
+    // `path` is identified by its key; the array itself is rebuilt each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frame, frameKey]);
 
   // Notes anchored inside this frame's line range, keyed by the rendered
   // line index their card appears after. Anchors live in file space, so

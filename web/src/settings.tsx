@@ -17,6 +17,12 @@ export interface Settings {
   // or a configured voice). Off by default: a voice that starts unasked is
   // a surprise.
   tourReadAloud: boolean;
+  // Sonify: a quiet tone for each unfold, fold and tour step, a grain per
+  // cursor move while a stop is narrated, and the `s` scan of the frame's
+  // shape. Off by default for the same reason the voice is.
+  sound: boolean;
+  // Master volume, 0 to 1. Full is still quiet by design.
+  soundVolume: number;
 }
 
 const DEFAULTS: Settings = {
@@ -24,6 +30,8 @@ const DEFAULTS: Settings = {
   depthRuler: false,
   indentMode: "rails",
   tourReadAloud: false,
+  sound: false,
+  soundVolume: 0.5,
 };
 
 const KEY = "unfold.settings";

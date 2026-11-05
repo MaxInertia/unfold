@@ -1725,6 +1725,24 @@ body.resizing {
   align-self: flex-start;
 }
 
+.settings-row--select input[type="range"] {
+  width: 100%;
+  margin: 0.2rem 0 0;
+  accent-color: var(--accent, currentColor);
+}
+
+.settings-row--select input[type="range"]:disabled {
+  opacity: 0.4;
+}
+
+.settings-desc kbd {
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0 0.25em;
+  border: 1px solid var(--card-border);
+  border-radius: 3px;
+}
+
 .settings-label {
   display: block;
 }

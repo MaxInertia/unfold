@@ -77,6 +77,43 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       <div className="settings-section">
+        <div className="settings-section-title">sound</div>
+        <label className="settings-row">
+          <input
+            type="checkbox"
+            checked={settings.sound}
+            onChange={(e) => updateSettings({ sound: e.target.checked })}
+          />
+          <span className="settings-label">
+            sonify structure
+            <span className="settings-desc">
+              a tone per unfold (lower the deeper) and a softer one per fold,
+              a two-note motif on a new root, a tick per tour step, a grain per
+              line as the narration cursor moves, and <kbd>s</kbd> plays the
+              view's shape: pitch by indentation, bright for calls, dark for
+              error paths, ringing on returns. <kbd>m</kbd> toggles.
+            </span>
+          </span>
+        </label>
+        <label className="settings-row settings-row--select">
+          <span className="settings-label">
+            volume
+            <span className="settings-desc">quiet by design, even at full</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={settings.soundVolume}
+            disabled={!settings.sound}
+            aria-label="sound volume"
+            onChange={(e) => updateSettings({ soundVolume: Number(e.target.value) })}
+          />
+        </label>
+      </div>
+
+      <div className="settings-section">
         <div className="settings-section-title">keyboard</div>
         {/* Rendered from the same registry the handlers match against, so
             this list is the app's actual behaviour rather than a description
