@@ -101,6 +101,9 @@ func (m *Match) Matches(c platform.Call, caps Captures) bool {
 	if m.RecvOnly && c.Recv == "" {
 		return false
 	}
+	if m.FuncOnly && c.Recv != "" {
+		return false
+	}
 	if m.Recv != "" && !matchSegment(m.Recv, c.Recv) {
 		return false
 	}

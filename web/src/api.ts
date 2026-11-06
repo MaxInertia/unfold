@@ -1,6 +1,7 @@
 import type {
   CallID,
   Channel,
+  EffectReport,
   PlatformView,
   Resolution,
   Frame,
@@ -54,13 +55,24 @@ export async function search(
 ): Promise<SearchResult[]> {
   const params = new URLSearchParams({ q, limit: String(limit) });
   if (repo) params.set("repo", repo);
-  const res = await getJSON<{ results: SearchResult[] }>(`/api/search?${params.toString()}`);
+  const res = await getJSON<{ results: SearchResult[] }>(
+    `/api/search?${params.toString()}`,
+  );
   return res.results ?? [];
 }
 
 export async function fetchFiles(): Promise<string[]> {
   const res = await getJSON<{ files: string[] }>("/api/files");
   return res.files ?? [];
+}
+
+// What a function touches outside its own stack, with the line for each piece
+// of evidence. Rejects (501) for an engine that can't say, which the badges
+// treat as "nothing to show".
+export function fetchEffects(targetId: TargetID): Promise<EffectReport> {
+  return getJSON<EffectReport>(
+    `/api/effects?id=${encodeURIComponent(targetId)}`,
+  );
 }
 
 export async function fetchUsages(targetId: TargetID): Promise<Usage[]> {
@@ -85,7 +97,9 @@ export function fetchServiceView(
 }
 
 // The workspace-level view: services and the calls between them.
-export function fetchPlatformView(anchor?: TargetID | null): Promise<PlatformView> {
+export function fetchPlatformView(
+  anchor?: TargetID | null,
+): Promise<PlatformView> {
   const qs = anchor ? `?anchor=${encodeURIComponent(anchor)}` : "";
   return getJSON<PlatformView>(`/api/platform${qs}`);
 }
@@ -145,7 +159,9 @@ export async function fetchChannels(): Promise<Channel[]> {
 // The subdirectories of a path, for the proto-root picker. A browser can't
 // give the server a real filesystem path from a native picker, so browsing
 // happens server-side.
-export function browseDirs(path: string): Promise<{ path: string; parent?: string; dirs: string[] }> {
+export function browseDirs(
+  path: string,
+): Promise<{ path: string; parent?: string; dirs: string[] }> {
   return getJSON(`/api/dirs?path=${encodeURIComponent(path)}`);
 }
 
@@ -169,7 +185,10 @@ export async function setProtoRoot(path: string): Promise<void> {
   }
 }
 
-export async function fetchTypeInfo(targetId: TargetID, offset: number): Promise<TypeInfo | null> {
+export async function fetchTypeInfo(
+  targetId: TargetID,
+  offset: number,
+): Promise<TypeInfo | null> {
   const url = `/api/typeinfo?targetId=${encodeURIComponent(targetId)}&offset=${offset}`;
   const res = await getJSON<{ typeInfo: TypeInfo | null }>(url);
   return res.typeInfo ?? null;
@@ -202,7 +221,9 @@ export async function saveNote(note: Partial<Note>): Promise<Note> {
 }
 
 export async function deleteNote(id: string): Promise<void> {
-  const res = await fetch(`/api/notes?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  const res = await fetch(`/api/notes?id=${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 }
 
@@ -226,14 +247,19 @@ export async function openInEditor(file: string, line: number): Promise<void> {
 // Open another repository, or stop opening one, without restarting. The
 // server rebuilds the engine and pushes a reload over /api/events, so the
 // views refresh themselves — there's nothing to return but the new repo list.
-export async function linkRepo(path: string, unlink = false): Promise<{ repos: RepoInfo[] }> {
+export async function linkRepo(
+  path: string,
+  unlink = false,
+): Promise<{ repos: RepoInfo[] }> {
   const res = await fetch("/api/repos", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, unlink }),
   });
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    const body = (await res.json().catch(() => null)) as {
+      error?: string;
+    } | null;
     throw new Error(body?.error ?? `link failed: ${res.status}`);
   }
   return res.json();

@@ -162,6 +162,20 @@ func (r *Reloadable) Usages(id model.TargetID) ([]model.Usage, error) {
 	return r.cur.Usages(id)
 }
 
+// Effects forwards to the current engine when it can say what a function
+// touches. Like ServiceView, the wrapper's method set is static, so an engine
+// without the capability is reported at call time as an error the server
+// turns into "not available".
+func (r *Reloadable) Effects(id model.TargetID) (*model.EffectReport, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ee, ok := r.cur.(model.EffectEngine)
+	if !ok {
+		return nil, model.ErrNoEffects
+	}
+	return ee.Effects(id)
+}
+
 // ServiceView forwards to the current engine when it has recognizers. The
 // wrapper always satisfies model.PlatformEngine (method sets are static), so
 // an engine without them is reported at call time.

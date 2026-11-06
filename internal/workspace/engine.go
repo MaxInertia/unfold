@@ -112,6 +112,32 @@ func (w *Workspace) Usages(id model.TargetID) ([]model.Usage, error) {
 	return us, nil
 }
 
+// Effects answers for the repo the id belongs to. The evidence stays inside
+// that repo — the walk follows the call graph of one index — so only the ids
+// that travel back to the frontend need qualifying.
+func (w *Workspace) Effects(id model.TargetID) (*model.EffectReport, error) {
+	idx, bare, err := w.engineFor(string(id))
+	if err != nil {
+		return nil, err
+	}
+	alias, _ := split(string(id))
+	if alias == "" {
+		alias = w.primary
+	}
+	rep, err := idx.Effects(model.TargetID(bare))
+	if err != nil {
+		return nil, err
+	}
+	rep.ID = id
+	for n := range rep.Effects {
+		e := &rep.Effects[n]
+		e.Site = model.TargetID(w.qualify(alias, string(e.Site)))
+		e.Via = model.TargetID(w.qualify(alias, string(e.Via)))
+		e.ViaCall = model.CallID(w.qualify(alias, string(e.ViaCall)))
+	}
+	return rep, nil
+}
+
 // Search covers every repo that is already indexed, ranked for the primary
 // service. See SearchFrom.
 func (w *Workspace) Search(query string, limit int) []model.SearchResult {

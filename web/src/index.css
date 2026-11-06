@@ -867,7 +867,6 @@ body.resizing {
   flex-basis: 2rem;
 }
 
-
 .tree-inner {
   display: flex;
   flex-direction: column;
@@ -4176,5 +4175,194 @@ body.resizing {
   100% {
     background: transparent;
     box-shadow: none;
+  }
+}
+
+/* Side-effect badges — what a frame touches outside its own stack, in its
+   header. Muted when only its callees do; the popover lists the evidence. */
+.effect-badges {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  flex: none;
+}
+
+.effect-badge {
+  font: inherit;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  padding: 0.04rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--effect-border, rgba(217, 119, 6, 0.45));
+  background: var(--effect-bg, rgba(217, 119, 6, 0.12));
+  color: var(--effect-fg, #9a5b00);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.effect-badge:hover,
+.effect-badge--open {
+  background: var(--effect-bg-hover, rgba(217, 119, 6, 0.24));
+}
+
+/* Inherited-only: the claim is weaker, so the badge is quieter. */
+.effect-badge--inherited {
+  opacity: 0.6;
+  background: transparent;
+  border-style: dashed;
+}
+
+.effect-badge--inherited:hover,
+.effect-badge--inherited.effect-badge--open {
+  opacity: 1;
+}
+
+.effect-icon {
+  margin-right: 0.2rem;
+}
+
+.effect-truncated {
+  color: var(--muted);
+  font-size: 0.7rem;
+  cursor: help;
+}
+
+.effect-popover {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 40;
+  min-width: 320px;
+  max-width: 560px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+  padding: 0.4rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 400;
+  text-align: left;
+}
+
+.effect-popover-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-bottom: 0.3rem;
+  color: var(--muted);
+}
+
+.effect-popover-title {
+  flex: 1;
+}
+
+.effect-popover-close {
+  font: inherit;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+.effect-evidence {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.effect-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.12rem 0;
+}
+
+.effect-row--inherited {
+  color: var(--muted);
+}
+
+.effect-row-main {
+  font: inherit;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  padding: 0.05rem 0.3rem;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.effect-row-main:hover:not(:disabled) {
+  background: var(--call-bg);
+}
+
+.effect-row-main:disabled {
+  cursor: default;
+}
+
+.effect-row-callee {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effect-row-access {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.effect-row-loc {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.effect-row-hop {
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.effect-row-rule {
+  color: var(--muted);
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+
+/* The dot on a folded call whose callee has effects of its own. */
+.call-site--effects::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--effect-border, rgba(217, 119, 6, 0.75));
+  vertical-align: super;
+}
+
+@media (prefers-color-scheme: dark) {
+  .effect-badge {
+    --effect-fg: #f5b14b;
+    --effect-bg: rgba(245, 177, 75, 0.14);
+    --effect-bg-hover: rgba(245, 177, 75, 0.26);
+    --effect-border: rgba(245, 177, 75, 0.5);
+  }
+  .call-site--effects::after {
+    background: rgba(245, 177, 75, 0.8);
   }
 }

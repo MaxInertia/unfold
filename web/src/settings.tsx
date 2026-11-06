@@ -17,6 +17,9 @@ export interface Settings {
   // or a configured voice). Off by default: a voice that starts unasked is
   // a surprise.
   tourReadAloud: boolean;
+  // Side-effect badges in frame headers (db, net, file, env, …) and the dot
+  // on a folded call whose callee has some.
+  effectBadges: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -24,6 +27,7 @@ const DEFAULTS: Settings = {
   depthRuler: false,
   indentMode: "rails",
   tourReadAloud: false,
+  effectBadges: true,
 };
 
 const KEY = "unfold.settings";
@@ -34,7 +38,10 @@ function read(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed = raw ? JSON.parse(raw) : {};
-    return { ...DEFAULTS, ...(parsed && typeof parsed === "object" ? parsed : {}) };
+    return {
+      ...DEFAULTS,
+      ...(parsed && typeof parsed === "object" ? parsed : {}),
+    };
   } catch {
     return DEFAULTS;
   }

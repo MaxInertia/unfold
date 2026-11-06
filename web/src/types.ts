@@ -17,6 +17,9 @@ export interface CallSite {
   candidates?: Candidate[]; // present for interface calls with known impls
   goroutine?: boolean; // call is launched with the `go` keyword
   external?: boolean; // target is stdlib/dependency; bulk expansion skips it
+  // The callee does something outside its own stack, directly or through
+  // what it calls — the dot on a folded call. Direct in-module calls only.
+  hasEffects?: boolean;
   // A rule's answer to "is expanding into this worth doing", replacing a
   // single stdlib/dependency heuristic that couldn't tell an in-house SDK you
   // always want to expand from a logging call you never do.
@@ -406,4 +409,34 @@ export interface Tour {
   updatedAt?: string;
   // Set when the file could not be read as a tour; stops is then empty.
   error?: string;
+}
+
+// One thing a function does outside its own stack, with the line that does
+// it. Mirrors model.Effect on the server.
+export interface Effect {
+  // "db" | "net" | "file" | "env" | "global" | "time" | "process" |
+  // "goroutine" | "channel" — or a kind a user rule invented.
+  kind: string;
+  access?: "read" | "write";
+  callee: string; // "os.Open", "sql.DB.Exec", "go worker", "main.counter"
+  key?: string; // the env var read, the path opened, the program run
+  file: string;
+  line: number;
+  rule?: string; // the recognizer that decided it; empty for statement shapes
+  site: TargetID; // the function whose body holds the evidence
+  siteTitle?: string;
+  depth: number; // 0 = the function's own body
+  // For an inherited effect: the function's own callee it came through, and
+  // the call site in its body that reaches it (what a click opens).
+  via?: TargetID;
+  viaTitle?: string;
+  viaCall?: CallID;
+}
+
+export interface EffectReport {
+  id: TargetID;
+  effects: Effect[];
+  // The walk stopped at its depth or budget cap with callees unvisited: an
+  // absent badge is "not seen", not "not there".
+  truncated?: boolean;
 }

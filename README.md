@@ -469,6 +469,60 @@ that duplicates one you have — and it makes "why is there an edge here"
 answerable where you're looking rather than by reading rule files. Clicking one
 opens it in the panel.
 
+### Side-effect badges
+
+Every frame header carries a row of small badges saying what the function
+touches outside its own stack:
+
+```
+🗄 db·w   🌐 net   📄 file·r   ⚙ env   ◎ global   ⏱ sleep   ▶ proc   ⚡ go   ⇄ chan
+```
+
+A badge counts what the body does *and* what its callees do, followed through
+the index up to four calls deep (and at most 250 functions per walk; a `…` after
+the row means the walk hit a cap, so a missing badge is "not seen" rather than
+"not there"). A badge whose only evidence is inherited is drawn muted: "something
+this calls sleeps" is a weaker claim than "this sleeps". Where the shape makes
+the direction clear the badge says so — `db·r` for a query, `db·w` for an exec,
+`file·rw` for both — and says nothing when it isn't (`OpenFile`'s flags are
+rarely a literal worth decoding).
+
+Hover a badge to see the evidence: the callee, its `file:line`, whether it's
+direct or `via` which callee, and the rule that decided it. Click a row to jump
+to the line when it's in this frame, or to open the callee inline when it isn't.
+Click the badge to pin the list. A folded call whose callee has effects carries
+a small dot, so you can tell which of a frame's calls are worth opening before
+opening them. **Settings → frames → side-effect badges** switches all of it off.
+
+Call-shaped effects — `database/sql`, pgx, gorm, sqlx, redis; `net/http` client
+calls, `net.Dial`, gRPC; `os` file operations, `io/fs`, `path/filepath.Walk`;
+`os.Getenv`, viper, envconfig; `time.Sleep`, tickers and timers; `os/exec`,
+`os.Exit`, signals — are rules, shipped under the `effect.*` ids in the
+**⌥ recognizers** panel, so any of them can be switched off like a built-in.
+Recognized outbound bindings (a gRPC call through a generated stub) count as
+`net` too. Goroutine launches, channel sends and receives, and assignments to
+package-level variables are statements rather than calls, so the indexer finds
+those in the AST directly; global *reads* are deliberately not counted — every
+sentinel error would light the badge.
+
+To make an in-house client count, write an effect rule in the same file the
+other rules live in. It is a `match` like any other and an `emit` with the
+`effect` role; the `kind` is the badge, `access` is optional, and the `key` is
+optional detail shown beside the evidence:
+
+```json
+{ "id": "cache.put",
+  "match": {"package": "github.com/acme/cache", "recv": "Client", "func": "Put"},
+  "emit":  {"role": "effect", "kind": "db", "access": "write", "key": "{arg0}"} }
+```
+
+A `kind` outside the shipped set still gets a badge, labelled with its own name.
+Unlike a binding, an effect whose key doesn't resolve is still an effect —
+`os.Getenv(name)` reads the environment whether or not the name is static.
+`funcOnly: true` on a match is the mirror of `recvOnly`: it means the
+package-level function and never a method, which is how the shipped rule means
+`http.Get` without also meaning `http.Header.Get`.
+
 ### Limitations
 
 - **Single repo.** Joining outbound keys to the services that serve them needs
