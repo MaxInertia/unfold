@@ -23,6 +23,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/server"
 	"github.com/MaxInertia/unfold/internal/tours"
+	"github.com/MaxInertia/unfold/internal/traces"
 	"github.com/MaxInertia/unfold/internal/workspace"
 )
 
@@ -40,6 +41,11 @@ func projectDir(dir string) string {
 }
 
 func main() {
+	// `unfold trace ...` records a run instead of serving; see trace.go.
+	if len(os.Args) > 1 && os.Args[1] == "trace" {
+		runTrace(os.Args[2:])
+		return
+	}
 	var (
 		addr         = flag.String("addr", "127.0.0.1:0", "address to bind (default: random free port on localhost)")
 		noOpen       = flag.Bool("no-open", false, "don't open the browser")
@@ -139,6 +145,9 @@ func main() {
 	// watched and a change is pushed to the page as it happens.
 	tourStore := tours.NewStore(*dir)
 	srv.SetTours(tourStore)
+	// Execution traces are read from <dir>/.unfold/traces/*.json, written by
+	// `unfold trace`. Read-only here: no watcher yet, the panel refetches.
+	srv.SetTraces(traces.NewStore(*dir))
 	if tw, err := tourStore.Watch(srv.NotifyTours); err != nil {
 		log.Printf("tours watch disabled: %v", err)
 	} else {

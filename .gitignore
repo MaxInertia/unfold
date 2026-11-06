@@ -30,3 +30,6 @@ chain.crt
 *.p12
 *.key
 publish-token*
+
+# Execution traces recorded by `unfold trace` are generated, often large
+/.unfold/traces/

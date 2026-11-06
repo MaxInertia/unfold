@@ -798,6 +798,42 @@ a tour, the schema, how to name symbols, and the `expand` syntax. Copy it
 into another project's `.claude/skills/` (or `~/.claude/skills/`) to have
 tours written there too.
 
+### Replay a run
+
+A tour is the order someone chose; a replay is the order the program chose.
+`unfold trace` runs one test with every function in its package instrumented
+and records what executed — each function entered, each statement begun,
+each return, in order — and the sidebar's **replay** tab plays that back
+through the unfolded code: the highlight walks the lines that ran, a call
+unfolds its callee the moment it is entered (an interface call opens the
+implementation that actually ran), and the callee folds again when it
+returns.
+
+```sh
+unfold trace -run TestValidate ./internal/tours
+```
+
+That writes `.unfold/traces/TestValidate.json` (`-o` names it, `-dir`
+chooses the project, `-max-events` raises the 200 000-event cap). The
+checkout is not modified: the rewritten sources and the small runtime they
+call go to the compiler through a `go test -overlay`, so the only cost is a
+build of that one package. Start `unfold` in the same project, open the
+**replay** tab, pick the run, and play it; the scrubber jumps anywhere in
+it, **.** and **,** step one event at a time, and the speed is in events per
+second. The panel shows the event's position, the function and line it is
+in, and the goroutine's stack. `GET /api/traces` lists the runs and
+`GET /api/traces/<name>` serves one with its events.
+
+What it can't do yet: unfold doesn't index `_test.go`, so the test body
+itself isn't shown — the view follows from the first indexed function the
+test enters, and sits on the call line while an un-indexed callee (a
+dependency, a test helper) runs. Only the traced package is instrumented;
+calls into other packages are opaque. A trace with several goroutines is
+replayed one goroutine at a time (the test's by default). A `for` loop's
+header is recorded once, when the statement begins; its iterations are
+visible through the body's lines. The trace is of one process: a test that
+spawns a subprocess records only the parent.
+
 ## Repository layout
 
 The Go module (CLI + HTTP server + indexers) is the repo root. Clients and
