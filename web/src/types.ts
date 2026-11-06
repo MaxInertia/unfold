@@ -73,6 +73,18 @@ export interface Frame {
   source: string;
   calls: CallSite[];
   diff?: FrameDiff; // present only in --diff-base mode
+  // `if err != nil { … }` blocks whose body only bails out (mirrors
+  // model.ErrReturn). Go only; absent for other languages.
+  errReturns?: ErrReturn[];
+}
+
+// One error-return block: 0-based indices into Frame.source of the `if` line
+// and the closing brace, plus a short summary of what the block does on the
+// error path (`returns nil, err`, `wraps "open config"`, `panics`).
+export interface ErrReturn {
+  startLine: number;
+  endLine: number;
+  summary: string;
 }
 
 // How a frame differs from the diff base (see --diff-base).

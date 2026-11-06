@@ -24,6 +24,10 @@ interface RenderCtx {
   renderFoldPlaceholder: (startLine: number, endLine: number) => ReactNode;
   // Extra class for a line's row (e.g. diff tinting); "" / undefined = none.
   lineClass: (idx: number) => string | undefined;
+  // Something to append inside a rendered row after its source — the
+  // error-fold glyph. Unlike renderLineExtras it sits on the line, not
+  // under it. null = nothing.
+  renderLineTrailer: (idx: number) => ReactNode;
 }
 
 export interface RenderOptions {
@@ -40,6 +44,7 @@ export interface RenderOptions {
   renderLineGutter: (idx: number) => ReactNode;
   renderFoldPlaceholder: (startLine: number, endLine: number) => ReactNode;
   lineClass?: (idx: number) => string | undefined;
+  renderLineTrailer?: (idx: number) => ReactNode;
 }
 
 export function renderHast(opts: RenderOptions): ReactNode {
@@ -62,6 +67,7 @@ export function renderHast(opts: RenderOptions): ReactNode {
     renderLineGutter: opts.renderLineGutter,
     renderFoldPlaceholder: opts.renderFoldPlaceholder,
     lineClass: opts.lineClass ?? (() => undefined),
+    renderLineTrailer: opts.renderLineTrailer ?? (() => null),
   };
   return walk(opts.hast, ctx, "r");
 }
@@ -146,6 +152,7 @@ function walkCode(node: Element, ctx: RenderCtx, key: string): ReactNode {
         walk(c, ctx, `${key}.${i}.${ci}`),
       );
       const extraClass = ctx.lineClass(lineIdx);
+      const trailer = ctx.renderLineTrailer(lineIdx);
       out.push(
         <div
           className={`line-row${extraClass ? ` ${extraClass}` : ""}`}
@@ -154,6 +161,7 @@ function walkCode(node: Element, ctx: RenderCtx, key: string): ReactNode {
         >
           {ctx.renderLineGutter(lineIdx)}
           <span {...lineProps}>{lineChildren}</span>
+          {trailer}
         </div>,
       );
       const extras = ctx.renderLineExtras(lineIdx);

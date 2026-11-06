@@ -37,6 +37,28 @@ shared link. Closing an elided frame's last child clears the elision rather
 than leaving it armed to re-hide the body next time something is expanded
 there.
 
+## Assuming `err == nil`
+
+Go bodies are full of `if err != nil { return …, err }` blocks that a reader
+skips mentally on the way to the happy path. **assume err == nil** in a
+frame's header folds them all in one go: each block collapses to a muted
+glyph on its `if` line — `⤷ err: wraps "open config"` — and the header counts
+what went (`12 err returns folded`). Click a glyph to open that one block;
+click again on `⤴` to fold it back.
+
+The server marks a block when its condition is an error check (`err != nil`,
+a value of type `error` against `nil`, `errors.Is`/`errors.As`, including the
+`if err := f(); err != nil` form) **and** its body only leaves: a return, a
+wrap-and-return, a log-or-report-then-return, a `panic`, an exit. An
+`if err != nil` that does anything else — retries, falls back, has an `else`
+— is control flow the reader must see, and is never folded.
+
+Folding hides rows; it does not renumber them. Line numbers, notes and tour
+stops keep addressing the same file lines, and a block holding a note, a
+tour stop or an expanded call stays open so the thing you were looking at
+doesn't vanish. The toggle is per frame; the default for new frames is the
+**assume err == nil** switch under *reading* in settings.
+
 ## Usages / callers
 
 Unfolding follows execution *downward*; the usages feature is the reverse
