@@ -33,6 +33,7 @@ import { openRules } from "./rules";
 import { NoteCard, NoteComposer } from "./NotesUI";
 import { TourStopCard } from "./TourPanel";
 import { useTourStopCards, useTours, type TourStopCardInfo } from "./tours";
+import { useReplayCursor } from "./replayStore";
 
 export interface FoldRange {
   start: number;
@@ -86,6 +87,8 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const isFileFrame = frame.id.startsWith("file:");
   const tourCards = useTourStopCards();
   const tourFocus = useTours().focus;
+  // The replay's highlight, when its line is in this frame.
+  useReplayCursor(frame, path);
 
   // The active tour's stops that fall in this frame, by rendered line index
   // — anchored in file space exactly as notes are, so a stop's card shows in

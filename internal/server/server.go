@@ -25,6 +25,7 @@ import (
 	"github.com/MaxInertia/unfold/internal/prefs"
 	"github.com/MaxInertia/unfold/internal/rules"
 	"github.com/MaxInertia/unfold/internal/tours"
+	"github.com/MaxInertia/unfold/internal/traces"
 )
 
 //go:embed all:static/dist
@@ -37,6 +38,7 @@ type Server struct {
 	differ *diff.Differ // nil = diff mode off
 	notes  *notes.Store // nil = notes disabled
 	tours  *tours.Store // nil = tours disabled
+	traces *traces.Store // nil = execution traces disabled
 	// projectDir is where per-project prefs are persisted (the proto root a
 	// user picks in the UI). Empty disables persistence.
 	projectDir string
@@ -125,6 +127,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/index-repo", s.handleIndexRepo)
 	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/tours", s.handleTours)
+	mux.HandleFunc("/api/traces", s.handleTraces)
+	mux.HandleFunc("/api/traces/", s.handleTrace)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))

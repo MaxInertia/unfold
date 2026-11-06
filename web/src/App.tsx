@@ -9,6 +9,8 @@ import { RulesPanel } from "./RulesPanel";
 import { useSettings } from "./settings";
 import { NotesList } from "./NotesUI";
 import { TourPanel } from "./TourPanel";
+import { ReplayPanel } from "./ReplayPanel";
+import { step as replayStep, useReplay, useReplayDriver } from "./replayStore";
 import { loadNotes } from "./notes";
 import { activeTour, loadTours, nextStop, prevStop, setTourRevision, useTourDriver, useTours } from "./tours";
 import { ServiceView } from "./ServiceView";
@@ -73,7 +75,7 @@ function AppShell() {
   // A pick is remembered as itself, so choosing a tab survives health
   // resolving late and never gets overwritten by a default.
   const [sidebarTab, setSidebarTab] = useState<
-    "files" | "callers" | "entrypoints" | "notes" | "tour" | null
+    "files" | "callers" | "entrypoints" | "notes" | "tour" | "replay" | null
   >(null);
   const [rightTab, setRightTab] = useState<"calls" | "outbounds" | null>(null);
   const [reindexed, setReindexed] = useState(false);
@@ -272,6 +274,9 @@ function AppShell() {
   }, [revision]);
   useTourDriver();
   const tourStopCount = activeTour(useTours())?.stops.length ?? 0;
+  // A replay moves the view the same way a tour does, one event at a time.
+  useReplayDriver();
+  const replayOn = useReplay().active !== null;
 
   // Everything the trail shows comes from one request: the service's name,
   // whether the current frame is even *in* that service, and how many
@@ -318,6 +323,16 @@ function AppShell() {
         if (matches("tour.prev", e)) {
           e.preventDefault();
           prevStop();
+          return;
+        }
+        if (matches("replay.next", e)) {
+          e.preventDefault();
+          replayStep(1);
+          return;
+        }
+        if (matches("replay.prev", e)) {
+          e.preventDefault();
+          replayStep(-1);
           return;
         }
       }
@@ -470,6 +485,15 @@ function AppShell() {
                         tour
                         {tourStopCount > 0 && <span className="tree-tab-count">{tourStopCount}</span>}
                       </button>
+                      <button
+                        type="button"
+                        className={`tree-tab${leftTab === "replay" ? " tree-tab--active" : ""}`}
+                        onClick={() => setSidebarTab("replay")}
+                        title="replay a recorded test run through the code — . and , step through it"
+                      >
+                        replay
+                        {replayOn && <span className="tree-tab-count">▶</span>}
+                      </button>
                     </>
                   ) : (
                     <span className="tree-tab tree-tab--active tree-tab--static">
@@ -501,6 +525,8 @@ function AppShell() {
                     <NotesList />
                   ) : leftTab === "tour" ? (
                     <TourPanel />
+                  ) : leftTab === "replay" ? (
+                    <ReplayPanel />
                   ) : platform && leftTab === "entrypoints" ? (
                     <EntrypointsPanel view={serviceView} onOpen={(id) => store.setSymbol(id)} />
                   ) : !rootFrame ? (

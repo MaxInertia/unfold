@@ -407,3 +407,44 @@ export interface Tour {
   // Set when the file could not be read as a tour; stops is then empty.
   error?: string;
 }
+
+// ----- execution traces (mirrors internal/traces) -----
+
+// One thing an instrumented run did. "enter" names the function begun (fn,
+// with line its declaration line), "line" is a statement beginning, "exit"
+// the return of whatever is on top of goroutine g's stack. t is ns since
+// the run's first event.
+export interface TraceEvent {
+  g: number;
+  kind: "enter" | "line" | "exit";
+  fn?: string;
+  line?: number;
+  t: number;
+}
+
+// A recorded run, read from <project>/.unfold/traces/<name>.json.
+export interface Trace {
+  name: string;
+  test?: string;
+  package: string;
+  command?: string;
+  createdAt?: string;
+  truncated?: boolean;
+  events: TraceEvent[];
+  updatedAt?: string;
+  error?: string;
+}
+
+// What the list endpoint returns: a trace without its events.
+export interface TraceSummary {
+  name: string;
+  test?: string;
+  package: string;
+  command?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  truncated?: boolean;
+  events: number;
+  goroutines: number;
+  error?: string;
+}

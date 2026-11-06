@@ -4162,6 +4162,13 @@ body.resizing {
   cursor: default;
 }
 
+/* The line a replay is on: the statement that just began. */
+.line-row--replay {
+  background: var(--call-bg);
+  box-shadow: inset 3px 0 0 var(--accent);
+  transition: background 0.1s ease-out;
+}
+
 /* The line a tour stop landed on, briefly. */
 .line-row--tour-focus {
   animation: tour-focus 1.8s ease-out;
@@ -4177,4 +4184,175 @@ body.resizing {
     background: transparent;
     box-shadow: none;
   }
+}
+
+/* ---- replay panel: a recorded run, played through the code ---- */
+
+.replay {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.3rem 0.2rem;
+  font-size: 0.8rem;
+}
+
+.replay-select {
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--fg);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.15rem 0.3rem;
+  max-width: 100%;
+}
+
+.replay-title {
+  font-weight: 600;
+  padding: 0 0.3rem;
+}
+
+.replay-sub {
+  color: var(--muted);
+  font-size: 0.72rem;
+  padding: 0 0.3rem;
+  word-break: break-all;
+}
+
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.3rem;
+}
+
+.replay-btn {
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 0.1rem 0.4rem;
+  cursor: pointer;
+}
+
+.replay-btn:hover {
+  background: var(--call-bg);
+}
+
+.replay-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.replay-btn--playing {
+  background: var(--call-bg);
+  border-color: var(--accent);
+}
+
+.replay-speed {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--fg);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.1rem 0.2rem;
+}
+
+.replay-scrub {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.replay-pos {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.3rem;
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.replay-event {
+  padding: 0.2rem 0.3rem;
+  font-size: 0.78rem;
+}
+
+.replay-event code {
+  font-size: 0.76rem;
+}
+
+.replay-kind {
+  display: inline-block;
+  min-width: 2.6em;
+  margin-right: 0.3rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.replay-stack {
+  list-style: none;
+  margin: 0;
+  padding: 0 0.3rem;
+  font-size: 0.76rem;
+}
+
+.replay-stack li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.1rem 0.3rem;
+  border-left: 2px solid var(--card-border);
+}
+
+.replay-stack li.replay-stack--top {
+  border-left-color: var(--accent);
+  background: var(--call-bg);
+}
+
+.replay-stack li.replay-stack--unplaced {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.replay-stack-line {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.replay-note {
+  color: var(--muted);
+  font-size: 0.72rem;
+  padding: 0 0.3rem;
+}
+
+.replay-howto {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.replay-howto code,
+.replay-howto pre {
+  font-size: 0.75rem;
+  color: var(--fg);
+}
+
+.replay-howto pre {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
 }

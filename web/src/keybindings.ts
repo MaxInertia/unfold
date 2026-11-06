@@ -15,7 +15,7 @@ export type KeyLike = {
   shiftKey: boolean;
 };
 
-export type KeyScope = "zoom" | "history" | "reading" | "search" | "notes" | "tour";
+export type KeyScope = "zoom" | "history" | "reading" | "search" | "notes" | "tour" | "replay";
 
 export interface Keybinding {
   id: string;
@@ -111,6 +111,20 @@ export const KEYBINDINGS: Keybinding[] = [
     matches: bare("["),
   },
   {
+    id: "replay.next",
+    scope: "replay",
+    keys: ["."],
+    description: "step the replay forward one event",
+    matches: bare("."),
+  },
+  {
+    id: "replay.prev",
+    scope: "replay",
+    keys: [","],
+    description: "step the replay back one event",
+    matches: bare(","),
+  },
+  {
     id: "ui.dismiss",
     scope: "reading",
     keys: ["esc"],
@@ -136,6 +150,7 @@ export const SCOPE_LABELS: Record<KeyScope, string> = {
   search: "search",
   notes: "notes",
   tour: "tour",
+  replay: "replay",
 };
 
 // Bindings grouped for display, in the order scopes are declared above.

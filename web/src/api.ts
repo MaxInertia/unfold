@@ -12,6 +12,8 @@ import type {
   ServiceView,
   TargetID,
   Tour,
+  Trace,
+  TraceSummary,
   TypeInfo,
   Usage,
 } from "./types";
@@ -271,4 +273,15 @@ async function postRules(body: unknown): Promise<RuleReport> {
 export async function fetchTours(): Promise<{ tours: Tour[]; dir: string }> {
   const res = await getJSON<{ tours: Tour[]; dir: string }>("/api/tours");
   return { tours: res.tours ?? [], dir: res.dir ?? "" };
+}
+
+// The recorded runs, without their events, and the directory `unfold trace`
+// writes into.
+export async function fetchTraces(): Promise<{ traces: TraceSummary[]; dir: string }> {
+  const res = await getJSON<{ traces: TraceSummary[]; dir: string }>("/api/traces");
+  return { traces: res.traces ?? [], dir: res.dir ?? "" };
+}
+
+export function fetchTrace(name: string): Promise<Trace> {
+  return getJSON<Trace>(`/api/traces/${encodeURIComponent(name)}`);
 }
