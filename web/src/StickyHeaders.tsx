@@ -21,6 +21,9 @@ interface Stuck {
   title: string;
   loc: string;
   depth: number; // nesting depth (index in the chain)
+  // Entrypoints reaching this frame, when diff mode marks it changed; the
+  // pinned copy keeps the count so the blast radius travels with the header.
+  blast: string | null;
 }
 
 type Row =
@@ -76,6 +79,7 @@ export function StickyHeaders() {
           title: cur.getAttribute("data-frame-title") ?? "?",
           loc: cur.getAttribute("data-frame-loc") ?? "",
           depth: chain.length,
+          blast: cur.getAttribute("data-frame-blast"),
         });
         y += HEADER_H;
         cur = childFrameAt(cur, y);
@@ -143,6 +147,14 @@ export function StickyHeaders() {
               style={{ background: depthColor(row.stuck.depth) }}
             />
             <span className="sticky-title">{row.stuck.title}</span>
+            {row.stuck.blast !== null && (
+              <span
+                className={`sticky-blast${row.stuck.blast === "0" ? " sticky-blast--none" : ""}`}
+                title={`changed on this branch; reached from ${row.stuck.blast} entrypoints`}
+              >
+                from {row.stuck.blast}
+              </span>
+            )}
             <span className="sticky-loc">{row.stuck.loc}</span>
           </button>
         ),
@@ -164,7 +176,9 @@ function childFrameAt(parent: Element, y: number): Element | null {
 
 function sameStack(a: Stuck[], b: Stuck[]): boolean {
   if (a.length !== b.length) return false;
-  return a.every((s, i) => s.key === b[i].key && s.title === b[i].title);
+  return a.every(
+    (s, i) => s.key === b[i].key && s.title === b[i].title && s.blast === b[i].blast,
+  );
 }
 
 function cssEscape(s: string): string {

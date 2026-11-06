@@ -10,6 +10,7 @@ import { useSettings } from "./settings";
 import { NotesList } from "./NotesUI";
 import { TourPanel } from "./TourPanel";
 import { loadNotes } from "./notes";
+import { setDiffMode } from "./diffTour";
 import { activeTour, loadTours, nextStop, prevStop, setTourRevision, useTourDriver, useTours } from "./tours";
 import { ServiceView } from "./ServiceView";
 import { PlatformView } from "./PlatformView";
@@ -240,6 +241,9 @@ function AppShell() {
           setBookmarkProject(h.target ?? null); // namespace bookmarks per project
           setPlatform(!!h.platform);
           setWorkspace(!!h.workspace);
+          // Diff mode brings the generated "Changes vs <base>" tour and the
+          // blast radius on changed frames; both follow the index, hence here.
+          setDiffMode(!!h.diff);
         })
         .catch(() => {
           if (!alive) return;

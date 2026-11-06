@@ -35,7 +35,16 @@ type Server struct {
 	static fs.FS
 	target string
 	differ *diff.Differ // nil = diff mode off
-	notes  *notes.Store // nil = notes disabled
+	// diffBase and diffCommit name what the differ compares against — the
+	// ref as given and the merge-base it resolved to — for the diff tour's
+	// title and description.
+	diffBase, diffCommit string
+	// diffTour caches the changed set and its reach, which costs a frame
+	// read per function in the project. The base never changes; head does on
+	// every reindex, so NotifyReload drops it.
+	diffTourMu sync.Mutex
+	diffTour   *diffTourCache
+	notes      *notes.Store // nil = notes disabled
 	tours  *tours.Store // nil = tours disabled
 	// projectDir is where per-project prefs are persisted (the proto root a
 	// user picks in the UI). Empty disables persistence.
@@ -77,6 +86,10 @@ func (s *Server) SetTarget(target string) { s.target = target }
 // SetDiffer enables diff annotations on returned frames, comparing against the
 // base engine d wraps. Nil leaves diff mode off.
 func (s *Server) SetDiffer(d *diff.Differ) { s.differ = d }
+
+// SetDiffBase records the ref the differ compares against and the commit it
+// resolved to, so the diff tour can say what "changes" are relative to.
+func (s *Server) SetDiffBase(ref, commit string) { s.diffBase, s.diffCommit = ref, commit }
 
 // SetReloaderKeeping supplies a rebuild that can carry indexes over, naming
 // only the repositories that must be read again. Optional: without it every
@@ -125,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/index-repo", s.handleIndexRepo)
 	mux.HandleFunc("/api/notes", s.handleNotes)
 	mux.HandleFunc("/api/tours", s.handleTours)
+	mux.HandleFunc("/api/diff/tour", s.handleDiffTour)
 	mux.HandleFunc("/api/open", s.handleOpen)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.Handle("/", http.FileServer(http.FS(s.static)))
@@ -171,8 +185,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// NotifyReload tells every subscriber the index was rebuilt.
-func (s *Server) NotifyReload() { s.notify("reload") }
+// NotifyReload tells every subscriber the index was rebuilt. The diff tour
+// was computed against the previous index, so it goes too.
+func (s *Server) NotifyReload() {
+	s.diffTourMu.Lock()
+	s.diffTour = nil
+	s.diffTourMu.Unlock()
+	s.notify("reload")
+}
 
 // NotifyRepos tells every subscriber that a repository started or finished
 // indexing. Separate from a reload because it is not one: nothing about the

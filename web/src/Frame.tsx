@@ -25,6 +25,7 @@ import { useReloadRevision } from "./reload";
 import { RecognizeCall } from "./RecognizeCall";
 import { LeafCard } from "./LeafCard";
 import { CallersPanel } from "./Callers";
+import { BlastBadge, useBlastCount } from "./Blast";
 import { depthColor } from "./StickyHeaders";
 import { useSettings } from "./settings";
 import { matches } from "./keybindings";
@@ -57,6 +58,9 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const store = useViewStore();
   const slice = useFrameSlice(path);
   const bookmarks = useBookmarks();
+  // In diff mode, how many entrypoints reach this frame if the branch
+  // changed it; null otherwise. Carried on the element for the pinned header.
+  const blastCount = useBlastCount(frame.id);
   const [hast, setHast] = useState<HastRoot | null>(null);
   // Loaded child frames are component-local; the URL only persists the
   // intent (which calls are expanded with what choice).
@@ -1038,6 +1042,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       // Read by StickyHeaders to render the pinned call-chain stack.
       data-frame-title={frameTitle(frame)}
       data-frame-loc={`${frameLoc(frame)}:${frame.startLine}`}
+      data-frame-blast={blastCount ?? undefined}
     >
       <header className="frame-header">
         <button
@@ -1074,6 +1079,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             {frame.diff.status}
           </span>
         )}
+        {frame.diff && frame.diff.status !== "unchanged" && <BlastBadge frame={frame} />}
         {!frame.id.startsWith("file:") && (
           <button
             type="button"

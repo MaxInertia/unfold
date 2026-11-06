@@ -87,18 +87,37 @@ export function parseExpand(entry: string): string[] {
 // retry.Do. "#n" picks the nth match when a function is called more than
 // once in the body.
 export function findCall(calls: CallSite[], name: string): CallSite | undefined {
+  return findCallChoice(calls, name)?.call;
+}
+
+// findCall plus which implementation to open: an interface call names its
+// method at the site ("lister.Functions") and its implementations only as
+// candidates, so an author naming one of those — "indexer.Indexer.Functions"
+// — picks that candidate rather than whichever is first.
+export function findCallChoice(
+  calls: CallSite[],
+  name: string,
+): { call: CallSite; choice: number } | undefined {
   const m = name.match(/^(.*?)#(\d+)$/);
   const want = m ? m[1].trim() : name.trim();
   const nth = m ? Math.max(1, Number(m[2])) : 1;
-  const matching = calls.filter((c) => callMatches(c, want));
+  const matching: { call: CallSite; choice: number }[] = [];
+  for (const c of calls) {
+    const choice = callChoice(c, want);
+    if (choice !== null) matching.push({ call: c, choice });
+  }
   return matching[nth - 1];
 }
 
-function callMatches(c: CallSite, name: string): boolean {
+// The candidate index the name picks at this site, 0 when it names the site
+// itself, null when it names neither.
+function callChoice(c: CallSite, name: string): number | null {
   const shown = c.displayName;
-  if (shown === name) return true;
-  if (name.endsWith("." + shown) || shown.endsWith("." + name)) return true;
-  return !!c.targetId && symbolMatches(c.targetId, name);
+  if (shown === name) return 0;
+  if (name.endsWith("." + shown) || shown.endsWith("." + name)) return 0;
+  if (c.targetId && symbolMatches(c.targetId, name)) return 0;
+  const i = (c.candidates ?? []).findIndex((cand) => symbolMatches(cand.targetId, name));
+  return i >= 0 ? i : null;
 }
 
 // Whether a full name as the Go engine keys it — "path/to/pkg.Func",
@@ -136,11 +155,12 @@ export async function buildTree(
   // Bodies fetched while walking, so two paths through the same call don't
   // fetch it twice.
   const bodies = new Map<string, Promise<Frame>>();
-  const bodyOf = (callId: CallID) => {
-    let p = bodies.get(callId);
+  const bodyOf = (callId: CallID, choice: number) => {
+    const key = `${callId}#${choice}`;
+    let p = bodies.get(key);
     if (!p) {
-      p = fetchBody(callId, 0);
-      bodies.set(callId, p);
+      p = fetchBody(callId, choice);
+      bodies.set(key, p);
     }
     return p;
   };
@@ -151,21 +171,26 @@ export async function buildTree(
     let frame = root;
     let slice = tree;
     for (let i = 0; i < steps.length; i++) {
-      const call = findCall(frame.calls, steps[i]);
-      if (!call) {
+      const found = findCallChoice(frame.calls, steps[i]);
+      if (!found) {
         missing.push(entry);
         break;
       }
+      const { call, choice } = found;
+      // One site opens one implementation: a later path naming another
+      // candidate at the same site takes it over, the last word wins.
       let child = slice.expansions[call.id];
       if (!child) {
-        child = { folds: [], expansions: {}, choice: 0 };
+        child = { folds: [], expansions: {}, choice };
         slice.expansions[call.id] = child;
+      } else if (child.choice !== choice) {
+        child.choice = choice;
       }
       slice = child;
       // Only fetch the body if there is a further step to find inside it.
       if (i < steps.length - 1) {
         try {
-          frame = await bodyOf(call.id);
+          frame = await bodyOf(call.id, choice);
         } catch {
           missing.push(entry);
           break;

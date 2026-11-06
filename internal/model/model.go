@@ -732,6 +732,35 @@ type Engine interface {
 	Usages(id TargetID) ([]Usage, error)
 }
 
+// Entrypoint is a place execution starts: a route handler or RPC
+// implementation (an inbound binding's target), main, or an init function or
+// package-level initializer. Kind names which; Key carries the route or RPC
+// for the bound ones, so a list of entrypoints reads as a list of ways in.
+type Entrypoint struct {
+	ID    TargetID `json:"id"`
+	Title string   `json:"title"`
+	Kind  string   `json:"kind"`
+	Key   string   `json:"key,omitempty"`
+	File  string   `json:"file,omitempty"`
+	Line  int      `json:"line,omitempty"`
+}
+
+// EntrypointLister is implemented by engines that know where execution
+// starts, so "what has to run for this code to run" can be asked of any
+// function. The blast radius of a change is that question asked of every
+// function the change touched.
+type EntrypointLister interface {
+	Entrypoints() []Entrypoint
+}
+
+// FunctionLister is implemented by engines that can enumerate the functions
+// of the project's own code (not its dependencies) in source order, in the
+// shape a search hit has. Diff mode uses it to find every function a branch
+// changed without the reader having to open each one.
+type FunctionLister interface {
+	Functions() []SearchResult
+}
+
 // RuleInfo describes one recognizer for display: what it is, whether it's on,
 // where it came from, and how much it actually matched.
 type RuleInfo struct {

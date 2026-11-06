@@ -54,6 +54,10 @@ type Tour struct {
 	// something the reader sees and can fix, not something that silently
 	// isn't there.
 	Error string `json:"error,omitempty"`
+	// Generated marks a tour the server built rather than read from a file —
+	// the diff tour — so a client knows there is no file to point at and
+	// nothing to edit.
+	Generated bool `json:"generated,omitempty"`
 }
 
 // tourFile is the on-disk shape: everything in Tour that is content rather

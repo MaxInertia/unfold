@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { fetchBodyByCall, fetchFiles, fetchSymbol, fetchTours } from "./api";
 import { currentSettings } from "./settings";
 import { speak, stopSpeaking, stopSpeechText } from "./speech";
@@ -16,7 +16,13 @@ import { useViewStore } from "./viewState";
 
 export interface TourState {
   loaded: boolean;
+  // Every tour on offer: the generated diff tour first when there is one,
+  // then the files on disk.
   tours: Tour[];
+  // The two sources tours come from, kept apart so either can be refreshed
+  // without re-reading the other.
+  diskTours: Tour[];
+  generated: Tour | null;
   dir: string;
   // The tour being followed, by name, and the stop the reader is on. -1 is
   // "not started": the tour is picked but nothing has been opened yet, so
@@ -36,6 +42,8 @@ export interface TourState {
 let state: TourState = {
   loaded: false,
   tours: [],
+  diskTours: [],
+  generated: null,
   dir: "",
   active: null,
   index: -1,
@@ -112,36 +120,62 @@ let loadedOnce = false;
 export function loadTours(): Promise<void> {
   return fetchTours()
     .then(({ tours, dir }) => {
-      let { active, index } = state;
       if (!loadedOnce) {
         loadedOnce = true;
         set({ dir });
         const saved = loadPosition();
-        if (saved) ({ active, index } = saved);
+        if (saved) set({ active: saved.active, index: saved.index });
       }
-      const stillThere = active !== null && tours.some((t) => t.name === active);
-      if (!stillThere) {
-        // One tour and nothing picked: it's the tour. Picking is not
-        // opening, so the view is untouched.
-        active = tours.length === 1 ? tours[0].name : null;
-        index = -1;
-      }
-      const before = activeTour();
-      set({ loaded: true, tours, dir, active, index });
-      const after = activeTour();
-      // Re-resolve when the active tour changed identity or content; a
-      // rewrite of the file is a new updatedAt.
-      if (!after) {
-        set({ resolved: {} });
-      } else if (!before || before.name !== after.name || before.updatedAt !== after.updatedAt) {
-        if (index >= after.stops.length) set({ index: -1 });
-        resolveAll();
-      }
-      savePosition();
+      applyTours(tours, state.generated, dir);
     })
     .catch(() => {
       set({ loaded: true });
     });
+}
+
+// The generated diff tour comes from a different endpoint on a different
+// cadence (it changes with the index, not with the tours directory), so it
+// is set from outside and merged here. Null withdraws it — diff mode off, or
+// the server stopped answering.
+export function setGeneratedTour(tour: Tour | null) {
+  if (tour === state.generated) return;
+  applyTours(state.diskTours, tour, state.dir);
+}
+
+// Install a new tour list from its two sources, keeping the reader's pick
+// when it still exists and re-resolving when the picked tour changed.
+function applyTours(disk: Tour[], generated: Tour | null, dir: string) {
+  const tours = mergeTours(disk, generated);
+  let { active, index } = state;
+  const stillThere = active !== null && tours.some((t) => t.name === active);
+  if (!stillThere) {
+    // One tour and nothing picked: it's the tour. Picking is not
+    // opening, so the view is untouched.
+    active = tours.length === 1 ? tours[0].name : null;
+    index = -1;
+  }
+  const before = activeTour();
+  set({ loaded: true, tours, diskTours: disk, generated, dir, active, index });
+  const after = activeTour();
+  // Re-resolve when the active tour changed identity or content; a
+  // rewrite of the file is a new updatedAt.
+  if (!after) {
+    set({ resolved: {} });
+  } else if (!before || before.name !== after.name || before.updatedAt !== after.updatedAt) {
+    if (index >= after.stops.length) set({ index: -1 });
+    resolveAll();
+  }
+  savePosition();
+}
+
+// The generated tour leads the list — it is about the branch you are on,
+// which is why you started unfold in diff mode — and a disk tour that
+// happens to share its name is kept rather than shadowed, since it is the
+// one someone wrote.
+export function mergeTours(disk: Tour[], generated: Tour | null): Tour[] {
+  if (!generated) return disk;
+  if (disk.some((t) => t.name === generated.name)) return disk;
+  return [generated, ...disk];
 }
 
 // A rebuilt index invalidates every target id a stop resolved to.
@@ -247,6 +281,13 @@ export function prevStop() {
 // next, so this waits on it rather than opening nothing.
 export function useTourDriver() {
   const store = useViewStore();
+  // Through a ref, not a dependency: the store's context value is rebuilt on
+  // every view change, and an effect keyed on it re-opened the current stop
+  // whenever the reader moved — re-rooting on a caller or an entrypoint
+  // snapped straight back to the stop. A stop opens on request (openSeq),
+  // not whenever the view happens to change.
+  const storeRef = useRef(store);
+  storeRef.current = store;
   const { openSeq, index, active } = useTours();
   useEffect(() => {
     if (openSeq === 0 || index < 0) return;
@@ -257,10 +298,10 @@ export function useTourDriver() {
     ensureResolved(index, stop).then((r) => {
       if (!alive) return;
       if (r.kind === "symbol") {
-        store.setView(r.targetId, r.tree);
+        storeRef.current.setView(r.targetId, r.tree);
         set({ focus: { file: r.file, line: r.line, seq: openSeq } });
       } else if (r.kind === "file") {
-        store.setSymbol(`file:${r.file}`);
+        storeRef.current.setSymbol(`file:${r.file}`);
         set({ focus: { file: r.file, line: r.line, seq: openSeq } });
       }
     });
@@ -269,7 +310,7 @@ export function useTourDriver() {
     };
     // `active` is a dependency so a stop opened right after switching tours
     // reads the new tour, not a stale closure over the old one.
-  }, [openSeq, index, active, store]);
+  }, [openSeq, index, active]);
 }
 
 // ---- what a frame renders ----

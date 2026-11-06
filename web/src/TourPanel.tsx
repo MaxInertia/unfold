@@ -63,8 +63,16 @@ export function TourPanel() {
       ) : (
         <>
           <div className="tour-head">
-            <div className="tour-title" title={`${s.dir}/${tour.name}.json`}>
+            <div
+              className="tour-title"
+              title={
+                tour.generated
+                  ? "generated from the index in diff mode — not a file, and it follows the branch"
+                  : `${s.dir}/${tour.name}.json`
+              }
+            >
               {tour.title || tour.name}
+              {tour.generated && <span className="tour-generated">generated</span>}
             </div>
             <TourNav index={s.index} total={tour.stops.length} />
           </div>

@@ -406,4 +406,56 @@ export interface Tour {
   updatedAt?: string;
   // Set when the file could not be read as a tour; stops is then empty.
   error?: string;
+  // The server built this tour rather than reading it from a file (the diff
+  // tour): nothing to point at on disk, nothing to edit.
+  generated?: boolean;
+}
+
+// ----- diff tour (mirrors internal/difftour) -----
+
+// A place execution starts: a route handler, main, init.
+export interface Entrypoint {
+  id: TargetID;
+  title: string;
+  kind: string; // "main", "init", "http.route", "grpc.method", ...
+  key?: string; // the route or RPC, for the bound kinds
+  file?: string;
+  line?: number;
+}
+
+// One way from an entrypoint to a changed function: the shortest call path,
+// inclusive at both ends.
+export interface DiffRoute extends Entrypoint {
+  path: TargetID[];
+}
+
+// One function the branch changed, with what reaches it.
+export interface DiffFunction {
+  id: TargetID;
+  title: string;
+  file: string;
+  line: number;
+  status: "added" | "modified";
+  added: number;
+  removed: number;
+  addedLines?: number[];
+  // A short name that resolves back to the function as a symbol or [[ref]].
+  symbol: string;
+  // Nearest first. Empty: nothing recognized as a way in leads here.
+  entrypoints: DiffRoute[];
+  expand?: string[];
+}
+
+// GET /api/diff/tour: the changed functions in execution order, and the same
+// facts rendered as a tour.
+export interface DiffTour {
+  base: string;
+  commit?: string;
+  entrypointsKnown: boolean;
+  functions: DiffFunction[];
+  unreached: number;
+  deleted: number;
+  // Short symbol for every id that appears in a path.
+  names: Record<TargetID, string>;
+  tour: Tour;
 }
