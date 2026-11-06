@@ -33,6 +33,7 @@ import { openRules } from "./rules";
 import { NoteCard, NoteComposer } from "./NotesUI";
 import { TourStopCard } from "./TourPanel";
 import { useTourStopCards, useTours, type TourStopCardInfo } from "./tours";
+import { errCountLabel, planErrFolds } from "./errFold";
 
 export interface FoldRange {
   start: number;
@@ -72,6 +73,13 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const [selection, setSelection] = useState<{ anchor: number; head: number } | null>(null);
   const [callersOpen, setCallersOpen] = useState(false);
   const settings = useSettings();
+  // "assume err == nil": the setting is the default, and the header toggle
+  // overrides it for this frame only. Kept as an override rather than a copy
+  // so a frame that was never toggled follows the setting when it changes.
+  const [assumeOverride, setAssumeOverride] = useState<boolean | null>(null);
+  const assumeErrNil = assumeOverride ?? settings.assumeErrNil;
+  // Error blocks the reader opened one at a time, by their `if` line index.
+  const [errOpen, setErrOpen] = useState<ReadonlySet<number>>(() => new Set());
   // A rebuilt index is a reason to refetch a body, not to throw the view away.
   const revision = useReloadRevision();
   const depth = path.length;
@@ -641,15 +649,113 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     );
   }
 
+  const lineCallsCache = useMemo(() => buildLineCalls(frame), [frame]);
+
+  // Lines that must stay on screen when error blocks fold: a tour stop or
+  // note card hangs off its line and would have no row to render after; an
+  // expanded call's child frame likewise; a selection is being acted on.
+  const pinnedLines = useMemo(() => {
+    const s = new Set<number>();
+    for (const idx of tourCardsByLine.keys()) s.add(idx);
+    for (const idx of notesByLine.keys()) s.add(idx);
+    if (tourFocus && tourFocus.file === frame.file) s.add(tourFocus.line - frame.startLine);
+    for (const [idx, calls] of lineCallsCache) {
+      if (calls.some((c) => slice.expansions[c.id] || isFanoutOpen(slice, c.id))) s.add(idx);
+    }
+    if (selection) {
+      const lo = Math.min(selection.anchor, selection.head);
+      const hi = Math.max(selection.anchor, selection.head);
+      for (let l = lo; l <= hi; l++) s.add(l);
+    }
+    return s;
+  }, [
+    tourCardsByLine,
+    notesByLine,
+    tourFocus,
+    frame.file,
+    frame.startLine,
+    lineCallsCache,
+    slice,
+    selection,
+  ]);
+
+  const errPlan = useMemo(
+    () => planErrFolds(assumeErrNil ? frame.errReturns : undefined, errOpen, pinnedLines),
+    [assumeErrNil, frame.errReturns, errOpen, pinnedLines],
+  );
+  const errBlockByStart = useMemo(
+    () => new Map((frame.errReturns ?? []).map((b) => [b.startLine, b] as const)),
+    [frame.errReturns],
+  );
+
+  function toggleAssumeErrNil() {
+    setAssumeOverride(!assumeErrNil);
+    // Either way the per-block overrides are stale: turning it on should
+    // fold everything again, and off has nothing left to open.
+    setErrOpen(new Set());
+  }
+
+  function openErrBlock(start: number) {
+    setErrOpen((prev) => new Set([...prev, start]));
+  }
+
+  function refoldErrBlock(start: number) {
+    setErrOpen((prev) => {
+      const next = new Set(prev);
+      next.delete(start);
+      return next;
+    });
+  }
+
   const lineAction = useMemo<(idx: number) => LineAction>(() => {
     return (idx: number): LineAction => {
       for (const [start, end] of slice.folds) {
         if (idx === start) return { kind: "fold-start", endLine: end };
         if (idx > start && idx <= end) return { kind: "skip" };
       }
+      // Hidden rows simply don't render — nothing shifts, so the rows that
+      // remain keep their line indices and tour cues still land.
+      if (errPlan.hidden.has(idx)) return { kind: "skip" };
       return { kind: "render" };
     };
-  }, [slice.folds]);
+  }, [slice.folds, errPlan]);
+
+  // The glyph that stands in for a folded error block, on its `if` line. An
+  // opened block gets a small handle to fold it again, so the one-at-a-time
+  // gesture works in both directions.
+  function renderLineTrailer(idx: number): ReactNode {
+    const folded = errPlan.glyphs.get(idx);
+    if (folded) {
+      const hiddenCount = folded.endLine - folded.startLine;
+      return (
+        <button
+          type="button"
+          className="err-fold-glyph"
+          onClick={() => openErrBlock(idx)}
+          title={
+            hiddenCount > 0
+              ? `error path folded (${hiddenCount} ${hiddenCount === 1 ? "line" : "lines"}) — click to show it`
+              : "error path — click to mark it open"
+          }
+        >
+          <span className="err-fold-arrow">⤷</span> err: {folded.summary}
+        </button>
+      );
+    }
+    if (assumeErrNil && errOpen.has(idx) && errBlockByStart.has(idx)) {
+      return (
+        <button
+          type="button"
+          className="err-fold-glyph err-fold-glyph--open"
+          onClick={() => refoldErrBlock(idx)}
+          title="fold this error path again"
+        >
+          <span className="err-fold-arrow">⤴</span>
+        </button>
+      );
+    }
+    return null;
+  }
 
   // Renderer hooks for hastRender.
   function renderCallSpan(
@@ -913,8 +1019,6 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
     return extras.length ? <Fragment key={`extras:${lineIdx}`}>{extras}</Fragment> : null;
   }
 
-  const lineCallsCache = useMemo(() => buildLineCalls(frame), [frame]);
-
   function renderLineGutter(lineIdx: number): ReactNode {
     const fileLineNum = frame.startLine + lineIdx;
     const selected = isLineSelected(lineIdx);
@@ -964,13 +1068,15 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       : addedSet
         ? (idx) => (addedSet.has(idx) ? "line-row--added" : undefined)
         : undefined;
-  // Compose diff tinting with range-note tinting.
+  // Compose diff tinting with range-note tinting and the muted `if` line of
+  // a folded error block.
   const lineClass: ((idx: number) => string | undefined) | undefined =
-    diffClass || notedLines.size > 0
+    diffClass || notedLines.size > 0 || errPlan.glyphs.size > 0
       ? (idx) => {
           const parts = [
             diffClass?.(idx),
             notedLines.has(idx) ? "line-row--noted" : undefined,
+            errPlan.glyphs.has(idx) ? "line-row--err-folded" : undefined,
           ].filter(Boolean);
           return parts.length ? parts.join(" ") : undefined;
         }
@@ -1134,6 +1240,30 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
             collapse all
           </button>
         )}
+        {/* Only offered where there is something to fold; a body with no
+            error returns would just gain a control that does nothing. */}
+        {(frame.errReturns?.length ?? 0) > 0 && (
+          <>
+            <button
+              type="button"
+              className={`frame-tool${assumeErrNil ? " frame-tool--on" : ""}`}
+              onClick={toggleAssumeErrNil}
+              aria-pressed={assumeErrNil}
+              title={
+                assumeErrNil
+                  ? "error-return blocks are folded to one-line glyphs — click to show them all"
+                  : "fold every `if err != nil { return … }` block to a one-line glyph so the happy path reads straight"
+              }
+            >
+              assume err == nil
+            </button>
+            {assumeErrNil && errPlan.folded > 0 && (
+              <span className="frame-err-count" title="click a ⤷ glyph to open one block">
+                {errCountLabel(errPlan.folded)}
+              </span>
+            )}
+          </>
+        )}
         {/* Only offered on an intermediate frame — one with something open
             inside it. Eliding a leaf would just be closing it. */}
         {hasOpenChildren && path.length > 0 && (
@@ -1190,6 +1320,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               renderFoldPlaceholder,
               lineAction,
               lineClass,
+              renderLineTrailer,
             })}
           </div>
         ) : (

@@ -77,6 +77,25 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       <div className="settings-section">
+        <div className="settings-section-title">reading</div>
+        <label className="settings-row">
+          <input
+            type="checkbox"
+            checked={settings.assumeErrNil}
+            onChange={(e) => updateSettings({ assumeErrNil: e.target.checked })}
+          />
+          <span className="settings-label">
+            assume err == nil
+            <span className="settings-desc">
+              fold every <code>if err != nil {"{"} return … {"}"}</code> block to a
+              one-line glyph so the happy path reads straight; each frame&apos;s
+              header can flip it for that frame
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div className="settings-section">
         <div className="settings-section-title">keyboard</div>
         {/* Rendered from the same registry the handlers match against, so
             this list is the app's actual behaviour rather than a description

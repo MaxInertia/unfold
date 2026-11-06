@@ -1780,6 +1780,63 @@ body.resizing {
   background: var(--call-bg);
 }
 
+/* A frame-tool that is a state, not an action: lit while on. */
+.frame-tool--on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--call-bg);
+}
+
+/* "assume err == nil": the header count and the per-block glyph. Both are
+   muted on purpose — the folded path is the thing the reader chose not to
+   look at, so it should not compete with the lines that remain. */
+.frame-err-count {
+  font-size: 0.75rem;
+  color: var(--muted);
+  /* Gives way before the location link does: a crowded header should lose
+     the count, not where the code lives. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.line-row--err-folded > .line {
+  opacity: 0.55;
+}
+
+.err-fold-glyph {
+  flex: none;
+  margin-left: 0.8em;
+  padding: 0 0.45em;
+  font: inherit;
+  font-size: 0.85em;
+  font-style: italic;
+  color: var(--muted);
+  background: rgba(127, 127, 127, 0.08);
+  border: 1px dashed transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: pre;
+}
+
+.err-fold-glyph:hover {
+  color: var(--fg);
+  border-color: var(--card-border);
+  background: rgba(127, 127, 127, 0.16);
+}
+
+.err-fold-glyph--open {
+  background: none;
+  opacity: 0.6;
+}
+
+.err-fold-arrow {
+  font-style: normal;
+  color: var(--goroutine-fg);
+}
+
 /* Recursive call sites — the target is already an ancestor frame in the
    view. Expansion stays possible (opt-in), but bulk "+1 level" skips them. */
 .call-site--recursive {

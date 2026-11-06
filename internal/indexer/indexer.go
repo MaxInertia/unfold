@@ -2053,15 +2053,26 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 		calls = append(calls, cs)
 	}
 	return &Frame{
-		ID:        id,
-		Title:     fi.title,
-		File:      startPos.Filename,
-		Language:  "go",
-		StartLine: startPos.Line,
-		EndLine:   endPos.Line,
-		Source:    string(src),
-		Calls:     calls,
+		ID:         id,
+		Title:      fi.title,
+		File:       startPos.Filename,
+		Language:   "go",
+		StartLine:  startPos.Line,
+		EndLine:    endPos.Line,
+		Source:     string(src),
+		Calls:      calls,
+		ErrReturns: errReturns(i.fset, typesInfoOf(fi), fi.body, startPos.Line),
 	}, nil
+}
+
+// typesInfoOf is fi.pkg.TypesInfo with the nil checks folded in: a function
+// from a package that failed to type-check still gets a frame, just one
+// where the error detector falls back to naming.
+func typesInfoOf(fi *funcInfo) *types.Info {
+	if fi.pkg == nil {
+		return nil
+	}
+	return fi.pkg.TypesInfo
 }
 
 // goTitle returns a short, display-friendly name for a function: "Func" for
@@ -2135,13 +2146,19 @@ func (i *Indexer) fileFrame(path string) (*Frame, error) {
 
 	i.mu.RLock()
 	var infos []*callInfo
+	var errRets []model.ErrReturn
 	for _, fi := range i.funcs {
 		if i.fset.Position(fi.node.Pos()).Filename != path {
 			continue
 		}
 		infos = append(infos, fi.calls...)
+		// File lines are 1-based and Source starts at line 1, so a base of 1
+		// puts the indices in the same 0-based row space the function frame
+		// uses.
+		errRets = append(errRets, errReturns(i.fset, typesInfoOf(fi), fi.body, 1)...)
 	}
 	i.mu.RUnlock()
+	sort.Slice(errRets, func(a, b int) bool { return errRets[a].StartLine < errRets[b].StartLine })
 
 	sort.Slice(infos, func(a, b int) bool { return infos[a].pos < infos[b].pos })
 	calls := make([]CallSite, 0, len(infos))
@@ -2160,14 +2177,15 @@ func (i *Indexer) fileFrame(path string) (*Frame, error) {
 	}
 
 	return &Frame{
-		ID:        TargetID("file:" + path),
-		Title:     filepath.Base(path),
-		File:      path,
-		Language:  "go",
-		StartLine: 1,
-		EndLine:   1 + strings.Count(string(buf), "\n"),
-		Source:    string(buf),
-		Calls:     calls,
+		ID:         TargetID("file:" + path),
+		Title:      filepath.Base(path),
+		File:       path,
+		Language:   "go",
+		StartLine:  1,
+		EndLine:    1 + strings.Count(string(buf), "\n"),
+		Source:     string(buf),
+		Calls:      calls,
+		ErrReturns: errRets,
 	}, nil
 }
 

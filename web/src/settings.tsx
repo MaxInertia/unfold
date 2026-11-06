@@ -17,6 +17,10 @@ export interface Settings {
   // or a configured voice). Off by default: a voice that starts unasked is
   // a surprise.
   tourReadAloud: boolean;
+  // Open every frame with its error-return blocks folded (the `if err !=
+  // nil { return … }` shapes), so the happy path reads straight. Each
+  // frame's header can still flip it for that frame alone.
+  assumeErrNil: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -24,6 +28,7 @@ const DEFAULTS: Settings = {
   depthRuler: false,
   indentMode: "rails",
   tourReadAloud: false,
+  assumeErrNil: false,
 };
 
 const KEY = "unfold.settings";

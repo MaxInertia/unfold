@@ -68,6 +68,24 @@ type Frame struct {
 	// same function in the configured diff base (see --diff-base). Attached by
 	// the server only when a base engine is loaded. Nil = diff mode off.
 	Diff *FrameDiff `json:"diff,omitempty"`
+	// ErrReturns lists the `if err != nil { … }` blocks in Source whose body
+	// only bails out — returns, wraps-and-returns, logs-and-returns, panics.
+	// A reader skips these mentally; the frontend can fold them in one go so
+	// the happy path reads straight. Go only; nil for other languages.
+	ErrReturns []ErrReturn `json:"errReturns,omitempty"`
+}
+
+// ErrReturn is one error-return block in a Frame's Source.
+type ErrReturn struct {
+	// StartLine and EndLine are 0-based indices into Source: the `if` line and
+	// the closing-brace line. The same space FrameDiff.AddedLines uses, so the
+	// frontend hides rows by index without re-deriving file lines.
+	StartLine int `json:"startLine"`
+	EndLine   int `json:"endLine"`
+	// Summary says what the block does on the error path, short enough to sit
+	// at the end of the `if` line: `returns nil, err`, `wraps "open config"`,
+	// `logs, returns err`, `panics`.
+	Summary string `json:"summary"`
 }
 
 // FrameDiff annotates a Frame with how it differs from the diff base.
