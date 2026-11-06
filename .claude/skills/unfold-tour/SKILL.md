@@ -115,9 +115,76 @@ If the server is running you can check resolution with
 carries an `error`. `POST /api/tours` with a body that includes `name`
 also writes a tour, for when the file system is not reachable.
 
+## Diff story: a branch's changes, told in execution order
+
+Use this when the user wants to review a branch, a PR, or "what you just
+changed" — anything where the reading order should be the order the code
+runs in, not the order the files sort in. unfold's diff mode already
+computes that: for every function the branch changed, which entrypoints
+reach it and the call path from each. The server supplies the ordered
+cast; you write the narrative.
+
+1. Run unfold in diff mode against the base the PR targets, and note the
+   port it prints:
+
+   ```
+   unfold --no-open --diff-base main
+   ```
+
+   (Diff mode is Go-only, and it diffs against the merge-base, so fetch
+   the base ref first.)
+
+2. Fetch the skeleton. It is a complete tour file with the prose left out:
+   the changed functions as stops in execution order, each `expand` set to
+   the changed functions it leads to, and a `[[line:+a-b]]` cue placeholder
+   on every changed line range of a modified function. A function new on
+   the branch has no placeholder — all of it is new.
+
+   ```
+   curl -s 'localhost:<port>/api/diff/tour?format=skeleton' > .unfold/tours/<name>.json
+   ```
+
+   Read the full `GET /api/diff/tour` too if you want the facts behind the
+   order — per function, its entrypoints (kind, route, path) and +/− line
+   counts — but don't paste them into the descriptions: the **Changes vs
+   `<base>`** tour the tour tab already shows is those facts. Yours is the
+   story.
+
+3. Write the title and description: what the branch sets out to do, in a
+   sentence or two.
+
+4. Write each stop's description as a step in the story — **why** this
+   place changed, then **what** to notice — keeping the cue placeholders
+   and putting each right before the words about those lines:
+
+   ```json
+   { "symbol": "server.Server.handleDiffTour",
+     "expand": ["server.Server.diffTourCached"],
+     "description": "The one endpoint behind both features. It only has an answer in diff mode, so [[line:+5-8]] it refuses with the flag to pass rather than returning an empty list that reads as \"nothing changed\". The work is in [[server.Server.diffTourCached]], opened below." }
+   ```
+
+   `[[Name]]` refs for the functions a stop hands off to; `[[at:text]]`
+   when a cue should follow a line's text rather than its offset (the
+   placeholders are offsets, which is fine for a tour written and read on
+   the same commit). Trim: a 30-function branch does not need 30 stops.
+   Drop the stops whose story is "and this helper, too" — the `expand` on
+   the stop above already opens them — and keep the ones where a decision
+   was made. Reorder only if the execution order misleads (a helper listed
+   under the first entrypoint that happens to reach it, when it belongs to
+   the second's story).
+
+5. Tell the user the tour is in the tour tab, next to the generated one.
+
+A worked example — this recipe applied to the branch that added diff tours
+to unfold, skeleton from `?format=skeleton`, narrative written by hand — is
+[`docs/examples/diff-story-diff-tour.json`](../../../docs/examples/diff-story-diff-tour.json).
+Copy it into `.unfold/tours/` with the unfold repo open in diff mode against
+`main` to see it play.
+
 ## Keep or discard
 
 Tours are plain files meant to be committable, like notes. Commit a tour
 when it documents something durable (how a subsystem works). Leave it
 uncommitted, or delete it after the review, when it was a one-off walk
-through a change.
+through a change. A diff story is usually the second kind: it is about one
+branch, and it goes stale the moment the branch merges.

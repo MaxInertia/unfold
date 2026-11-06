@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -117,6 +118,29 @@ func TestDiffTourEndpoint(t *testing.T) {
 			t.Errorf("stop %q resolved to %q", s.Symbol, f.ID)
 		}
 	}
+
+	t.Run("skeleton for an author", func(t *testing.T) {
+		res, err := http.Get(ts.URL + "/api/diff/tour?format=skeleton")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var sk tours.Tour
+		if err := json.NewDecoder(res.Body).Decode(&sk); err != nil {
+			t.Fatal(err)
+		}
+		if sk.Title != "" || sk.Description != "" || sk.Generated || len(sk.Stops) != 2 {
+			t.Fatalf("skeleton: %+v", sk)
+		}
+		for _, s := range sk.Stops {
+			if s.Symbol == "server.Server.handleHealth" && !strings.HasPrefix(s.Description, "[[line:+") {
+				t.Errorf("modified stop should carry a cue placeholder, got %q", s.Description)
+			}
+			if s.Symbol == "server.Server.handleDiffTour" && s.Description != "" {
+				t.Errorf("added stop should have an empty description, got %q", s.Description)
+			}
+		}
+	})
 
 	t.Run("recomputed after a reload", func(t *testing.T) {
 		srv.SetDiffer(diff.New(idx)) // the base now matches head exactly

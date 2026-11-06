@@ -1,0 +1,148 @@
+{
+  "title": "Diff as a tour: how a branch's changes become a reading",
+  "description": "This branch adds one computation — for every function the branch changed, which entrypoints reach it and by what path — and reads it two ways: a generated tour in execution order, and a blast-radius count on a changed frame's header. Read it the way a request does: the endpoint, then down into the diff, the reach, and the tour it renders; then the small wiring in main. The generated \"Changes vs origin/main\" tour next to this one lists all 31 functions with the facts; this is the story.",
+  "stops": [
+    {
+      "symbol": "server.Server.handleDiffTour",
+      "expand": [
+        "server.Server.diffTourCached",
+        "server.Server.diffTourCached > diff.Differ.Changed",
+        "server.Server.diffTourCached > diff.Differ.Changed > engine.Reloadable.Functions",
+        "server.Server.diffTourCached > diff.Differ.Changed > indexer.Indexer.Functions",
+        "server.Server.diffTourCached > diff.Differ.Changed > workspace.Workspace.Functions",
+        "server.Server.diffTourCached > difftour.Compute",
+        "server.Server.diffTourCached > difftour.Compute > difftour.newGraph",
+        "server.Server.diffTourCached > difftour.Compute > engine.Reloadable.Entrypoints",
+        "server.Server.diffTourCached > difftour.Compute > indexer.Indexer.Entrypoints",
+        "server.Server.diffTourCached > difftour.Compute > workspace.Workspace.Entrypoints",
+        "server.Server.diffTourCached > difftour.Compute > difftour.ShortName",
+        "server.Server.diffTourCached > difftour.Compute > difftour.routesTo",
+        "server.Server.diffTourCached > difftour.Compute > difftour.routesTo > difftour.graph.callers",
+        "server.Server.diffTourCached > difftour.Compute > difftour.graph.callees",
+        "server.Server.diffTourCached > difftour.Compute > difftour.expandFrom",
+        "server.Server.diffTourCached > difftour.Tour",
+        "server.Server.diffTourCached > difftour.Tour > difftour.plural",
+        "server.Server.diffTourCached > difftour.Tour > difftour.shortCommit",
+        "server.Server.diffTourCached > difftour.Tour > difftour.them",
+        "server.Server.diffTourCached > difftour.Tour > difftour.isAre",
+        "server.Server.diffTourCached > difftour.Tour > difftour.describe",
+        "server.Server.diffTourCached > difftour.Tour > difftour.describe > difftour.entryLabel"
+      ],
+      "description": "Both features must never disagree about what reaches what, so there is one endpoint and one answer behind it. [[at:if s.differ == nil]] Without a base there is no \"changed\", and an empty list would read as \"nothing changed\" — so it refuses, with the flag to pass. The work is in [[server.Server.diffTourCached]], opened below with everything it reaches."
+    },
+    {
+      "symbol": "server.Server.diffTourCached",
+      "expand": [
+        "diff.Differ.Changed",
+        "diff.Differ.Changed > engine.Reloadable.Functions",
+        "diff.Differ.Changed > indexer.Indexer.Functions",
+        "diff.Differ.Changed > workspace.Workspace.Functions",
+        "difftour.Compute",
+        "difftour.Compute > difftour.newGraph",
+        "difftour.Compute > engine.Reloadable.Entrypoints",
+        "difftour.Compute > indexer.Indexer.Entrypoints",
+        "difftour.Compute > workspace.Workspace.Entrypoints",
+        "difftour.Compute > difftour.ShortName",
+        "difftour.Compute > difftour.routesTo",
+        "difftour.Compute > difftour.routesTo > difftour.graph.callers",
+        "difftour.Compute > difftour.graph.callees",
+        "difftour.Compute > difftour.expandFrom",
+        "difftour.Tour",
+        "difftour.Tour > difftour.plural",
+        "difftour.Tour > difftour.shortCommit",
+        "difftour.Tour > difftour.them",
+        "difftour.Tour > difftour.isAre",
+        "difftour.Tour > difftour.describe",
+        "difftour.Tour > difftour.describe > difftour.entryLabel"
+      ],
+      "description": "Listing the changed set reads every function of the project on both sides, so the answer is computed once per index and dropped on reload (see [[server.Server.NotifyReload]], near the end). [[at:changes, deleted, err := s.differ.Changed(s.engine)]] Three steps: what changed, what reaches it, how to say it."
+    },
+    {
+      "symbol": "diff.Differ.Changed",
+      "expand": [
+        "engine.Reloadable.Functions",
+        "indexer.Indexer.Functions",
+        "workspace.Workspace.Functions"
+      ],
+      "description": "The differ already compared one frame with its twin in the base engine; what it couldn't do was enumerate. [[at:lister, ok := head.(model.FunctionLister)]] A new optional engine interface supplies the list, and identity stays the package-qualified target id, which is why the two engines can be rooted in different directories. [[at:if bl, ok := d.base.(model.FunctionLister); ok]] A function the base had and head doesn't is counted, not listed: there is nothing to open."
+    },
+    {
+      "symbol": "indexer.Indexer.Functions",
+      "description": "The indexer's half of that interface: its own functions with a body, in source order, labelled by display title. [[at:if fi.body == nil || !i.ownsCode(fi)]] Ownership is by path, so vendored and stdlib code — loaded for resolution — can never show up as changed."
+    },
+    {
+      "symbol": "diff.lineDiff",
+      "description": "The LCS that marked added lines now reports the removed side too, for the +N −M in a stop's description. [[at:if n*m > lineDiffCap]] The cap moved from 3000 cells — about 55 lines a side, so most handlers reported no counts at all — to a million."
+    },
+    {
+      "symbol": "difftour.Compute",
+      "expand": [
+        "difftour.newGraph",
+        "engine.Reloadable.Entrypoints",
+        "indexer.Indexer.Entrypoints",
+        "workspace.Workspace.Entrypoints",
+        "difftour.ShortName",
+        "difftour.routesTo",
+        "difftour.routesTo > difftour.graph.callers",
+        "difftour.graph.callees",
+        "difftour.expandFrom"
+      ],
+      "description": "The heart of it. [[at:onPath := map[model.TargetID]bool{}]] Backwards first: from every change, walk callers until entrypoints are met, recording the shortest path from each. [[at:sort.SliceStable(order]] The entrypoint reaching the most changes tells its story first. [[at:walk = func(id model.TargetID)]] Then forwards from each entrypoint, callees in call order, staying on the paths found — a change is listed where it is first met, and the ones nothing reaches close the list."
+    },
+    {
+      "symbol": "indexer.Indexer.Entrypoints",
+      "description": "Where execution starts, named for a reader. [[at:case fi.pkg != nil && fi.pkg.Name == \"main\"]] Narrower on purpose than the reachability seeds, which count every function of a main package so that no RPC is missed: here main is the way in, and its helpers are reached through it rather than being ways in of their own."
+    },
+    {
+      "symbol": "difftour.routesTo",
+      "expand": [
+        "difftour.graph.callers"
+      ],
+      "description": "A plain BFS over callers with parent pointers; entrypoints are collected in the order met, so the nearest is first and its path is the shortest. [[difftour.graph.callers]] is opened below: [[at:u.Kind == model.UsageRef]] a value reference is not followed, because a function passed as a callback has no call site and a chain through one isn't an execution path — the same line the callers tree draws."
+    },
+    {
+      "symbol": "difftour.graph.callees",
+      "description": "Forwards reads Frame.Calls in source order, so the tour visits callees the way the code does. [[at:for _, cand := range c.Candidates]] Interface candidates and fan-out receivers all count, mirroring the reverse index routesTo walks. If the two ever disagreed a change could be found backwards and never emitted forwards; [[difftour.Compute]] keeps a fallback for exactly that."
+    },
+    {
+      "symbol": "difftour.expandFrom",
+      "description": "A stop should show the change in the context it runs in, so each stop pre-expands the other changed functions whose nearest path passes through it, written as the path from here on — the same `a > b` an author writes. [[at:path := f.Routes[0].Path]] Nearest paths only; expanding every route would open one function several times."
+    },
+    {
+      "symbol": "difftour.Tour",
+      "expand": [
+        "difftour.plural",
+        "difftour.shortCommit",
+        "difftour.them",
+        "difftour.isAre",
+        "difftour.describe",
+        "difftour.describe > difftour.entryLabel"
+      ],
+      "description": "The facts rendered as a tour. [[at:Name:      \"diff:\" + base]] The name can't be a file — \":\" and \"/\" aren't allowed in one — so it never shadows a tour someone wrote. [[difftour.describe]], opened below, writes each stop from what is known: the kind and size of the change, the nearest entrypoint and the hops, what opens below."
+    },
+    {
+      "symbol": "cli.main",
+      "expand": [
+        "server.Server.SetDiffBase",
+        "server.Server.Handler",
+        "server.Server.NotifyReload"
+      ],
+      "description": "[[line:+61]] The merge-base commit is kept alongside the differ, [[line:+76]] so the tour can say what \"changes\" are relative to, [[line:+94]] and handed to the server next to the differ it already had. Nothing else in the launch path changed."
+    },
+    {
+      "symbol": "server.Server.NotifyReload",
+      "description": "[[line:+0-5]] The diff tour was computed against the previous index, so a rebuild drops the cache before telling the page to reload; the next request recomputes and the page refetches."
+    },
+    {
+      "symbol": "diff.Differ.Annotate",
+      "expand": [
+        "diff.lineDiff"
+      ],
+      "description": "[[line:+17]] Annotate keeps doing what it did — the per-line highlight — now reading the head side of [[diff.lineDiff]]; [[line:+20]] nothing a frame showed before changed."
+    },
+    {
+      "symbol": "diff.addedLines",
+      "description": "[[line:+1]] Kept as a one-line wrapper so the tests that pin the highlight behaviour still read the same. It is the last stop because nothing reaches it from an entrypoint — only tests call it — which the generated tour says outright."
+    }
+  ]
+}

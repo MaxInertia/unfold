@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/MaxInertia/unfold/internal/difftour"
@@ -42,6 +43,17 @@ func (s *Server) handleDiffTour(w http.ResponseWriter, r *http.Request) {
 	c, err := s.diffTourCached()
 	if err != nil {
 		writeError(w, http.StatusNotImplemented, err.Error())
+		return
+	}
+	// ?format=skeleton is for an author: the stops in order with cue
+	// placeholders and no prose, indented so it can go straight into a file
+	// (`curl … > .unfold/tours/story.json`) and be edited by hand.
+	if r.URL.Query().Get("format") == "skeleton" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(difftour.Skeleton(c.reach, s.diffBase))
 		return
 	}
 	writeJSON(w, http.StatusOK, diffTourResponse{
