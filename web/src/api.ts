@@ -286,9 +286,18 @@ export async function fetchVoiceProviders(): Promise<VoiceProvider[]> {
   return res.providers ?? [];
 }
 
+// A synthesized utterance: the audio, and when each character of the text
+// is spoken — alignment[i] is the start, in ms into the audio, of text[i]
+// (the server already spreads it over UTF-16 units) — or null when the
+// voice gave no timing and progress has to be estimated.
+export interface Synthesized {
+  blob: Blob;
+  alignment: number[] | null;
+}
+
 // Synthesize text in a server voice. The audio is cached server-side by
 // content, so asking twice is cheap; the browser cache holds it too.
-export async function synthesize(provider: string, voice: string, text: string): Promise<Blob> {
+export async function synthesize(provider: string, voice: string, text: string): Promise<Synthesized> {
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -304,5 +313,20 @@ export async function synthesize(provider: string, voice: string, text: string):
     }
     throw new Error(msg);
   }
-  return res.blob();
+  return { blob: await res.blob(), alignment: parseAlignment(res.headers.get("X-Alignment")) };
+}
+
+// The X-Alignment header as the server writes it: a JSON array of
+// non-decreasing integers. Anything else is no alignment, not an error —
+// the audio is still good, the highlight just estimates.
+export function parseAlignment(header: string | null): number[] | null {
+  if (!header) return null;
+  try {
+    const parsed = JSON.parse(header);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    if (!parsed.every((v) => typeof v === "number" && Number.isFinite(v))) return null;
+    return parsed as number[];
+  } catch {
+    return null;
+  }
 }

@@ -80,6 +80,18 @@ describe("resolveCue", () => {
     expect(resolveCue(parseCue("at:nowhere") as any, frame)).toBeNull();
     expect(resolveCue(parseCue("at:a()") as any, { anchor: 10 })).toBeNull();
   });
+  test("a file stop: at counts from the file's first line, +N from the stop's", () => {
+    // The whole file is the source; the stop is on line 3.
+    const file = { anchor: 3, sourceLine: 1, source: frame.source };
+    expect(resolveCue(parseCue("at:return nil") as any, file)).toEqual({
+      line: 3,
+    });
+    expect(resolveCue(parseCue("at:func f") as any, file)).toEqual({ line: 1 });
+    expect(resolveCue(parseCue("line:+1") as any, file)).toEqual({
+      line: 4,
+      end: undefined,
+    });
+  });
 });
 
 test("cueLabel", () => {

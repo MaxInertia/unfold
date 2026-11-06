@@ -27,7 +27,15 @@ export type ResolvedStop =
       // part of the stop it couldn't do rather than quietly showing less.
       missing: string[];
     }
-  | { kind: "file"; file: string; line: number }
+  | {
+      kind: "file";
+      file: string;
+      line: number;
+      // The whole-file frame, when the server could give it: what an "at:"
+      // cue searches and a [[Name]] ref lands in. Absent, line cues still
+      // work and the view fetches the file itself when the stop opens.
+      frame?: Frame;
+    }
   | { kind: "unresolved"; reason: string };
 
 const emptySlice: FrameSlice = { folds: [], expansions: {} };
@@ -56,7 +64,10 @@ export async function resolveStop(stop: TourStop, r: Resolvers): Promise<Resolve
     const files = await r.fetchFiles().catch(() => [] as string[]);
     const abs = matchFile(files, stop.file);
     if (!abs) return { kind: "unresolved", reason: `no indexed file matches "${stop.file}"` };
-    return { kind: "file", file: abs, line: stop.line ?? 1 };
+    // The file's frame is what the view opens for the stop anyway; fetched
+    // here so cues can be placed in it before (and whether or not) it opens.
+    const frame = await r.fetchSymbol(`file:${abs}`).catch(() => undefined);
+    return { kind: "file", file: abs, line: stop.line ?? 1, frame };
   }
   return { kind: "unresolved", reason: "stop names neither a symbol nor a file" };
 }

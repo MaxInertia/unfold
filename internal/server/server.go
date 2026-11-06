@@ -1018,6 +1018,15 @@ func (s *Server) handleTTS(w http.ResponseWriter, r *http.Request) {
 		if audio.Cached {
 			w.Header().Set("X-Cache", "hit")
 		}
+		// When the voice timed its words, the start of each character of the
+		// text in milliseconds, as a JSON array in a header — so the body
+		// stays plain audio the page can hand to an <audio> element as is.
+		// A stop's description is a paragraph; the array is a few KB at most.
+		if len(audio.Alignment) > 0 {
+			if b, err := json.Marshal(audio.Alignment); err == nil {
+				w.Header().Set("X-Alignment", string(b))
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(audio.Data)
 	default:

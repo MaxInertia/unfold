@@ -3,6 +3,7 @@ package tts
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -50,10 +52,36 @@ func stub(t *testing.T, synthCalls *int32) *httptest.Server {
 			_, _ = w.Write([]byte("upstream fell over"))
 			return
 		}
-		w.Header().Set("Content-Type", "audio/mpeg")
-		_, _ = w.Write([]byte("MP3:" + strings.TrimPrefix(r.URL.Path, "/v1/text-to-speech/") + ":" + body.Text))
+		// The timestamped endpoint answers JSON: the audio in base64 and when
+		// each character is spoken. Here every character takes a tenth of a
+		// second.
+		voice, ok := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/v1/text-to-speech/"), "/with-timestamps")
+		if !ok {
+			t.Errorf("path: got %q, want the with-timestamps endpoint", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"audio_base64": base64.StdEncoding.EncodeToString([]byte("MP3:" + voice + ":" + body.Text)),
+			"alignment":    stubAlignment(body.Text),
+		})
 	})
 	return httptest.NewServer(mux)
+}
+
+// stubAlignment times a text the way the stub speaks it: one character
+// every 100ms.
+func stubAlignment(text string) map[string]any {
+	var chars []string
+	var starts, ends []float64
+	for i, r := range []rune(text) {
+		chars = append(chars, string(r))
+		starts = append(starts, float64(i)/10)
+		ends = append(ends, float64(i+1)/10)
+	}
+	return map[string]any{
+		"characters":                    chars,
+		"character_start_times_seconds": starts,
+		"character_end_times_seconds":   ends,
+	}
 }
 
 func TestElevenLabs(t *testing.T) {
@@ -81,14 +109,51 @@ func TestElevenLabs(t *testing.T) {
 		}
 	})
 
-	t.Run("synth posts the text in the voice", func(t *testing.T) {
+	t.Run("synth posts the text in the voice and keeps the timing", func(t *testing.T) {
 		p := NewElevenLabs("k", ts.URL+"/v1")
-		data, ctype, err := p.Synth(ctx, "v1", "hello")
+		a, err := p.Synth(ctx, "v1", "hello")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ctype != "audio/mpeg" || string(data) != "MP3:v1:hello" {
-			t.Errorf("got %q %q", ctype, data)
+		if a.ContentType != "audio/mpeg" || string(a.Data) != "MP3:v1:hello" {
+			t.Errorf("got %q %q", a.ContentType, a.Data)
+		}
+		if want := []int{0, 100, 200, 300, 400}; !slices.Equal(a.Alignment, want) {
+			t.Errorf("alignment: got %v, want %v", a.Alignment, want)
+		}
+	})
+
+	t.Run("alignment is in the browser's string units", func(t *testing.T) {
+		// "a😀b": the emoji is one character to ElevenLabs and two UTF-16
+		// units to the page, so its time appears twice.
+		got := alignmentUnits([]string{"a", "😀", "b"}, []float64{0, 0.25, 0.5004})
+		if want := []int{0, 250, 250, 500}; !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+		// Mismatched lists: the shorter decides.
+		if got := alignmentUnits([]string{"a", "b"}, []float64{0}); !slices.Equal(got, []int{0}) {
+			t.Errorf("mismatch: got %v", got)
+		}
+		if got := alignmentUnits(nil, nil); len(got) != 0 {
+			t.Errorf("empty: got %v", got)
+		}
+	})
+
+	t.Run("a response without alignment is still audio", func(t *testing.T) {
+		plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"audio_base64": base64.StdEncoding.EncodeToString([]byte("MP3"))})
+		}))
+		defer plain.Close()
+		a, err := NewElevenLabs("k", plain.URL+"/v1").Synth(ctx, "v1", "hi")
+		if err != nil || string(a.Data) != "MP3" || a.Alignment != nil {
+			t.Errorf("got %+v, %v", a, err)
+		}
+		empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"alignment":null}`))
+		}))
+		defer empty.Close()
+		if _, err := NewElevenLabs("k", empty.URL+"/v1").Synth(ctx, "v1", "hi"); err == nil {
+			t.Error("no audio should be an error")
 		}
 	})
 }
@@ -227,7 +292,7 @@ func TestKeyNeverLeaks(t *testing.T) {
 		} else {
 			leaked("voices error", err.Error())
 		}
-		if _, _, err := p.Synth(context.Background(), "v1", "hi"); err == nil {
+		if _, err := p.Synth(context.Background(), "v1", "hi"); err == nil {
 			t.Fatal("expected a 401")
 		} else {
 			leaked("synth error", err.Error())
