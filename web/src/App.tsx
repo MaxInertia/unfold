@@ -11,7 +11,17 @@ import { NotesList } from "./NotesUI";
 import { TourPanel } from "./TourPanel";
 import { loadNotes } from "./notes";
 import { configureVoice } from "./speech";
-import { activeTour, loadTours, nextStop, prevStop, setTourRevision, useTourDriver, useTours } from "./tours";
+import {
+  activeTour,
+  loadTours,
+  nextStop,
+  prevStop,
+  setTourRevision,
+  speakCurrentStop,
+  togglePlayTour,
+  useTourDriver,
+  useTours,
+} from "./tours";
 import { ServiceView } from "./ServiceView";
 import { PlatformView } from "./PlatformView";
 import { ChannelIndex } from "./ChannelIndex";
@@ -25,7 +35,7 @@ import {
   type ServiceFilters,
 } from "./ZoomSidebar";
 import { repoOf, zoomIn, zoomOut } from "./zoom";
-import { inTextField, matches } from "./keybindings";
+import { inButton, inTextField, matches } from "./keybindings";
 import { fetchServiceView, fetchSymbol, search } from "./api";
 import type { Frame as FrameT, SearchResult, ServiceView as ServiceViewT } from "./types";
 import { ViewStoreProvider, useViewStore } from "./viewState";
@@ -325,6 +335,21 @@ function AppShell() {
           prevStop();
           return;
         }
+        // Space and backslash only with the tour tab showing, and not on a
+        // focused button, where space is already the click — the play
+        // button itself, after a mouse click, would otherwise toggle twice.
+        if (leftTab === "tour" && !inButton(e.target)) {
+          if (matches("tour.read", e)) {
+            e.preventDefault();
+            speakCurrentStop();
+            return;
+          }
+          if (matches("tour.playPause", e)) {
+            e.preventDefault();
+            togglePlayTour();
+            return;
+          }
+        }
       }
       if (matches("history.back", e)) {
         e.preventDefault();
@@ -342,7 +367,7 @@ function AppShell() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [platform, workspace, zoom, setZoom]);
+  }, [platform, workspace, zoom, setZoom, leftTab]);
 
 
 
@@ -470,7 +495,7 @@ function AppShell() {
                         type="button"
                         className={`tree-tab${leftTab === "tour" ? " tree-tab--active" : ""}`}
                         onClick={() => setSidebarTab("tour")}
-                        title="follow a guided reading list from .unfold/tours — [ and ] step through it"
+                        title="follow a guided reading list from .unfold/tours — [ and ] step through it; with the tab open, \ reads the stop and space plays the tour"
                       >
                         tour
                         {tourStopCount > 0 && <span className="tree-tab-count">{tourStopCount}</span>}

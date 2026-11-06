@@ -187,7 +187,7 @@ function SpeechRow({ index, playing }: { index: number; playing: boolean }) {
   return (
     <div className="tour-speech">
       <ReadAloudToggle />
-      <PlayStopButton index={index} className="tour-nav-btn" />
+      <PlayStopButton index={index} className="tour-nav-btn" keyHint="\" />
       <button
         type="button"
         className={`tour-nav-btn tour-nav-btn--play-tour${playing ? " tour-play--playing" : ""}`}
@@ -195,8 +195,8 @@ function SpeechRow({ index, playing }: { index: number; playing: boolean }) {
         aria-pressed={playing}
         title={
           playing
-            ? "stop playing the tour"
-            : "play the tour: narrate each stop and move on to the next"
+            ? "stop playing the tour  space"
+            : "play the tour: narrate each stop and move on to the next  space"
         }
       >
         {playing ? "■ stop" : "▶▶ play tour"}
@@ -255,24 +255,28 @@ function ReadAloudToggle() {
 }
 
 // Read one stop on demand; while it plays the same button stops it. Shown
-// for the current stop in the tour header and on every stop's card.
+// for the current stop in the tour header — where the key hint belongs,
+// since the key reads the current stop — and on every stop's card.
 function PlayStopButton({
   index,
   className,
+  keyHint,
 }: {
   index: number;
   className: string;
+  keyHint?: string;
 }) {
   const { speaking, available } = useSpeech();
   const playing = speaking?.key === speechKey(index);
   if (!available) return null;
+  const hint = keyHint ? `  ${keyHint}` : "";
   return (
     <button
       type="button"
       className={`${className}${playing ? " tour-play--playing" : ""}`}
       onClick={() => speakStop(index)}
       disabled={index < 0}
-      title={playing ? "stop reading" : "read this stop aloud"}
+      title={(playing ? "stop reading" : "read this stop aloud") + hint}
       aria-label={playing ? "stop reading" : "read this stop aloud"}
     >
       {playing ? "■" : "▶"}

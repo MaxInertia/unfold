@@ -3,14 +3,17 @@ package tts
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // ElevenLabs speaks through api.elevenlabs.io. Two calls: the account's
@@ -110,27 +113,67 @@ func (e *ElevenLabs) Voices(ctx context.Context) ([]Voice, error) {
 	return out, nil
 }
 
-func (e *ElevenLabs) Synth(ctx context.Context, voiceID, text string) ([]byte, string, error) {
+// Synth asks for the audio with timestamps: the same synthesis, answered
+// as JSON with the audio in base64 and when each character is spoken, so
+// the page's highlight can land on a name as it is said rather than guess
+// from how far along the audio is. The base64 costs a third more bytes on
+// the wire between us and ElevenLabs, nothing to the browser, which gets
+// the decoded audio and the times as a header.
+func (e *ElevenLabs) Synth(ctx context.Context, voiceID, text string) (Audio, error) {
 	if voiceID == "" {
-		return nil, "", fmt.Errorf("elevenlabs: a voice is required")
+		return Audio{}, fmt.Errorf("elevenlabs: a voice is required")
 	}
 	payload, _ := json.Marshal(map[string]any{"text": text, "model_id": e.Model})
-	u := fmt.Sprintf("%s/text-to-speech/%s?output_format=%s", e.BaseURL, url.PathEscape(voiceID), elevenFormat)
+	u := fmt.Sprintf("%s/text-to-speech/%s/with-timestamps?output_format=%s", e.BaseURL, url.PathEscape(voiceID), elevenFormat)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
 	if err != nil {
-		return nil, "", err
+		return Audio{}, err
 	}
 	req.Header.Set(keyHeader, e.key)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "audio/mpeg")
-	body, ctype, err := e.do(req)
+	req.Header.Set("Accept", "application/json")
+	body, _, err := e.do(req)
 	if err != nil {
-		return nil, "", err
+		return Audio{}, err
 	}
-	if ctype == "" {
-		ctype = "audio/mpeg"
+	var resp struct {
+		Audio     string `json:"audio_base64"`
+		Alignment *struct {
+			Characters []string  `json:"characters"`
+			Starts     []float64 `json:"character_start_times_seconds"`
+		} `json:"alignment"`
 	}
-	return body, ctype, nil
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return Audio{}, fmt.Errorf("elevenlabs synth: %w", err)
+	}
+	data, err := base64.StdEncoding.DecodeString(resp.Audio)
+	if err != nil || len(data) == 0 {
+		return Audio{}, fmt.Errorf("elevenlabs synth: no audio in the response")
+	}
+	// The format asked for is mp3 whatever the JSON envelope says.
+	a := Audio{Data: data, ContentType: "audio/mpeg"}
+	if resp.Alignment != nil {
+		a.Alignment = alignmentUnits(resp.Alignment.Characters, resp.Alignment.Starts)
+	}
+	return a, nil
+}
+
+// alignmentUnits spreads ElevenLabs' per-character start times over the
+// text's UTF-16 code units — the browser's index into the string it sent —
+// rounded to milliseconds. A character outside the BMP takes two units and
+// gets its start time twice. The two lists should be the same length; the
+// shorter wins if they aren't, since a time without a character (or the
+// reverse) places nothing.
+func alignmentUnits(chars []string, starts []float64) []int {
+	n := min(len(chars), len(starts))
+	out := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		ms := int(math.Round(starts[i] * 1000))
+		for range utf16.Encode([]rune(chars[i])) {
+			out = append(out, ms)
+		}
+	}
+	return out
 }
 
 // do runs the request and turns a non-2xx into an error carrying the

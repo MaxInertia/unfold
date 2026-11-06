@@ -1,5 +1,47 @@
 import { describe, expect, test } from "bun:test";
-import { spokenDescription, spokenName, stopSpeechText } from "./speech";
+import { parseAlignment } from "./api";
+import { charAtFraction, charAtTime, spokenDescription, spokenName, stopSpeechText } from "./speech";
+
+describe("charAtTime", () => {
+  // "hello" at 100ms a character.
+  const al = [0, 100, 200, 300, 400];
+  test("the last character that has started", () => {
+    expect(charAtTime(al, 0)).toBe(0);
+    expect(charAtTime(al, 99)).toBe(0);
+    expect(charAtTime(al, 100)).toBe(1);
+    expect(charAtTime(al, 250)).toBe(2);
+    expect(charAtTime(al, 400)).toBe(4);
+    expect(charAtTime(al, 9999)).toBe(4);
+  });
+  test("before the first character is the first", () => {
+    expect(charAtTime([500, 600], 0)).toBe(0);
+  });
+  test("a time shared by several units (an emoji's two) resolves to the last", () => {
+    expect(charAtTime([0, 250, 250, 500], 250)).toBe(2);
+  });
+});
+
+test("charAtFraction scales position to text length, and is 0 with no duration", () => {
+  expect(charAtFraction(2, 4, 100)).toBe(50);
+  expect(charAtFraction(4, 4, 100)).toBe(100);
+  expect(charAtFraction(5, 4, 100)).toBe(100);
+  expect(charAtFraction(1, 0, 100)).toBe(0);
+  expect(charAtFraction(1, NaN, 100)).toBe(0);
+});
+
+describe("parseAlignment", () => {
+  test("the header as the server writes it", () => {
+    expect(parseAlignment("[0,100,200]")).toEqual([0, 100, 200]);
+  });
+  test("anything else is no alignment", () => {
+    expect(parseAlignment(null)).toBeNull();
+    expect(parseAlignment("")).toBeNull();
+    expect(parseAlignment("[]")).toBeNull();
+    expect(parseAlignment("not json")).toBeNull();
+    expect(parseAlignment('["a"]')).toBeNull();
+    expect(parseAlignment("{}")).toBeNull();
+  });
+});
 
 describe("spokenName", () => {
   test("drops the package path and receiver punctuation", () => {

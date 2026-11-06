@@ -31,8 +31,10 @@ type Provider interface {
 	ID() string
 	Label() string
 	Voices(ctx context.Context) ([]Voice, error)
-	// Synth returns encoded audio and its MIME type.
-	Synth(ctx context.Context, voiceID, text string) ([]byte, string, error)
+	// Synth returns the encoded audio, its MIME type, and the alignment
+	// when the provider can time its words; ETag and Cached are the
+	// service's to fill.
+	Synth(ctx context.Context, voiceID, text string) (Audio, error)
 }
 
 // ProviderInfo is what the UI needs to offer a provider: its voices.
@@ -50,6 +52,13 @@ type ProviderInfo struct {
 type Audio struct {
 	Data        []byte
 	ContentType string
+	// Alignment, when the provider gives one, is when each character of the
+	// text is spoken: Alignment[i] is the start, in milliseconds into the
+	// audio, of the i-th UTF-16 code unit of the text — the browser's
+	// string index, so the page can map playback time to the character
+	// being said without re-deriving character boundaries. Nil means the
+	// voice has no word timing and the page estimates.
+	Alignment []int
 	// ETag identifies the content (provider, voice, text) so the browser can
 	// cache it too.
 	ETag   string
@@ -179,11 +188,11 @@ func (s *Service) Speak(ctx context.Context, providerID, voiceID, text string) (
 	}
 	s.mu.Unlock()
 
-	data, ctype, err := p.Synth(ctx, voiceID, text)
+	a, err := p.Synth(ctx, voiceID, text)
 	if err != nil {
 		return Audio{}, err
 	}
-	a := Audio{Data: data, ContentType: ctype, ETag: etag}
+	a.ETag, a.Cached = etag, false
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if el, ok := s.cache[etag]; ok {

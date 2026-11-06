@@ -11,7 +11,9 @@ import { findCall } from "./tourResolve";
 //                    line is +0; a file stop's `line` is +0)
 //   [[line:42-48]]   a range, highlighted whole; "+2-5" is relative too
 //   [[at:return nil, err]]  the first line of the stop's frame containing
-//                    that text — survives edits above it
+//                    that text — survives edits above it. The frame is
+//                    the function for a symbol stop and the whole file
+//                    for a file stop.
 //
 // The cursor jumps when the narration reaches the cue and stays until the
 // next one. Without cues it sits on the anchor line; it never drifts.
@@ -44,6 +46,10 @@ export interface CueFrame {
   anchor: number;
   // The frame's source, when there is one; "at:" cues need it.
   source?: string;
+  // The 1-based file line the source starts on. A function's source
+  // starts on its anchor, so this defaults to it; a file stop's source
+  // is the whole file (line 1) while its anchor is the stop's `line`.
+  sourceLine?: number;
 }
 
 export interface CueTarget {
@@ -63,7 +69,7 @@ export function resolveCue(cue: Cue, frame: CueFrame): CueTarget | null {
   if (frame.source === undefined) return null;
   const lines = frame.source.split("\n");
   const idx = lines.findIndex((l) => l.includes(cue.text));
-  return idx < 0 ? null : { line: frame.anchor + idx };
+  return idx < 0 ? null : { line: (frame.sourceLine ?? frame.anchor) + idx };
 }
 
 // What a cue is called in the UI: "line 42", "lines 42–48", "+3", "at …".
@@ -86,5 +92,5 @@ export function callLine(
   let line = 0;
   const stop = Math.min(call.spanStart, frame.source.length);
   for (let i = 0; i < stop; i++) if (frame.source.charCodeAt(i) === 10) line++;
-  return frame.anchor + line;
+  return (frame.sourceLine ?? frame.anchor) + line;
 }

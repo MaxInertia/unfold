@@ -783,18 +783,22 @@ project.
 Stops can be read aloud. The speaker toggle next to the tour's title reads
 each stop as it opens — its position, its name, then the description, with
 `[[refs]]` spoken as bare names — and the ▶ beside it (and on every stop's
-card) reads one on demand; the same button stops it. This uses the
-browser's own speech synthesis, so it needs no setup; the toggle is a
+card) reads one on demand; the same button stops it, and so does **\**,
+which reads the current stop again while the tour tab is open. This uses
+the browser's own speech synthesis, so it needs no setup; the toggle is a
 reader preference and survives reloads.
 
-**Play tour** narrates the whole tour: each stop opens, is read, and the
-next opens when the reading ends. While a stop is narrated a highlight in
+**Play tour** (or **space**, with the tour tab open) narrates the whole
+tour: each stop opens, is read, and the next opens when the reading ends;
+the same button or key stops it. While a stop is narrated a highlight in
 the code follows it, going where the description says: it starts on the
 stop's first line, lands on a call when the description names it with
 `[[Name]]`, and jumps to a line or range the author cued with
 `[[line:+3]]`, `[[line:+2-5]]` (relative to the stop's first line),
-`[[line:131]]`, or `[[at:some text on the line]]`. Cues are silent in the
-narration and render as a `⌖` mark the reader can click to light that
+`[[line:131]]`, or `[[at:some text on the line]]`. `at:` searches the
+stop's frame — the function for a symbol stop, the whole file for a file
+stop — and lands on the first line containing the text. Cues are silent in
+the narration and render as a `⌖` mark the reader can click to light that
 line without playing anything. The highlight never drifts on its own; a
 line nobody is talking about stays unlit. The speed control (0.8× to 2×)
 applies to every narration.

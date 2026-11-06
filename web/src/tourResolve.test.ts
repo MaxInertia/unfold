@@ -161,9 +161,24 @@ describe("resolveStop", () => {
       kind: "file",
       file: "/p/internal/pubsub/retry.go",
       line: 41,
+      frame: undefined,
     });
     expect(await resolveStop({ file: "retry.go" }, resolvers)).toMatchObject({ kind: "file", line: 1 });
     expect(await resolveStop({ file: "zzz.go" }, resolvers)).toMatchObject({ kind: "unresolved" });
+  });
+
+  test("file stop carries the file's frame when the server has it", async () => {
+    const withFile = {
+      ...resolvers,
+      fetchSymbol: async (name: string) => {
+        if (name === "file:/p/internal/pubsub/retry.go") return frame(name, []);
+        throw new Error("404");
+      },
+    };
+    const r = await resolveStop({ file: "retry.go", line: 41 }, withFile);
+    expect(r).toMatchObject({ kind: "file", line: 41 });
+    if (r.kind !== "file") return;
+    expect(r.frame?.id).toBe("file:/p/internal/pubsub/retry.go");
   });
 
   test("a stop that names nothing", async () => {

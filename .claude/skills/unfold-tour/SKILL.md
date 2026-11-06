@@ -112,8 +112,9 @@ until the next cue; without cues it sits on the stop's first line.
                        first line (or a file stop's `line`) is +0
 [[line:+2-5]]          a range, lit whole
 [[line:131]]           an absolute file line (fragile; prefer +N or at:)
-[[at:return nil, err]] the first line of the function containing that
-                       text — survives edits above it
+[[at:return nil, err]] the first line of the function (or, for a file
+                       stop, of the file) containing that text — survives
+                       edits above it
 [[Name]]               a plain reference is a cue too: the highlight
                        lands on that call when its name is spoken
 ```

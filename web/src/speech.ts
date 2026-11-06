@@ -119,43 +119,78 @@ const browserVoice: Voice = {
 
 // ---- a server voice ----
 
+// The character being spoken at a moment of the audio, from the voice's
+// own timing: alignment[i] is when text[i] starts, so the character is the
+// last one that has started. Binary search — it runs on every tick of a
+// paragraph-long text.
+export function charAtTime(alignment: number[], ms: number): number {
+  let lo = 0;
+  let hi = alignment.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (alignment[mid] <= ms) lo = mid + 1;
+    else hi = mid;
+  }
+  return Math.max(0, lo - 1);
+}
+
+// Without timing, the audio's position scaled to the text's length: words
+// are not all the same length, but it moves with the narration.
+export function charAtFraction(
+  currentTime: number,
+  duration: number,
+  textLength: number,
+): number {
+  if (!(duration > 0)) return 0;
+  return Math.min(
+    textLength,
+    Math.floor((currentTime / duration) * textLength),
+  );
+}
+
 // Audio synthesized by the server (/api/tts) and played through one shared
-// element. Progress for the karaoke highlight is position in the audio
-// scaled to the text: no word timing, but close enough for a highlight
-// that drifts anyway. A failed fetch falls back to the browser voice for
-// that utterance, so a bad key or a lost network never silences a tour.
+// element. Progress for the karaoke highlight comes from the voice's word
+// timing when it gave one (ElevenLabs does), so a [[Name]] lights up as
+// the name is said; otherwise it is position in the audio scaled to the
+// text. A failed fetch falls back to the browser voice for that
+// utterance, so a bad key or a lost network never silences a tour.
 function serverVoice(provider: string, voiceId: string): Voice {
   let el: HTMLAudioElement | null = null;
   const audio = () => (el ??= new Audio());
+  interface Clip {
+    url: string;
+    alignment: number[] | null;
+  }
   // Object URLs by text, most recent last; bounded so a long tour doesn't
   // pin every utterance in memory.
-  const urls = new Map<string, Promise<string>>();
-  const fetchUrl = (text: string) => {
-    let p = urls.get(text);
+  const clips = new Map<string, Promise<Clip>>();
+  const fetchClip = (text: string) => {
+    let p = clips.get(text);
     if (!p) {
-      p = synthesize(provider, voiceId, text).then((blob) =>
-        URL.createObjectURL(blob),
-      );
-      p.catch(() => urls.delete(text));
-      urls.set(text, p);
-      if (urls.size > 24) {
-        const oldest = urls.keys().next().value!;
-        urls.get(oldest)?.then(
-          (u) => URL.revokeObjectURL(u),
+      p = synthesize(provider, voiceId, text).then((s) => ({
+        url: URL.createObjectURL(s.blob),
+        alignment: s.alignment,
+      }));
+      p.catch(() => clips.delete(text));
+      clips.set(text, p);
+      if (clips.size > 24) {
+        const oldest = clips.keys().next().value!;
+        clips.get(oldest)?.then(
+          (c) => URL.revokeObjectURL(c.url),
           () => {},
         );
-        urls.delete(oldest);
+        clips.delete(oldest);
       }
     }
     return p;
   };
   return {
     available: () => typeof Audio !== "undefined",
-    prefetch: (text) => void fetchUrl(text).catch(() => {}),
+    prefetch: (text) => void fetchClip(text).catch(() => {}),
     async speak(text, opts) {
-      let url: string;
+      let clip: Clip;
       try {
-        url = await fetchUrl(text);
+        clip = await fetchClip(text);
       } catch (e) {
         set({ fallback: e instanceof Error ? e.message : String(e) });
         return browserVoice.speak(text, opts);
@@ -164,24 +199,31 @@ function serverVoice(provider: string, voiceId: string): Voice {
       const a = audio();
       return new Promise<boolean>((resolve) => {
         let done = false;
+        let last = -1;
+        // timeupdate fires about four times a second — late enough for a
+        // one-word name to be over before its highlight lands — so the
+        // position is also read on a faster clock while playing.
+        const tick = () => {
+          if (!opts.onProgress || a.paused) return;
+          const c = clip.alignment
+            ? charAtTime(clip.alignment, a.currentTime * 1000)
+            : charAtFraction(a.currentTime, a.duration, text.length);
+          if (c !== last) {
+            last = c;
+            opts.onProgress(c);
+          }
+        };
+        const clock = opts.onProgress ? window.setInterval(tick, 50) : 0;
         const finish = (natural: boolean) => {
           if (done) return;
           done = true;
+          window.clearInterval(clock);
           a.ontimeupdate = a.onended = a.onerror = a.onpause = null;
           resolve(natural);
         };
-        a.src = url;
+        a.src = clip.url;
         a.playbackRate = opts.rate;
-        a.ontimeupdate = () => {
-          if (opts.onProgress && a.duration > 0) {
-            opts.onProgress(
-              Math.min(
-                text.length,
-                Math.floor((a.currentTime / a.duration) * text.length),
-              ),
-            );
-          }
-        };
+        a.ontimeupdate = tick;
         a.onended = () => finish(true);
         a.onerror = () => finish(false);
         // stop() pauses; a pause before the end is a cut-off.

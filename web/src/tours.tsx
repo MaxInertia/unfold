@@ -290,14 +290,21 @@ export function speakStop(i: number) {
   });
 }
 
-// The frame a stop's cues resolve against: its anchor line, and its source
-// and calls when it is a symbol.
+// The frame a stop's cues resolve against: its anchor line, and the source
+// and calls to search. A symbol's source starts on its anchor; a file
+// stop's is the whole file, so "+N" counts from the stop's line while
+// "at:" and [[Name]] count from line 1.
 export function cueFrame(
   r: Exclude<ResolvedStop, "unresolved" | { kind: "unresolved" }>,
 ): TimelineFrame {
-  return r.kind === "symbol"
-    ? { anchor: r.line, source: r.frame.source, calls: r.frame.calls }
-    : { anchor: r.line };
+  if (r.kind === "symbol")
+    return { anchor: r.line, source: r.frame.source, calls: r.frame.calls };
+  return {
+    anchor: r.line,
+    source: r.frame?.source,
+    sourceLine: 1,
+    calls: r.frame?.calls,
+  };
 }
 
 // Put the narration highlight on a line of stop i's file by hand — a
@@ -324,6 +331,19 @@ export function stopTour() {
   if (state.playing) set({ playing: false });
   stopSpeaking();
   if (state.cursor) set({ cursor: null });
+}
+
+// The keyboard's play/pause: one key, whichever way the tour is going.
+export function togglePlayTour() {
+  if (state.playing) stopTour();
+  else playTour();
+}
+
+// The keyboard's "read this one again": the current stop, or nothing when
+// the tour hasn't been entered yet. Like the ▶ button, pressing it while
+// the stop is being read stops the reading.
+export function speakCurrentStop() {
+  if (state.index >= 0) speakStop(state.index);
 }
 
 export function nextStop() {

@@ -119,6 +119,23 @@ describe("buildTimeline", () => {
       { char: s.cues[1].char, line: 14, end: undefined },
     ]);
   });
+  test("a file stop with its source: at and refs count from line 1, +N from the stop", () => {
+    const s = stopSpeech(
+      {
+        file: "x.go",
+        line: 3,
+        description: "Here [[line:+1]], then [[Validate]], then [[at:return]].",
+      },
+      0,
+      1,
+    );
+    expect(buildTimeline(s, { ...frame, anchor: 3, sourceLine: 1 })).toEqual([
+      { char: 0, line: 3 },
+      { char: s.cues[0].char, line: 4, end: undefined },
+      { char: s.refs[0].char, line: 4 },
+      { char: s.cues[1].char, line: 5, end: undefined },
+    ]);
+  });
   test("a file stop resolves line cues without source", () => {
     const s = stopSpeech(
       {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,7 +14,9 @@ import (
 	"github.com/MaxInertia/unfold/internal/tts"
 )
 
-// A stand-in for ElevenLabs: one voice, and audio that echoes the text.
+// A stand-in for ElevenLabs: one voice, and audio that echoes the text,
+// answered the way the timestamped endpoint does — JSON with the audio in
+// base64 and a start time per character (here, one every 100ms).
 func elevenStub(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -23,8 +26,16 @@ func elevenStub(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/v1/text-to-speech/", func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Text string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		w.Header().Set("Content-Type", "audio/mpeg")
-		_, _ = w.Write([]byte("MP3:" + body.Text))
+		var chars []string
+		var starts []float64
+		for i, c := range body.Text {
+			chars = append(chars, string(c))
+			starts = append(starts, float64(i)/10)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"audio_base64": base64.StdEncoding.EncodeToString([]byte("MP3:" + body.Text)),
+			"alignment":    map[string]any{"characters": chars, "character_start_times_seconds": starts},
+		})
 	})
 	return httptest.NewServer(mux)
 }
@@ -88,9 +99,16 @@ func TestTTSEndpoint(t *testing.T) {
 		if etag == "" || res.Header.Get("X-Cache") != "" {
 			t.Errorf("first: etag=%q x-cache=%q", etag, res.Header.Get("X-Cache"))
 		}
+		// The word timing rides in a header, in milliseconds per character.
+		if al := res.Header.Get("X-Alignment"); al != "[0,100,200,300,400]" {
+			t.Errorf("first: X-Alignment=%q", al)
+		}
 		res = post(`{"provider":"elevenlabs","voice":"v1","text":"hello"}`, nil)
 		if res.Header.Get("X-Cache") != "hit" {
 			t.Errorf("second: X-Cache=%q", res.Header.Get("X-Cache"))
+		}
+		if al := res.Header.Get("X-Alignment"); al != "[0,100,200,300,400]" {
+			t.Errorf("cached: X-Alignment=%q", al)
 		}
 		res = post(`{"provider":"elevenlabs","voice":"v1","text":"hello"}`, map[string]string{"If-None-Match": etag})
 		if res.StatusCode != http.StatusNotModified {

@@ -110,6 +110,22 @@ export const KEYBINDINGS: Keybinding[] = [
     description: "go back to the previous stop",
     matches: bare("["),
   },
+  // Only while the tour tab is showing: space and backslash are too common
+  // to claim everywhere, and "play" with no tour in view would be a surprise.
+  {
+    id: "tour.read",
+    scope: "tour",
+    keys: ["\\"],
+    description: "read the current stop aloud again, or stop reading (tour tab open)",
+    matches: bare("\\"),
+  },
+  {
+    id: "tour.playPause",
+    scope: "tour",
+    keys: ["space"],
+    description: "play the tour through, or stop playing (tour tab open)",
+    matches: bare(" "),
+  },
   {
     id: "ui.dismiss",
     scope: "reading",
@@ -162,4 +178,15 @@ export function inTextField(target: EventTarget | null): boolean {
     return (el as HTMLInputElement).value !== "";
   }
   return tag === "select" || !!el.isContentEditable;
+}
+
+// Whether a key event came from a focused button or link, where space (and
+// enter) already means "activate". A space binding on the window must leave
+// those alone, or a click on the play button followed by space would both
+// toggle it and press it.
+export function inButton(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.tagName !== "string") return false;
+  const tag = el.tagName.toLowerCase();
+  return tag === "button" || tag === "a" || tag === "summary";
 }
