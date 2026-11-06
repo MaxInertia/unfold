@@ -110,6 +110,12 @@ type CallSite struct {
 	// buried under library bodies.
 	External bool `json:"external,omitempty"`
 
+	// HasEffects says the callee does something outside its own stack,
+	// directly or through what it calls — the dot on a folded call that says
+	// there is a reason to open it. Set only for direct calls into this
+	// module's code; see EffectReport for what it summarizes.
+	HasEffects bool `json:"hasEffects,omitempty"`
+
 	// Leaf, when set, is a rule's answer to "is expanding into this worth
 	// doing" — replacing a single stdlib/dependency heuristic that couldn't
 	// distinguish an in-house SDK you always want to expand from a logging
@@ -688,6 +694,10 @@ type PlatformEngine interface {
 // the interface and reports the gap at call time instead.
 var ErrNoPlatformView = errors.New("platform view is not available for this engine")
 
+// ErrNoEffects is the same gap for side effects: a wrapper that satisfies
+// EffectEngine over an engine that can't say what a function touches.
+var ErrNoEffects = errors.New("effects are not available for this engine")
+
 // ErrNoWorkspace is returned when a cross-repo hop is requested but only one
 // repository is open.
 var ErrNoWorkspace = errors.New("no workspace is open (start unfold with --workspace)")
@@ -759,4 +769,65 @@ type RuleInfo struct {
 type RuleReport struct {
 	Rules    []RuleInfo `json:"rules"`
 	Problems []string   `json:"problems,omitempty"`
+}
+
+// Effect is one thing a function does outside its own stack — a query, a
+// socket, a file, an environment read, a write to a package-level variable, a
+// goroutine launched. Each one is a piece of evidence pointing at the line
+// that does it, because a badge that can't be traced to a line is a claim the
+// reader has to take on faith.
+type Effect struct {
+	// Kind is the family: "db", "net", "file", "env", "global", "time",
+	// "process", "goroutine", "channel". The vocabulary is open — a rule can
+	// name a kind of its own — but the badges know how to draw these.
+	Kind string `json:"kind"`
+	// Access is "read" or "write" when the distinction is clear (a query vs
+	// an exec, os.Open vs os.Create), empty when it isn't or doesn't apply.
+	Access string `json:"access,omitempty"`
+	// Callee is the qualified name of what was called — "os.Open",
+	// "sql.DB.Exec" — or, for a statement rather than a call, what the
+	// statement did ("go worker", "<- ch", "= counter").
+	Callee string `json:"callee"`
+	// Key is whatever the rule's key template resolved to: the variable name
+	// an os.Getenv read, the path a file was opened at. Empty when the rule
+	// has no key or the value isn't static.
+	Key  string `json:"key,omitempty"`
+	File string `json:"file"`
+	Line int    `json:"line"`
+	// Rule is the recognizer that produced this, so a surprising badge is
+	// traceable to the rule to switch off. Empty for the statement-shaped
+	// effects, which no rule describes.
+	Rule string `json:"rule,omitempty"`
+
+	// Site is the function whose body holds the evidence. It is the function
+	// asked about when Depth is 0, and a callee of it otherwise.
+	Site      TargetID `json:"site"`
+	SiteTitle string   `json:"siteTitle,omitempty"`
+	// Depth is how many calls away the evidence is: 0 is the function's own
+	// body. Inherited effects are drawn muted, because "something this calls
+	// touches the database" is a weaker claim than "this does".
+	Depth int `json:"depth"`
+	// Via is the function's own callee through which an inherited effect
+	// arrives, and ViaCall the call site in its body that reaches it — what a
+	// click on the evidence opens. Empty when Depth is 0.
+	Via      TargetID `json:"via,omitempty"`
+	ViaTitle string   `json:"viaTitle,omitempty"`
+	ViaCall  CallID   `json:"viaCall,omitempty"`
+}
+
+// EffectReport is everything a function does outside its own stack, directly
+// and through the callees the index can see, up to a depth and a budget.
+type EffectReport struct {
+	ID      TargetID `json:"id"`
+	Effects []Effect `json:"effects"`
+	// Truncated says the walk stopped at the depth or budget cap with callees
+	// still unvisited, so an absent badge is "not seen" rather than "not
+	// there". It is the difference between a report and a guess.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// EffectEngine is the optional half of an engine that can say what a function
+// touches. The TypeScript engine doesn't, which is why it is optional.
+type EffectEngine interface {
+	Effects(id TargetID) (*EffectReport, error)
 }

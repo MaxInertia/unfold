@@ -114,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/typeinfo", s.handleTypeInfo)
 	mux.HandleFunc("/api/usages", s.handleUsages)
+	mux.HandleFunc("/api/effects", s.handleEffects)
 	mux.HandleFunc("/api/service", s.handleService)
 	mux.HandleFunc("/api/proto-root", s.handleProtoRoot)
 	mux.HandleFunc("/api/repos", s.handleRepos)
@@ -246,6 +247,35 @@ func (s *Server) handleUsages(w http.ResponseWriter, r *http.Request) {
 		usages = []model.Usage{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"usages": usages})
+}
+
+// GET /api/effects?id=<targetId> — what the function touches outside its own
+// stack, directly and through its callees, each with the line that does it.
+//
+// A sibling of /api/body rather than a field on it: the frame is fetched to be
+// read and the badges are a question asked about it afterwards, and an engine
+// that can't answer (TypeScript) shouldn't make the frame wait on a 501.
+func (s *Server) handleEffects(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing required query param: id")
+		return
+	}
+	ee, ok := s.engine.(model.EffectEngine)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "effects are not available for this engine")
+		return
+	}
+	rep, err := ee.Effects(model.TargetID(id))
+	if err != nil {
+		if errors.Is(err, model.ErrNoEffects) {
+			writeError(w, http.StatusNotImplemented, err.Error())
+			return
+		}
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 // GET /api/service[?anchor=<targetId>] — the service-level (zoomed-out) view:

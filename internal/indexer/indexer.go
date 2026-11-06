@@ -182,6 +182,15 @@ type Indexer struct {
 	// keyed file:line.
 	leaves map[string]rules.LeafDecision
 
+	// directEffects is what each function's own body does outside its stack
+	// — effect rules' matches plus the statement shapes the walk finds —
+	// keyed by the function. Inheritance through callees is computed per
+	// question in Effects and cached in effectsCache for the life of this
+	// index; a rebuild is a new Indexer.
+	directEffects map[TargetID][]model.Effect
+	effectsMu     sync.Mutex
+	effectsCache  map[TargetID]*model.EffectReport
+
 	// outboundUnreachable counts outbound call sites excluded because
 	// execution can't reach them from any recognized entrypoint.
 	outboundUnreachable int
@@ -256,6 +265,12 @@ func New() *Indexer {
 		callsByID:      make(map[CallID]*callInfo),
 		interfaceImpls: make(map[string][]types.Type),
 		fileBytes:      make(map[string][]byte),
+		directEffects:  make(map[TargetID][]model.Effect),
+		effectsCache:   make(map[TargetID]*model.EffectReport),
+		// The shipped effect vocabulary is on from the start; SetRules
+		// replaces it with the configured set, which Load builds on top of
+		// the same built-ins.
+		ruleSet: rules.Load(),
 	}
 }
 
@@ -423,6 +438,12 @@ func (i *Indexer) Load(dir, pattern string) error {
 	for _, fi := range i.funcs {
 		if fi.body == nil {
 			continue
+		}
+		// Statement-shaped effects — go, channel ops, writes to globals —
+		// have no call site for a rule to match, so they're found here, for
+		// the same bodies whose call sites the evaluator sees.
+		if i.ownsCode(fi) {
+			i.collectStmtEffects(fi)
 		}
 		// goLaunched collects the CallExpr that are the operand of a `go`
 		// statement. ast.Inspect visits a node before its children, so a
@@ -629,6 +650,14 @@ func (i *Indexer) Load(dir, pattern string) error {
 	i.ruleStats = ev.Stats
 	i.leaves = ev.Leaves()
 	i.indexRuleSites(ev.Matched())
+
+	// Effects are not filtered for reachability: a badge answers "what does
+	// this function touch", and a function nothing calls yet still touches
+	// what it touches.
+	for fn, effs := range ev.Effects() {
+		i.directEffects[fn] = append(i.directEffects[fn], effs...)
+	}
+	i.addBindingEffects()
 
 	i.sortBindings()
 	i.computeCrossings()
@@ -2032,6 +2061,13 @@ func (i *Indexer) Frame(id TargetID) (*Frame, error) {
 			Goroutine:   c.goroutine,
 			External:    (c.kind == KindDirect || c.kind == KindRef) && i.isExternal(c.target),
 		}
+		// The dot on a folded call: only for a direct call into this module's
+		// code, where the answer is one cached walk. An external callee has no
+		// effects of its own to report, and an interface call's answer would
+		// be a union over candidates nobody asked for.
+		if c.kind == KindDirect && c.target != "" && !cs.External {
+			cs.HasEffects = i.hasEffects(c.target)
+		}
 		// Leaves are keyed by file:line, and a line holds more than one site
 		// now that a value reference is one: `Subscribe(defn, handleFoo)` is a
 		// call *and* a reference, and both matched the line. A rule matched
@@ -2870,8 +2906,13 @@ func (i *Indexer) RuleReport() model.RuleReport {
 		if err != nil {
 			spec = nil // unshowable, not unusable: the rest of the row stands
 		}
+		// A shipped effect rule is built-in in the sense that matters to the
+		// panel — on/off is the only thing yours to set — but its body is
+		// data, so the spec travels with it: seeing what "db" means is how
+		// you learn to say "our cache client is one too".
 		rep.Rules = append(rep.Rules, model.RuleInfo{
 			ID: r.ID, Doc: r.Comment, Enabled: r.On(),
+			Builtin: i.ruleSet.Sources[r.ID] == rules.BuiltinSource,
 			Source:  i.ruleSet.Sources[r.ID],
 			Matches: i.ruleStats[r.ID],
 			Spec:    spec,

@@ -1,11 +1,49 @@
 package rules
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+// BuiltinSource is what Sources records for a rule that shipped with unfold
+// rather than coming from a file: the panel shows it as built-in, and toggling
+// it writes a settings-only entry exactly as it does for a Go built-in.
+const BuiltinSource = "built-in"
+
+//go:embed builtin_effects.json
+var builtinEffectsJSON []byte
+
+var (
+	builtinEffectsOnce sync.Once
+	builtinEffects     []Rule
+)
+
+// BuiltinEffects is the shipped side-effect vocabulary: what in the standard
+// library and the common drivers counts as touching the database, the
+// network, the file system, the environment, the clock or the process.
+//
+// Shipped as data rather than Go for a reason the Go built-ins can't claim: a
+// user adding "our in-house cache client is a database" writes exactly this
+// shape, and seeing the shipped ones is how they learn it.
+func BuiltinEffects() []Rule {
+	builtinEffectsOnce.Do(func() {
+		f, problems, err := Parse(builtinEffectsJSON)
+		if err != nil {
+			// The file is compiled in; a parse failure is a build defect, and
+			// hiding it as an empty rule set would be the quiet kind.
+			panic(fmt.Sprintf("builtin_effects.json: %v", err))
+		}
+		for _, p := range problems {
+			panic(fmt.Sprintf("builtin_effects.json: %v", p))
+		}
+		builtinEffects = f.Rules
+	})
+	return append([]Rule(nil), builtinEffects...)
+}
 
 // Set is a merged rule set plus everything that went wrong assembling it.
 //
@@ -43,6 +81,15 @@ func (s Set) Disabled() map[string]bool {
 func Load(paths ...string) Set {
 	set := Set{Sources: map[string]string{}}
 	byID := map[string]int{}
+
+	// The shipped effect rules go in first, so every configured tier can
+	// override or switch one off by naming its id — the same way a Go
+	// built-in is addressed, without the body having to be Go.
+	for _, r := range BuiltinEffects() {
+		byID[r.ID] = len(set.Rules)
+		set.Rules = append(set.Rules, r)
+		set.Sources[r.ID] = BuiltinSource
+	}
 
 	for _, path := range paths {
 		if path == "" {

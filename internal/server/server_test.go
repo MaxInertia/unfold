@@ -52,6 +52,45 @@ func TestEndpoints(t *testing.T) {
 		}
 	})
 
+	t.Run("effects", func(t *testing.T) {
+		// openInEditor reads UNFOLD_EDITOR and spawns the editor: an env read
+		// and a process effect, both direct, each pointing at its line.
+		var rep model.EffectReport
+		id := "github.com/MaxInertia/unfold/internal/server.openInEditor"
+		getJSON(t, ts.URL+"/api/effects?id="+url.QueryEscape(id), http.StatusOK, &rep)
+		if rep.ID != model.TargetID(id) {
+			t.Errorf("id: got %q", rep.ID)
+		}
+		kinds := map[string]model.Effect{}
+		for _, e := range rep.Effects {
+			if e.Depth == 0 {
+				kinds[e.Kind] = e
+			}
+		}
+		if env, ok := kinds["env"]; !ok || env.Key != "UNFOLD_EDITOR" || env.Line == 0 {
+			t.Errorf("want a direct env read of UNFOLD_EDITOR with a line, got %+v", rep.Effects)
+		}
+		if _, ok := kinds["process"]; !ok {
+			t.Errorf("want a direct process effect (exec.Command), got %+v", rep.Effects)
+		}
+		// handleOpen inherits both through openInEditor, naming the hop.
+		var inherited model.EffectReport
+		hid := "(*github.com/MaxInertia/unfold/internal/server.Server).handleOpen"
+		getJSON(t, ts.URL+"/api/effects?id="+url.QueryEscape(hid), http.StatusOK, &inherited)
+		var viaEditor bool
+		for _, e := range inherited.Effects {
+			if e.Kind == "env" && e.Via == model.TargetID(id) && e.ViaCall != "" && e.Depth == 1 {
+				viaEditor = true
+			}
+		}
+		if !viaEditor {
+			t.Errorf("handleOpen should inherit the env read via openInEditor, got %+v", inherited.Effects)
+		}
+		var errBody map[string]any
+		getJSON(t, ts.URL+"/api/effects", http.StatusBadRequest, &errBody)
+		getJSON(t, ts.URL+"/api/effects?id=nope", http.StatusNotFound, &errBody)
+	})
+
 	t.Run("service", func(t *testing.T) {
 		var view model.ServiceView
 		getJSON(t, ts.URL+"/api/service", http.StatusOK, &view)

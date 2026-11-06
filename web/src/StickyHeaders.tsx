@@ -23,9 +23,7 @@ interface Stuck {
   depth: number; // nesting depth (index in the chain)
 }
 
-type Row =
-  | { kind: "header"; stuck: Stuck }
-  | { kind: "gap"; count: number };
+type Row = { kind: "header"; stuck: Stuck } | { kind: "gap"; count: number };
 
 // Must match the .sticky-header height in index.css.
 const HEADER_H = 28;
@@ -35,7 +33,14 @@ const MAX_VISIBLE = 6;
 
 // Accent per depth, shared semantics with the (future) depth rails. One
 // palette that holds up on both themes.
-const DEPTH_COLORS = ["#2563eb", "#0d9488", "#d97706", "#9333ea", "#dc2626", "#65a30d"];
+const DEPTH_COLORS = [
+  "#2563eb",
+  "#0d9488",
+  "#d97706",
+  "#9333ea",
+  "#dc2626",
+  "#65a30d",
+];
 
 export function depthColor(depth: number): string {
   return DEPTH_COLORS[depth % DEPTH_COLORS.length];
@@ -110,11 +115,14 @@ export function StickyHeaders() {
     // (the context right above the code being read); collapse the middle.
     rows.push({ kind: "header", stuck: stack[0] });
     rows.push({ kind: "gap", count: stack.length - MAX_VISIBLE });
-    for (const s of stack.slice(-(MAX_VISIBLE - 1))) rows.push({ kind: "header", stuck: s });
+    for (const s of stack.slice(-(MAX_VISIBLE - 1)))
+      rows.push({ kind: "header", stuck: s });
   }
 
   function jumpTo(stuck: Stuck, rowIndex: number) {
-    const el = document.querySelector(`[data-frame-key="${cssEscape(stuck.key)}"]`);
+    const el = document.querySelector(
+      `[data-frame-key="${cssEscape(stuck.key)}"]`,
+    );
     if (!el) return;
     const r = el.getBoundingClientRect();
     // Land the frame's real header in the slot its pinned copy occupies.
@@ -167,7 +175,7 @@ function sameStack(a: Stuck[], b: Stuck[]): boolean {
   return a.every((s, i) => s.key === b[i].key && s.title === b[i].title);
 }
 
-function cssEscape(s: string): string {
+export function cssEscape(s: string): string {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
     return CSS.escape(s);
   }

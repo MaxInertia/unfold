@@ -95,6 +95,11 @@ type Match struct {
 	Recv     string `json:"recv,omitempty"`
 	RecvPkg  string `json:"recvPkg,omitempty"`
 	RecvOnly bool   `json:"recvOnly,omitempty"`
+	// FuncOnly is the mirror: match a package-level function and never a
+	// method. It is what lets a rule mean http.Get without also meaning
+	// http.Header.Get — the two share a package and a name, and the argument
+	// types don't tell them apart either.
+	FuncOnly bool `json:"funcOnly,omitempty"`
 	// Func is the callee's name, wildcards allowed.
 	Func string `json:"func,omitempty"`
 	// MinArgs rejects an overload with too few arguments to carry the key.
@@ -155,12 +160,31 @@ type Nested struct {
 }
 
 // Emit is what a matching call site produces.
+//
+// Two roles produce a platform edge; the third produces an *effect*. An
+// effect is not an edge: nothing joins on it, it has no far end, and it is
+// attributed to every function that transitively reaches it rather than to
+// the one that owns it. It shares the rule vocabulary anyway, because what it
+// matches is the same thing — a call shape — and a second way to say "this
+// call means the database" would be a second place for it to be said wrong.
 type Emit struct {
-	Role string `json:"role"` // "inbound" | "outbound"
-	Kind string `json:"kind"` // "pubsub.topic", "http.route", ...
+	Role string `json:"role"` // "inbound" | "outbound" | "effect"
+	// Kind namespaces a binding's key ("pubsub.topic", "http.route"). For an
+	// effect it is the family the badge belongs to: "db", "net", "file",
+	// "env", "global", "time", "process", "goroutine", "channel" — or a
+	// kind of your own, which the badges will still show.
+	Kind string `json:"kind"`
 	// Key is a template over the match: "{arg0}", "{inner.key}",
-	// "{domain}" for a capture, or any combination.
-	Key string `json:"key"`
+	// "{domain}" for a capture, or any combination. Required for a binding —
+	// a binding with no key joins to nothing — and optional for an effect,
+	// where it is the detail shown beside the evidence: the variable name an
+	// os.Getenv read, say. An effect whose key doesn't resolve is still an
+	// effect; a binding whose key doesn't resolve is skipped.
+	Key string `json:"key,omitempty"`
+	// Access is for effects: "read" or "write", when the shape makes the
+	// distinction clear. A query is a read and an exec is a write; a client
+	// method that could be either leaves it empty rather than guessing.
+	Access string `json:"access,omitempty"`
 	// Handler names the argument holding the function value that serves this
 	// binding ("arg1"), which is how a subscriber registration finds its
 	// subscriber. Empty when the binding has no in-repo handler.
@@ -238,20 +262,44 @@ func (r Rule) validate(seen map[string]bool) error {
 		// than a config mistake, so it's refused at the door.
 		return fmt.Errorf("rule %q: match is empty, which would match every call site", r.ID)
 	}
-	if r.Emit.Role != "inbound" && r.Emit.Role != "outbound" {
-		return fmt.Errorf("rule %q: role must be inbound or outbound, got %q", r.ID, r.Emit.Role)
-	}
-	if strings.TrimSpace(r.Emit.Kind) == "" {
-		return fmt.Errorf("rule %q: kind is required — it namespaces the join key", r.ID)
-	}
-	if strings.TrimSpace(r.Emit.Key) == "" {
-		return fmt.Errorf("rule %q: key is required — a binding with no key joins to nothing", r.ID)
-	}
-	if r.Emit.Confidence == "exact" {
-		return fmt.Errorf("rule %q: confidence cannot be exact; a configured shape is declared or inferred", r.ID)
-	}
-	if c := r.Emit.Confidence; c != "" && c != "declared" && c != "inferred" {
-		return fmt.Errorf("rule %q: confidence must be declared or inferred, got %q", r.ID, c)
+	switch r.Emit.Role {
+	case RoleEffect:
+		// An effect has a kind and, optionally, a key; the fields that only
+		// make sense on an edge are refused rather than ignored, so a rule
+		// written as one by mistake is caught at the door.
+		if strings.TrimSpace(r.Emit.Kind) == "" {
+			return fmt.Errorf("rule %q: kind is required — it is the badge the effect is shown under", r.ID)
+		}
+		if a := r.Emit.Access; a != "" && a != "read" && a != "write" {
+			return fmt.Errorf("rule %q: access must be read or write, got %q", r.ID, a)
+		}
+		if r.Emit.Handler != "" {
+			return fmt.Errorf("rule %q: an effect has no handler — it is attributed to the caller, not handed off", r.ID)
+		}
+		if r.Emit.Confidence != "" {
+			return fmt.Errorf("rule %q: an effect has no confidence — it is a fact about the call, not a resolved key", r.ID)
+		}
+		if r.Leaf != nil {
+			return fmt.Errorf("rule %q: an effect can't also be a leaf — a leaf needs an edge to offer the far end of", r.ID)
+		}
+	case "inbound", "outbound":
+		if r.Emit.Access != "" {
+			return fmt.Errorf("rule %q: access is only meaningful on an effect", r.ID)
+		}
+		if strings.TrimSpace(r.Emit.Kind) == "" {
+			return fmt.Errorf("rule %q: kind is required — it namespaces the join key", r.ID)
+		}
+		if strings.TrimSpace(r.Emit.Key) == "" {
+			return fmt.Errorf("rule %q: key is required — a binding with no key joins to nothing", r.ID)
+		}
+		if r.Emit.Confidence == "exact" {
+			return fmt.Errorf("rule %q: confidence cannot be exact; a configured shape is declared or inferred", r.ID)
+		}
+		if c := r.Emit.Confidence; c != "" && c != "declared" && c != "inferred" {
+			return fmt.Errorf("rule %q: confidence must be declared or inferred, got %q", r.ID, c)
+		}
+	default:
+		return fmt.Errorf("rule %q: role must be inbound, outbound or effect, got %q", r.ID, r.Emit.Role)
 	}
 	if n := r.Match.CalleeMatches; n != nil {
 		if strings.TrimSpace(n.Rule) == "" {
@@ -266,6 +314,13 @@ func (r Rule) validate(seen map[string]bool) error {
 	}
 	return nil
 }
+
+// RoleEffect is the emit role that produces a side-effect badge rather than a
+// platform edge.
+const RoleEffect = "effect"
+
+// IsEffect reports whether the rule describes a side effect.
+func (r Rule) IsEffect() bool { return r.Emit != nil && r.Emit.Role == RoleEffect }
 
 func (m *Match) isEmpty() bool {
 	return m.Package == "" && m.Recv == "" && m.RecvPkg == "" && m.Func == "" &&

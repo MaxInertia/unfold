@@ -40,8 +40,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           <span className="settings-label">
             depth rails
             <span className="settings-desc">
-              colored lane per nesting level on each frame — same palette as
-              the pinned headers
+              colored lane per nesting level on each frame — same palette as the
+              pinned headers
             </span>
           </span>
         </label>
@@ -53,26 +53,50 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           />
           <span className="settings-label">
             depth ruler
-            <span className="settings-desc">numeric depth in frame headers</span>
+            <span className="settings-desc">
+              numeric depth in frame headers
+            </span>
           </span>
         </label>
         <label className="settings-row settings-row--select">
           <span className="settings-label">
             nesting indent
             <span className="settings-desc">
-              rails keep every level at full reading width; classic indents
-              each level
+              rails keep every level at full reading width; classic indents each
+              level
             </span>
           </span>
           <select
             value={settings.indentMode}
             onChange={(e) =>
-              updateSettings({ indentMode: e.target.value as "rails" | "indent" })
+              updateSettings({
+                indentMode: e.target.value as "rails" | "indent",
+              })
             }
           >
             <option value="rails">rails (no indent)</option>
             <option value="indent">classic indent</option>
           </select>
+        </label>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-title">frames</div>
+        <label className="settings-row">
+          <input
+            type="checkbox"
+            checked={settings.effectBadges}
+            onChange={(e) => updateSettings({ effectBadges: e.target.checked })}
+          />
+          <span className="settings-label">
+            side-effect badges
+            <span className="settings-desc">
+              what a frame touches outside its stack — db, net, file, env,
+              globals, sleep, processes, goroutines — in its header, muted when
+              only its callees do; plus a dot on folded calls whose callee has
+              some
+            </span>
+          </span>
         </label>
       </div>
 

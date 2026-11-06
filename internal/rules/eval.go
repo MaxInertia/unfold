@@ -2,6 +2,7 @@ package rules
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/MaxInertia/unfold/internal/model"
 	"github.com/MaxInertia/unfold/internal/platform"
@@ -44,6 +45,12 @@ type Evaluator struct {
 	// a different question, and the one that stops you writing a rule you
 	// already have.
 	matched map[string][]string
+	// effects is what each function's own body does outside its stack,
+	// keyed by the function. Direct evidence only: inheriting it through the
+	// call graph is the engine's walk, for the same reason attribution and
+	// reachability are — the rule says what shape counts, not how far it
+	// travels.
+	effects map[model.TargetID][]model.Effect
 }
 
 type callKey struct {
@@ -67,6 +74,7 @@ func NewEvaluator(rs []Rule) *Evaluator {
 		leaves:  map[string]LeafDecision{},
 		Stats:   map[string]int{},
 		matched: map[string][]string{},
+		effects: map[model.TargetID][]model.Effect{},
 	}
 	for _, r := range rs {
 		if !r.On() || r.Match == nil || (r.Emit == nil && r.Leaf == nil) {
@@ -135,6 +143,10 @@ func (e *Evaluator) Leaves() map[string]LeafDecision { return e.leaves }
 // like Leaves. Populated by Run.
 func (e *Evaluator) Matched() map[string][]string { return e.matched }
 
+// Effects returns what each function's own body does outside its stack, keyed
+// by the function. Populated by Run.
+func (e *Evaluator) Effects() map[model.TargetID][]model.Effect { return e.effects }
+
 // Run evaluates every rule and returns the bindings they imply.
 //
 // Attribution, reachability filtering and dedup are deliberately *not* done
@@ -160,6 +172,20 @@ func (e *Evaluator) Run() []model.Binding {
 			for _, r := range e.rules {
 				if r.Classifier {
 					continue // marks functions only; never an edge itself
+				}
+				if r.IsEffect() {
+					// An effect is recorded against the function that holds
+					// it and goes no further here: how far up the call graph
+					// it is inherited is the engine's walk, bounded by the
+					// engine's depth and budget rather than by each rule.
+					eff, ok := e.applyEffect(r, c)
+					if !ok {
+						continue
+					}
+					e.effects[fn] = append(e.effects[fn], eff)
+					e.matched[siteLine(c)] = append(e.matched[siteLine(c)], r.ID)
+					e.Stats[r.ID]++
+					continue
 				}
 				b, ok := e.apply(r, c)
 				if !ok {
@@ -253,6 +279,76 @@ func (e *Evaluator) runPhase1() {
 	}
 }
 
+// innerKey resolves a rule's calleeMatches clause at one call site: the key
+// the nested rule marked the callee with. ok is false when the clause is
+// present and no callee carries the mark — the site doesn't count. A rule
+// without the clause trivially passes with an empty key.
+func (e *Evaluator) innerKey(r Rule, c platform.Call) (string, bool) {
+	n := r.Match.CalleeMatches
+	if n == nil {
+		return "", true
+	}
+	for _, target := range e.callee[keyOf(c)] {
+		if key, marked := e.marks[n.Rule][target]; marked {
+			return key, true
+		}
+	}
+	return "", false
+}
+
+// applyEffect evaluates an effect rule against one call site.
+//
+// Unlike a binding, an effect with an unresolvable key is still an effect:
+// os.Getenv(name) reads the environment whether or not the name is static. The
+// key is detail shown beside the evidence, not the identity of it.
+func (e *Evaluator) applyEffect(r Rule, c platform.Call) (model.Effect, bool) {
+	caps := Captures{}
+	if !r.Match.Matches(c, caps) {
+		return model.Effect{}, false
+	}
+	inner, ok := e.innerKey(r, c)
+	if !ok {
+		return model.Effect{}, false
+	}
+	eff := model.Effect{
+		Kind:   r.Emit.Kind,
+		Access: r.Emit.Access,
+		Callee: CalleeName(c),
+		File:   c.File,
+		Line:   c.Line,
+		Rule:   r.ID,
+		Site:   c.Site,
+	}
+	if r.Emit.Key != "" {
+		if key, ok := expandKey(r.Emit.Key, c, caps, inner); ok {
+			eff.Key = key
+		}
+	}
+	return eff, true
+}
+
+// CalleeName renders a call's target the way a reader would name it:
+// "os.Open", "sql.DB.Exec". The package is shortened to its last segment
+// because the evidence row has a file and line to be precise with; the name
+// only has to be recognizable.
+func CalleeName(c platform.Call) string {
+	pkg := c.PkgPath
+	if i := strings.LastIndexByte(pkg, '/'); i >= 0 {
+		pkg = pkg[i+1:]
+	}
+	var b strings.Builder
+	if pkg != "" {
+		b.WriteString(pkg)
+		b.WriteByte('.')
+	}
+	if c.Recv != "" {
+		b.WriteString(c.Recv)
+		b.WriteByte('.')
+	}
+	b.WriteString(c.Func)
+	return b.String()
+}
+
 // apply evaluates one rule against one call site.
 func (e *Evaluator) apply(r Rule, c platform.Call) (model.Binding, bool) {
 	caps := Captures{}
@@ -260,18 +356,9 @@ func (e *Evaluator) apply(r Rule, c platform.Call) (model.Binding, bool) {
 		return model.Binding{}, false
 	}
 
-	inner := ""
-	if n := r.Match.CalleeMatches; n != nil {
-		found := false
-		for _, target := range e.callee[keyOf(c)] {
-			if key, marked := e.marks[n.Rule][target]; marked {
-				inner, found = key, true
-				break
-			}
-		}
-		if !found {
-			return model.Binding{}, false
-		}
+	inner, ok := e.innerKey(r, c)
+	if !ok {
+		return model.Binding{}, false
 	}
 
 	if r.Emit == nil {
