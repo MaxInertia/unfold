@@ -1,6 +1,7 @@
 import type {
   CallID,
   Channel,
+  DiffTour,
   PlatformView,
   Resolution,
   Frame,
@@ -271,4 +272,11 @@ async function postRules(body: unknown): Promise<RuleReport> {
 export async function fetchTours(): Promise<{ tours: Tour[]; dir: string }> {
   const res = await getJSON<{ tours: Tour[]; dir: string }>("/api/tours");
   return { tours: res.tours ?? [], dir: res.dir ?? "" };
+}
+
+// What this branch changes vs the diff base, in execution order, with the
+// generated tour. Only answers in --diff-base mode; otherwise a 404 whose
+// message says so, which the caller treats as "no diff tour".
+export function fetchDiffTour(): Promise<DiffTour> {
+  return getJSON<DiffTour>("/api/diff/tour");
 }

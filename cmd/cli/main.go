@@ -100,6 +100,7 @@ func main() {
 	// Optional diff mode: index the merge-base with --diff-base in a throwaway
 	// worktree and annotate frames with what this branch changes.
 	var differ *diff.Differ
+	var diffCommit string
 	if *diffBase != "" {
 		if detected != engine.LangGo {
 			log.Printf("diff mode is Go-only for now; ignoring --diff-base for %s", detected)
@@ -114,6 +115,7 @@ func main() {
 				log.Fatalf("diff base index failed: %v", err)
 			}
 			differ = diff.New(baseEng)
+			diffCommit = commit
 			log.Printf("diff mode: comparing against %.12s (merge-base with %s)", commit, *diffBase)
 		}
 	}
@@ -131,6 +133,7 @@ func main() {
 	workspace.OnRepoChange = srv.NotifyRepos
 	srv.SetTarget(target)
 	srv.SetDiffer(differ)
+	srv.SetDiffBase(*diffBase, diffCommit)
 	srv.SetProjectDir(projectDir(*dir))
 	// Notes persist to <dir>/.unfold/notes.json (created on first save).
 	srv.SetNotes(notes.NewStore(*dir))

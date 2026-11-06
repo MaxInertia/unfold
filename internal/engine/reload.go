@@ -162,6 +162,30 @@ func (r *Reloadable) Usages(id model.TargetID) ([]model.Usage, error) {
 	return r.cur.Usages(id)
 }
 
+// Entrypoints forwards to the current engine when it knows where execution
+// starts. The wrapper satisfies model.EntrypointLister unconditionally, so an
+// engine that can't say answers with none — which only the TS engine can't,
+// and diff mode, the one consumer, is Go-only.
+func (r *Reloadable) Entrypoints() []model.Entrypoint {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if l, ok := r.cur.(model.EntrypointLister); ok {
+		return l.Entrypoints()
+	}
+	return nil
+}
+
+// Functions forwards to the current engine when it can enumerate its own
+// functions, the same way.
+func (r *Reloadable) Functions() []model.SearchResult {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if l, ok := r.cur.(model.FunctionLister); ok {
+		return l.Functions()
+	}
+	return nil
+}
+
 // ServiceView forwards to the current engine when it has recognizers. The
 // wrapper always satisfies model.PlatformEngine (method sets are static), so
 // an engine without them is reported at call time.

@@ -706,6 +706,33 @@ versus `main` (the PR diff). As you browse, frames are annotated in place:
 So there's no separate diff screen — you navigate the call tree as usual and
 changed code stands out inline.
 
+Two more things come with diff mode, both from one computation over the
+callers index: for every function the branch changed, which **entrypoints**
+(route handlers, RPC implementations, `main`, `init`) can reach it, and the
+shortest call path from each.
+
+- **Diff as a tour.** The tour tab gains a generated, read-only tour,
+  **Changes vs `<base>`**, whose stops are the changed functions in
+  **execution order**: the entrypoint reaching the most changes first, then
+  its changed callees in call order along the paths, then the next
+  entrypoint's; a function several entrypoints reach is listed once, where
+  it is first met; functions nothing recognized reaches close the list.
+  Each stop pre-expands the changed functions it leads to, so the change is
+  read in the context it runs in, and its description is written from the
+  facts: *"Changed: +12 −3 lines. Reached from entrypoint [[main]] via
+  [[server.New]] → [[Server.Handler]]."* It plays like any tour — step,
+  read aloud, `[[refs]]` — but it is not a file: it follows the index, so it
+  updates when you save, and there is nothing in `.unfold/tours/` to commit.
+- **Blast radius.** A changed frame's header shows **from N**: how many
+  entrypoints reach it. Click it for the list (kind, route or RPC, hops);
+  pick one to re-root the view on that entrypoint with the call path down to
+  the frame already opened. At zero it is muted and says why on hover. The
+  count rides along on the pinned header when you scroll into the frame.
+
+`GET /api/diff/tour` is the endpoint behind both: the changed functions in
+execution order, each with its entrypoints and paths, plus the generated
+tour. Off diff mode it answers 404 with the flag to pass.
+
 - **Go only** for now. Diff identity is by package-qualified target id;
   TypeScript ids are positional, so `--diff-base` is ignored (with a log line)
   for TS projects until name-based identity lands.
@@ -791,6 +818,11 @@ reader preference and survives reloads.
 which becomes the filename) writes one, for authors that would rather speak
 HTTP than touch the directory. Where tours are kept is shown in the tab
 when there are none yet.
+
+In [diff mode](#diff-mode) one more tour appears, marked **generated**:
+**Changes vs `<base>`**, the branch's changed functions in execution order
+from the entrypoints that reach them. It is built from the index rather
+than read from a file, so it can't be edited and never needs committing.
 
 For agents, [`.claude/skills/unfold-tour/SKILL.md`](./.claude/skills/unfold-tour/SKILL.md)
 is the authoring guide Claude Code loads in this repository: when to write

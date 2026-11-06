@@ -112,6 +112,26 @@ func (w *Workspace) Usages(id model.TargetID) ([]model.Usage, error) {
 	return us, nil
 }
 
+// Entrypoints are the primary repo's: diff mode, their one consumer, compares
+// the repo unfold was pointed at, whose ids stay bare, so nothing needs
+// qualifying. The other repos' ways in belong to their own services.
+func (w *Workspace) Entrypoints() []model.Entrypoint {
+	idx, _, err := w.engineFor("")
+	if err != nil {
+		return nil
+	}
+	return idx.Entrypoints()
+}
+
+// Functions are the primary repo's, for the same reason.
+func (w *Workspace) Functions() []model.SearchResult {
+	idx, _, err := w.engineFor("")
+	if err != nil {
+		return nil
+	}
+	return idx.Functions()
+}
+
 // Search covers every repo that is already indexed, ranked for the primary
 // service. See SearchFrom.
 func (w *Workspace) Search(query string, limit int) []model.SearchResult {
