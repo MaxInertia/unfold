@@ -4178,3 +4178,282 @@ body.resizing {
     box-shadow: none;
   }
 }
+
+/* ----- city: the repository as a map ----- */
+
+/* Beside the code when there is room: a sticky panel like the other two,
+   sized to fit a typical repo's whole grid without zooming. */
+.city-panel {
+  flex: 0 0 460px;
+  position: sticky;
+  top: 1rem;
+  align-self: flex-start;
+  max-height: calc(100vh - 2rem);
+  margin-right: 1rem;
+  min-width: 0;
+  display: flex;
+}
+
+/* Over a corner when there isn't: a minimap, not a modal. Nothing behind it
+   is disabled, so the code stays readable and scrollable around it. */
+.city-overlay {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  width: min(480px, calc(100vw - 2rem));
+  height: min(420px, calc(100vh - 6rem));
+  z-index: 40;
+  display: flex;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+}
+
+.city {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.75rem;
+}
+
+.city--side {
+  height: calc(100vh - 2rem);
+}
+
+.city-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--card-border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.city-title {
+  font-weight: 600;
+}
+
+.city-counts {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.city-spacer {
+  flex: 1 1 auto;
+}
+
+.city-btn {
+  font: inherit;
+  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  color: var(--muted);
+  padding: 0 0.4rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.city-btn:hover {
+  color: var(--accent);
+  border-color: var(--call-border);
+  background: var(--call-bg);
+}
+
+.city-canvas {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 160px;
+  background: var(--bg);
+}
+
+.city-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.city-svg--dragging {
+  cursor: grabbing;
+}
+
+.city-loading,
+.city-error {
+  padding: 1rem;
+  color: var(--muted);
+}
+
+.city-error {
+  color: var(--error);
+}
+
+/* World-unit geometry: a slot is 10 units, so strokes are fractions. */
+.city-district-box {
+  fill: var(--card-bg);
+  stroke: var(--card-border);
+  stroke-width: 0.6;
+}
+
+.city-district-halo {
+  fill: none;
+  stroke: var(--call-border);
+  stroke-width: 1.5px;
+}
+
+.city-district-label {
+  font-size: 5.2px;
+  fill: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+}
+
+.city-b {
+  fill: var(--muted);
+  fill-opacity: 0.55;
+}
+
+/* A file block stands for several functions; the hatch says "there is more
+   here than one shape". */
+.city-b--file {
+  fill: var(--muted);
+  fill-opacity: 0.35;
+  stroke: var(--muted);
+  stroke-width: 0.5;
+  stroke-dasharray: 1 0.8;
+}
+
+/* Warm, as diff mode is elsewhere. */
+.city-b--changed {
+  fill: #d97706;
+  fill-opacity: 0.85;
+}
+
+/* The marks keep a screen-pixel stroke whatever the zoom (non-scaling,
+   set on the elements), so the root is findable at the whole-city fit where
+   a slot is a few pixels across. */
+.city-link {
+  stroke: var(--accent);
+  stroke-width: 1.2px;
+  stroke-opacity: 0.7;
+}
+
+.city-lit {
+  fill: var(--accent);
+  fill-opacity: 0.3;
+  stroke: var(--accent);
+  stroke-width: 1.2px;
+}
+
+.city-root {
+  fill: var(--accent);
+  fill-opacity: 0.85;
+  stroke: var(--fg);
+  stroke-width: 1.5px;
+}
+
+.city-stop circle {
+  fill: #7c3aed;
+  stroke: var(--card-bg);
+  stroke-width: 0.5;
+}
+
+.city-stop text {
+  font-size: 3.2px;
+  font-weight: 700;
+  fill: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+}
+
+.city-hover {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 1px;
+  stroke-opacity: 0.8;
+}
+
+.city-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.25rem 0.45rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  max-width: 320px;
+  z-index: 2;
+  white-space: nowrap;
+}
+
+.city-tooltip-main {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.city-tooltip-sub {
+  color: var(--muted);
+}
+
+.city-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.7rem;
+  padding: 0.3rem 0.5rem;
+  border-top: 1px solid var(--card-border);
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.city-swatch {
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 2px;
+  vertical-align: -0.05em;
+  margin-right: 0.2em;
+  background: var(--muted);
+}
+
+.city-swatch--root {
+  background: var(--accent);
+  outline: 1px solid var(--fg);
+}
+
+.city-swatch--lit {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.city-swatch--stop {
+  background: #7c3aed;
+  border-radius: 50%;
+}
+
+.city-swatch--changed {
+  background: #d97706;
+}
+
+@media (prefers-color-scheme: dark) {
+  .city-b--changed,
+  .city-swatch--changed {
+    fill: #fbbf24;
+    background: #fbbf24;
+  }
+  .city-stop circle,
+  .city-swatch--stop {
+    fill: #a78bfa;
+    background: #a78bfa;
+  }
+  .city-stop text {
+    fill: #1c1c1c;
+  }
+}

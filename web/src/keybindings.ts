@@ -62,6 +62,16 @@ export const KEYBINDINGS: Keybinding[] = [
     description: "zoom back into the code (your expansion state is untouched)",
     matches: withAlt("ArrowDown"),
   },
+  // The city is a map beside the ladder rather than a rung on it: it shows
+  // where on the repository the current frame sits, at any level. A bare key,
+  // so it is ignored while typing — see inTextField.
+  {
+    id: "city.toggle",
+    scope: "zoom",
+    keys: ["c"],
+    description: "show or hide the city — the map of the repository's packages and functions",
+    matches: bare("c"),
+  },
   // Vertical movement is the trail (alt+↑/↓); horizontal is history. Keeping
   // them on separate axes is the point: back/forward undoes *lateral* moves —
   // re-rooting, switching an impl, opening a service — and only doubles as a

@@ -684,6 +684,59 @@ once — opening a symbol sets the frame level and clears the service pick in a
   list re-anchors rather than accumulating. Marking several at once needs the
   backend walks to accept a set and union the results.
 
+## City
+
+Press **c** (or **▦** in the header) for the city: the repository drawn as a
+map that stays put. Every package is a **district**, every function a
+**building**, and the whole point is that nothing moves between commits — so
+after a week you know where the server is the way you know where the kitchen
+is, and the map can tell you where what you're reading *sits* in the codebase.
+It is a minimap for a codebase, not a 3D game.
+
+What the shapes mean:
+
+- A building's **height is its line count**, log-scaled, so a 300-line
+  function is visibly tall without flattening the 10-line ones to nothing.
+- Its **width is its fan-in** — how many distinct functions call it, directly
+  or through an interface — capped at eight. A hub is wide and squat; a long
+  private helper is a tall sliver.
+- The **bright building** is the current root frame. Everything **unfolded
+  under it** is lit and joined to the root by a thin line, so an expansion
+  that crosses the repo looks like one.
+- **Numbered dots** are the active tour's stops. Clicking the stop in the
+  tour panel still drives the view; the dots just show where the tour goes.
+- In diff mode (`--diff-base`) changed functions are **warm-coloured**, so a
+  PR shows as the part of the city it touched.
+- A district with more functions than it has room for (64) draws **one
+  block per file** instead, hatched, with its height the file's total lines;
+  this is the size budget that keeps a 2,000-function repo at a couple of
+  thousand rectangles.
+
+Hover a building for its name, line count and callers; click one to open it
+as the root frame (a file block opens its first function). Wheel zooms around
+the cursor, drag pans, **fit** frames the whole city and **⌖** centres on the
+root. The city sits beside the code when the viewport is wide enough and
+floats over the bottom-right corner otherwise (escape closes it there).
+
+The layout rule — in [`web/src/city.ts`](./web/src/city.ts), pure and
+tested — is what makes the map stable. Each package path is hashed to a home
+cell on a fixed 8×8 grid; packages are placed in sorted order, each taking its
+home cell if free and otherwise the first free cell on a spiral walking out
+from it. A package's place therefore depends only on its own path and on the
+cells already taken by the packages that sort before it: same input, same
+output; a new package whose home cell is free lands there and moves nothing;
+adding or removing a package never moves one that sorts before it. The one
+caveat is a new package that both sorts before an existing one *and* ends on
+a cell that one's probe had crossed — then that one moves. The home grid never
+resizes, so there is no size at which everything is laid out again; a repo
+with more packages than cells gets denser, not reshuffled. Within a district,
+functions sit in name order on an 8×8 grid: adding one shifts only the later
+names in that district, never anything in another.
+
+In a workspace the city is the one for the service you're reading, as the
+service view is. The data comes from `GET /api/city` (`?repo=` for another
+service), cached per index build.
+
 ## Diff mode
 
 Highlight what your branch changed, right where you're reading it. There's no
