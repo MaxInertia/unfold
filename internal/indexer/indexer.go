@@ -2195,56 +2195,11 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 	if offset < 0 {
 		return i.describeTarget(id)
 	}
-	var (
-		srcBase  int // byte offset in the file where the frame source starts
-		fileName string
-		astFile  *ast.File
-		pkg      *packages.Package
-	)
-	if path, ok := strings.CutPrefix(string(id), "file:"); ok {
-		astFile, pkg = i.astFileFor(path)
-		fileName = path
-	} else {
-		i.mu.RLock()
-		fi, ok := i.funcs[id]
-		i.mu.RUnlock()
-		if !ok {
-			return nil, fmt.Errorf("unknown target %q", id)
-		}
-		start := i.fset.Position(fi.node.Pos())
-		srcBase, fileName, pkg = start.Offset, start.Filename, fi.pkg
-		astFile = fileContaining(fi.node, fi.pkg)
-	}
-	if astFile == nil || pkg == nil || pkg.TypesInfo == nil {
-		return nil, nil
-	}
-
-	buf, err := i.readFile(fileName)
-	if err != nil {
+	loc, err := i.locate(id, offset)
+	if loc == nil || err != nil {
 		return nil, err
 	}
-	if srcBase > len(buf) {
-		return nil, nil
-	}
-	abs := srcBase + byteOffsetForUTF16(buf[srcBase:], offset)
-
-	tf := i.fset.File(astFile.Pos())
-	if tf == nil || abs < 0 || abs > tf.Size() {
-		return nil, nil
-	}
-	pos := tf.Pos(abs)
-
-	enclosing, _ := astutil.PathEnclosingInterval(astFile, pos, pos)
-	var ident *ast.Ident
-	for _, n := range enclosing {
-		if id2, ok := n.(*ast.Ident); ok {
-			ident = id2
-			break
-		}
-	}
-	if ident == nil {
-		return nil, nil
-	}
+	ident, enclosing, pkg := loc.ident, loc.enclosing, loc.pkg
 	obj := pkg.TypesInfo.ObjectOf(ident)
 	if obj == nil {
 		return nil, nil
@@ -2300,6 +2255,73 @@ func (i *Indexer) TypeInfo(id TargetID, offset int) (*TypeInfo, error) {
 		}
 	}
 	return ti, nil
+}
+
+// located is the identifier under a frame offset and what surrounds it: the
+// path of nodes enclosing it (innermost first), the package whose type
+// information resolves it, and the indexed function the frame shows. fi is
+// nil for a whole-file frame, where the offset may fall outside any function.
+type located struct {
+	ident     *ast.Ident
+	enclosing []ast.Node
+	pkg       *packages.Package
+	file      *ast.File
+	fi        *funcInfo
+}
+
+// locate maps a UTF-16 offset into a frame's Source back to the identifier
+// there. It answers nil, nil when the offset isn't over one — whitespace,
+// punctuation, a string literal — so callers can treat "nothing here" as a
+// valid empty result rather than a failure.
+func (i *Indexer) locate(id TargetID, offset int) (*located, error) {
+	var (
+		srcBase  int // byte offset in the file where the frame source starts
+		fileName string
+		astFile  *ast.File
+		pkg      *packages.Package
+		fi       *funcInfo
+	)
+	if path, ok := strings.CutPrefix(string(id), "file:"); ok {
+		astFile, pkg = i.astFileFor(path)
+		fileName = path
+	} else {
+		i.mu.RLock()
+		f, ok := i.funcs[id]
+		i.mu.RUnlock()
+		if !ok {
+			return nil, fmt.Errorf("unknown target %q", id)
+		}
+		fi = f
+		start := i.fset.Position(fi.node.Pos())
+		srcBase, fileName, pkg = start.Offset, start.Filename, fi.pkg
+		astFile = fileContaining(fi.node, fi.pkg)
+	}
+	if astFile == nil || pkg == nil || pkg.TypesInfo == nil {
+		return nil, nil
+	}
+
+	buf, err := i.readFile(fileName)
+	if err != nil {
+		return nil, err
+	}
+	if srcBase > len(buf) {
+		return nil, nil
+	}
+	abs := srcBase + byteOffsetForUTF16(buf[srcBase:], offset)
+
+	tf := i.fset.File(astFile.Pos())
+	if tf == nil || abs < 0 || abs > tf.Size() {
+		return nil, nil
+	}
+	pos := tf.Pos(abs)
+
+	enclosing, _ := astutil.PathEnclosingInterval(astFile, pos, pos)
+	for _, n := range enclosing {
+		if ident, ok := n.(*ast.Ident); ok {
+			return &located{ident: ident, enclosing: enclosing, pkg: pkg, file: astFile, fi: fi}, nil
+		}
+	}
+	return nil, nil
 }
 
 // calleeCallExpr returns the call whose *callee* is ident, or nil. The

@@ -92,6 +92,29 @@ func (w *Workspace) TypeInfo(id model.TargetID, offset int) (*model.TypeInfo, er
 	return ti, nil
 }
 
+// Flow follows a value inside one repo. Every edge stays in that repo — a
+// callee or caller is found through the same index — so the ids only need
+// the frame's own alias to match the frames the frontend has open.
+func (w *Workspace) Flow(id model.TargetID, offset int) (*model.Flow, error) {
+	idx, bare, err := w.engineFor(string(id))
+	if err != nil {
+		return nil, err
+	}
+	alias, _ := split(string(id))
+	if alias == "" {
+		alias = w.primary
+	}
+	f, err := idx.Flow(model.TargetID(bare), offset)
+	if err != nil || f == nil {
+		return f, err
+	}
+	for n := range f.Edges {
+		f.Edges[n].TargetID = model.TargetID(w.qualify(alias, string(f.Edges[n].TargetID)))
+		f.Edges[n].CallID = model.CallID(w.qualify(alias, string(f.Edges[n].CallID)))
+	}
+	return f, nil
+}
+
 func (w *Workspace) Usages(id model.TargetID) ([]model.Usage, error) {
 	idx, bare, err := w.engineFor(string(id))
 	if err != nil {

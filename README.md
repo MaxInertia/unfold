@@ -57,6 +57,20 @@ Three usage kinds:
   (`apply(myFunc)`, `mux.HandleFunc("/x", s.handler)`), not called at that
   site.
 
+### Follow a value
+
+Alt-click a variable (or press `v`, then click it) and every place its value
+goes lights up: each use in its function, and — when the call that carries it
+is unfolded — the parameter it lands in inside the callee, the return it comes
+back out through into the caller's `x, err := f()`, and onward through any
+further frames that are open. A pinned card names the value and its type;
+`esc` clears. Identity is the type checker's, so a shadowed `err` in an inner
+scope stays dark when you follow the outer one. A struct field followed
+through a variable (`cfg.Count`) marks that variable's field, not every
+`.Count` in sight. Go only for now; the trail stops at an expression with no
+single name (`f(g())`, `return compute()`), which is marked but not followed
+further.
+
 ### Known limitations
 
 - **A `ref` can't be a link in a spliced chain.** Inline expansion splices a

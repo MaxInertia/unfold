@@ -113,6 +113,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/files", s.handleFiles)
 	mux.HandleFunc("/api/typeinfo", s.handleTypeInfo)
+	mux.HandleFunc("/api/flow", s.handleFlow)
 	mux.HandleFunc("/api/usages", s.handleUsages)
 	mux.HandleFunc("/api/service", s.handleService)
 	mux.HandleFunc("/api/proto-root", s.handleProtoRoot)
@@ -227,6 +228,35 @@ func (s *Server) handleTypeInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	// ti may be nil (offset not over a symbol) — that's a valid empty result.
 	writeJSON(w, http.StatusOK, map[string]any{"typeInfo": ti})
+}
+
+// GET /api/flow?targetId=<id>&offset=<utf16-offset-in-source> — where the
+// value under the offset goes: its definition and uses in the function, and
+// the edges carrying it into callees and back to callers.
+func (s *Server) handleFlow(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	id := q.Get("targetId")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing required query param: targetId")
+		return
+	}
+	fe, ok := s.engine.(model.FlowEngine)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, model.ErrNoFlow.Error())
+		return
+	}
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	flow, err := fe.Flow(model.TargetID(id), offset)
+	if errors.Is(err, model.ErrNoFlow) {
+		writeError(w, http.StatusNotImplemented, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	// flow may be nil (offset not over a value) — a valid empty result.
+	writeJSON(w, http.StatusOK, map[string]any{"flow": flow})
 }
 
 // GET /api/usages?targetId=<id> — the places the target is referenced

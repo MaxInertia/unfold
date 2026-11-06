@@ -162,6 +162,19 @@ func (r *Reloadable) Usages(id model.TargetID) ([]model.Usage, error) {
 	return r.cur.Usages(id)
 }
 
+// Flow forwards to the current engine when it can follow values. Like
+// ServiceView, the wrapper satisfies the interface unconditionally and reports
+// an engine that can't at call time.
+func (r *Reloadable) Flow(id model.TargetID, offset int) (*model.Flow, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	fe, ok := r.cur.(model.FlowEngine)
+	if !ok {
+		return nil, model.ErrNoFlow
+	}
+	return fe.Flow(id, offset)
+}
+
 // ServiceView forwards to the current engine when it has recognizers. The
 // wrapper always satisfies model.PlatformEngine (method sets are static), so
 // an engine without them is reported at call time.

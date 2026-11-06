@@ -282,6 +282,47 @@ func TestEndpoints(t *testing.T) {
 		}
 	})
 
+	t.Run("flow-follows-a-parameter", func(t *testing.T) {
+		var fr indexer.Frame
+		getJSON(t, ts.URL+"/api/symbol?name=resolveCall", http.StatusOK, &fr)
+		// The `parent` parameter, located by its spelling in the signature.
+		sig := "resolveCall(parent *funcInfo"
+		off := strings.Index(fr.Source, sig) + strings.Index(sig, "parent")
+		var resp struct {
+			Flow *model.Flow `json:"flow"`
+		}
+		getJSON(t, ts.URL+"/api/flow?targetId="+url.QueryEscape(string(fr.ID))+"&offset="+strconv.Itoa(off), http.StatusOK, &resp)
+		if resp.Flow == nil {
+			t.Fatal("flow over a parameter returned nil")
+		}
+		if resp.Flow.Name != "parent" || resp.Flow.Kind != "param" {
+			t.Errorf("flow: got name=%q kind=%q", resp.Flow.Name, resp.Flow.Kind)
+		}
+		if len(resp.Flow.Spans) < 2 {
+			t.Errorf("flow spans: got %d, want the definition and at least one use", len(resp.Flow.Spans))
+		}
+		for _, sp := range resp.Flow.Spans {
+			if sp.File != fr.File || sp.Line < fr.StartLine || sp.Line > fr.EndLine {
+				t.Errorf("span %+v outside the frame %s:%d-%d", sp, fr.File, fr.StartLine, fr.EndLine)
+			}
+		}
+		// resolveCall is called from the body walk, so the parameter has at
+		// least one caller feeding it.
+		var args int
+		for _, e := range resp.Flow.Edges {
+			if e.Kind == "arg" {
+				args++
+			}
+		}
+		if args == 0 {
+			t.Errorf("no arg edges back to callers: %+v", resp.Flow.Edges)
+		}
+
+		// Whitespace isn't a value: an empty answer, not an error.
+		getJSON(t, ts.URL+"/api/flow?targetId="+url.QueryEscape(string(fr.ID))+"&offset=0", http.StatusOK, &resp)
+		getStatus(t, ts.URL+"/api/flow", http.StatusBadRequest)
+	})
+
 	t.Run("usages-unknown-target", func(t *testing.T) {
 		getStatus(t, ts.URL+"/api/usages?targetId=__nope__", http.StatusNotFound)
 	})

@@ -33,6 +33,7 @@ import { openRules } from "./rules";
 import { NoteCard, NoteComposer } from "./NotesUI";
 import { TourStopCard } from "./TourPanel";
 import { useTourStopCards, useTours, type TourStopCardInfo } from "./tours";
+import { FollowLabel, useFollowInFrame } from "./follow";
 
 export interface FoldRange {
   start: number;
@@ -63,6 +64,9 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
   const [loadedChildren, setLoadedChildren] = useState<Map<CallID, FrameT>>(new Map());
   const [loading, setLoading] = useState<Set<CallID>>(new Set());
   const [errors, setErrors] = useState<Map<CallID, string>>(new Map());
+  // The value being followed, as it appears in this frame (see follow.tsx).
+  // Needs the loaded children to know which unfolded callee an edge enters.
+  const follow = useFollowInFrame(frame, path, slice, loadedChildren);
   // Fan-out receiver frames, keyed by `${callId}#${receiverIndex}` (a fan-out
   // call can have many receivers open at once, unlike a normal expansion which
   // has a single child). Errors share the same composite key.
@@ -676,6 +680,9 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
         {...domProps}
         className={cls}
         onClick={(e) => {
+          // A follow click is about the identifier, not the call: let it
+          // reach the source handler instead of toggling the expansion.
+          if (e.altKey || follow.armed) return;
           e.stopPropagation();
           toggleCall(call);
         }}
@@ -964,13 +971,14 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       : addedSet
         ? (idx) => (addedSet.has(idx) ? "line-row--added" : undefined)
         : undefined;
-  // Compose diff tinting with range-note tinting.
+  // Compose diff tinting with range-note tinting and followed-value rows.
   const lineClass: ((idx: number) => string | undefined) | undefined =
-    diffClass || notedLines.size > 0
+    diffClass || notedLines.size > 0 || follow.lineClass
       ? (idx) => {
           const parts = [
             diffClass?.(idx),
             notedLines.has(idx) ? "line-row--noted" : undefined,
+            follow.lineClass?.(idx),
           ].filter(Boolean);
           return parts.length ? parts.join(" ") : undefined;
         }
@@ -1160,6 +1168,8 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
           </button>
         )}
       </header>
+      {/* One label per view names the followed value; the root frame hosts it. */}
+      {path.length === 0 && <FollowLabel />}
       {callersOpen && (
         <CallersPanel frame={frame} path={path} onClose={() => setCallersOpen(false)} />
       )}
@@ -1176,9 +1186,20 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       <div className="frame-body">
         {hast ? (
           <div
-            className="frame-source"
+            className={`frame-source${follow.armed ? " frame-source--follow-armed" : ""}`}
             onMouseMove={onSourceMouseMove}
             onMouseLeave={onSourceMouseLeave}
+            // Alt-click (or a click after `v`) on an identifier follows its
+            // value. Innermost frame wins, as for hover: a nested frame's
+            // click bubbles here too, and would otherwise be resolved against
+            // every ancestor's source.
+            onClick={(e) => {
+              if (!(e.altKey || follow.armed)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              const off = offsetAtPoint(e.clientX, e.clientY);
+              if (off != null) follow.start(off);
+            }}
           >
             {renderHast({
               hast,
@@ -1190,6 +1211,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
               renderFoldPlaceholder,
               lineAction,
               lineClass,
+              decorateLine: follow.decorateLine,
             })}
           </div>
         ) : (

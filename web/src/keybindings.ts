@@ -110,11 +110,20 @@ export const KEYBINDINGS: Keybinding[] = [
     description: "go back to the previous stop",
     matches: bare("["),
   },
+  // Alt-click follows a value directly; this is the same gesture for window
+  // managers that take alt-click for themselves.
+  {
+    id: "follow.arm",
+    scope: "reading",
+    keys: ["v"],
+    description: "then click a variable to follow its value through the unfolded frames",
+    matches: bare("v"),
+  },
   {
     id: "ui.dismiss",
     scope: "reading",
     keys: ["esc"],
-    description: "close settings, clear a line selection, or cancel a note",
+    description: "close settings, clear a line selection, cancel a note, or stop following a value",
     matches: bare("Escape"),
   },
 ];
