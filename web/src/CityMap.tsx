@@ -1,4 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { fetchCity } from "./api";
 import {
   buildingAt,
@@ -79,6 +87,9 @@ export function City({
   );
 
   const svgRef = useRef<SVGSVGElement>(null);
+  // The canvas is always mounted; the svg only once there is a viewBox, so the
+  // first fit has to measure the frame the svg will fill, not the svg.
+  const canvasRef = useRef<HTMLDivElement>(null);
   const [viewBox, setViewBox] = useState<ViewBox | null>(null);
   const [hover, setHover] = useState<{
     b: Building;
@@ -87,9 +98,16 @@ export function City({
     hostW: number;
   } | null>(null);
   const [hoverDistrict, setHoverDistrict] = useState<string | null>(null);
+  const tipRef = useRef<HTMLDivElement>(null);
+  const [tipLeft, setTipLeft] = useState(0);
+  useLayoutEffect(() => {
+    if (!hover || !tipRef.current) return;
+    const w = tipRef.current.offsetWidth;
+    setTipLeft(Math.max(4, Math.min(hover.x + 12, hover.hostW - w - 4)));
+  }, [hover]);
 
   const aspect = () => {
-    const r = svgRef.current?.getBoundingClientRect();
+    const r = canvasRef.current?.getBoundingClientRect();
     return r && r.height > 0 ? r.width / r.height : 1;
   };
 
@@ -129,7 +147,9 @@ export function City({
     };
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
-  }, [layout]);
+    // The svg mounts only once there is a viewBox, so the listener has to be
+    // attached then — not when the layout arrived, when there was no svg yet.
+  }, [layout, viewBox !== null]);
 
   // Drag pans; a press that doesn't travel is a click. The threshold is what
   // separates them, since a click on a 10-unit slot is also a tiny drag.
@@ -262,7 +282,7 @@ export function City({
         </button>
       </div>
 
-      <div className="city-canvas">
+      <div className="city-canvas" ref={canvasRef}>
         {error && <div className="city-error">{error}</div>}
         {!layout && !error && <div className="city-loading">loading city…</div>}
         {layout && viewBox && marked && (
@@ -351,14 +371,12 @@ export function City({
         )}
         {hover && (
           <div
+            ref={tipRef}
             className="city-tooltip"
-            // On whichever side of the cursor has room, so the card isn't
-            // clipped by the panel's edge.
-            style={
-              hover.x > hover.hostW / 2
-                ? { right: hover.hostW - hover.x + 12, top: hover.y + 12 }
-                : { left: hover.x + 12, top: hover.y + 12 }
-            }
+            // Beside the cursor, pulled back inside the panel when the name is
+            // long enough to run off its edge; measured after render, before
+            // paint, so it never shows clipped.
+            style={{ left: tipLeft, top: hover.y + 12 }}
             data-testid="city-tooltip"
           >
             <div className="city-tooltip-main">{tooltipText(hover.b)}</div>
