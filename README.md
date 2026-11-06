@@ -733,6 +733,15 @@ shortest call path from each.
 execution order, each with its entrypoints and paths, plus the generated
 tour. Off diff mode it answers 404 with the flag to pass.
 
+The generated tour states facts. For a change worth telling as a story —
+why, then what — `GET /api/diff/tour?format=skeleton` returns the same stops
+as an indented tour file with no prose: the order and expansions filled in,
+and a `[[line:+a-b]]` cue placeholder on every changed line range, for an
+author (usually an agent, with the `unfold-tour` skill's **diff story**
+recipe) to write the narrative around. A worked example written that way
+for the branch that added this feature is in
+[`docs/examples/diff-story-diff-tour.json`](./docs/examples/diff-story-diff-tour.json).
+
 - **Go only** for now. Diff identity is by package-qualified target id;
   TypeScript ids are positional, so `--diff-base` is ignored (with a log line)
   for TS projects until name-based identity lands.
