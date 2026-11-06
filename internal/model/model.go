@@ -240,6 +240,75 @@ type ArgFacts struct {
 	Value string `json:"value,omitempty"`
 }
 
+// FlowSpan is one place a followed value appears: a range on one line of a
+// file. Columns and lengths are UTF-16 code units, like CallSite spans, so
+// the frontend can index its source string with them directly. Positions are
+// in file space rather than frame space because a frame is a window onto a
+// file: the function frame and the whole-file frame both know where they
+// start, and the same span lights up in either.
+type FlowSpan struct {
+	File string `json:"file"`
+	Line int    `json:"line"` // 1-based file line
+	Col  int    `json:"col"`  // 1-based column, UTF-16 units
+	Len  int    `json:"len"`  // UTF-16 units; a span never crosses a line
+}
+
+// FlowEdge carries a followed value across a call: out of the function the
+// reader is in and into the function at the other end of a call site.
+//
+//   - "param": the value is an argument at CallID, and lands in the callee's
+//     parameter Index (-1 for the receiver). Spans are that parameter's
+//     definition and uses in the callee.
+//   - "result": the value receives result Index of the call at CallID
+//     (`x, err := f()`). Spans are what the callee returns in that position.
+//   - "arg": the value is parameter Index of this function; at the caller's
+//     call site CallID, Spans are the argument expression that feeds it.
+//   - "ret": the value is returned in position Index; at the caller's call
+//     site, Spans are what receives it (`x` in `x, err := f()`).
+//
+// TargetID names the function at the far end: the callee for "param" and
+// "result", the caller for "arg" and "ret". The frontend matches it against
+// the frames it has open, so an edge into a function that isn't unfolded
+// costs nothing to show and nothing to ignore.
+type FlowEdge struct {
+	Kind     string     `json:"kind"`
+	CallID   CallID     `json:"callId"`
+	TargetID TargetID   `json:"targetId"`
+	Index    int        `json:"index"`
+	Name     string     `json:"name,omitempty"`
+	Spans    []FlowSpan `json:"spans"`
+	// Seed is an identifier among Spans that the far frame can keep following
+	// from, so a value can be traced through several unfolded frames with
+	// one request per frame. Nil when the far end is an expression with no
+	// single name — `f(g())`, `return compute()` — and the trail stops there.
+	Seed *FlowSpan `json:"seed,omitempty"`
+}
+
+// Flow is the answer to "where does this value go": the identifier under the
+// pointer, every place the same object is defined or used in its function,
+// and the edges that carry it into adjacent frames.
+type Flow struct {
+	Name  string     `json:"name"`
+	Kind  string     `json:"kind"` // "var", "param", "result", "field"
+	Type  string     `json:"type"`
+	Spans []FlowSpan `json:"spans"`
+	Edges []FlowEdge `json:"edges"`
+}
+
+// FlowEngine is the optional half of an engine that can follow a value. The
+// Go engine implements it; a wrapper satisfies it unconditionally and returns
+// ErrNoFlow when the engine it holds can't.
+type FlowEngine interface {
+	// Flow resolves the identifier at a UTF-16 offset into the frame's Source
+	// and returns where its value flows. Returns nil (no error) when the
+	// offset isn't over a value — a type, a function name, punctuation.
+	Flow(id TargetID, offset int) (*Flow, error)
+}
+
+// ErrNoFlow is what a wrapping engine returns when the engine it currently
+// holds can't follow values.
+var ErrNoFlow = errors.New("follow a value is not available for this engine")
+
 // SearchResult is one hit returned from an engine's Search.
 type SearchResult struct {
 	TargetID TargetID `json:"targetId"`

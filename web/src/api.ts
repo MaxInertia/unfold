@@ -1,6 +1,7 @@
 import type {
   CallID,
   Channel,
+  Flow,
   PlatformView,
   Resolution,
   Frame,
@@ -173,6 +174,15 @@ export async function fetchTypeInfo(targetId: TargetID, offset: number): Promise
   const url = `/api/typeinfo?targetId=${encodeURIComponent(targetId)}&offset=${offset}`;
   const res = await getJSON<{ typeInfo: TypeInfo | null }>(url);
   return res.typeInfo ?? null;
+}
+
+// Where the value at a frame offset goes: its uses in the function and the
+// edges into unfolded callees and callers. Null when the offset isn't over a
+// value (a function name, a type, whitespace).
+export async function fetchFlow(targetId: TargetID, offset: number): Promise<Flow | null> {
+  const url = `/api/flow?targetId=${encodeURIComponent(targetId)}&offset=${offset}`;
+  const res = await getJSON<{ flow: Flow | null }>(url);
+  return res.flow ?? null;
 }
 
 export async function fetchNotes(): Promise<Note[]> {

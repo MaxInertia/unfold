@@ -298,6 +298,38 @@ export interface TypeInfo {
   call?: CallFacts;
 }
 
+// One place a followed value appears (mirrors model.FlowSpan). File-space
+// positions: a frame maps them onto its own lines with its startLine. col and
+// len are UTF-16 units, so they index the source string directly.
+export interface FlowSpan {
+  file: string;
+  line: number; // 1-based file line
+  col: number; // 1-based
+  len: number;
+}
+
+// A followed value crossing a call (mirrors model.FlowEdge). "param" and
+// "result" lead into the callee at callId; "arg" and "ret" lead back to the
+// caller whose call site is callId. targetId is the function at the far end.
+export interface FlowEdge {
+  kind: "param" | "result" | "arg" | "ret";
+  callId: CallID;
+  targetId: TargetID;
+  index: number;
+  name?: string;
+  spans: FlowSpan[];
+  // An identifier among spans the far frame can keep following from.
+  seed?: FlowSpan;
+}
+
+export interface Flow {
+  name: string;
+  kind: string; // "var" | "param" | "result" | "field"
+  type: string;
+  spans: FlowSpan[];
+  edges: FlowEdge[];
+}
+
 // What a rule can match on at one call site (mirrors model.CallFacts).
 // Resolved by the type checker, so it's available for a callee this index
 // doesn't hold — an interface method from a dependency, which is exactly the

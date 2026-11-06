@@ -867,7 +867,6 @@ body.resizing {
   flex-basis: 2rem;
 }
 
-
 .tree-inner {
   display: flex;
   flex-direction: column;
@@ -1339,6 +1338,80 @@ body.resizing {
 .type-card-loc:hover {
   color: var(--accent);
   text-decoration: underline;
+}
+
+/* Follow a value: every spelling of the followed value, in every frame it
+   flows through, carries the same mark — the call-pill blue, filled rather
+   than underlined so it reads as "the same thing" and not as another thing
+   to click. The clicked one is outlined so the eye has a place to start. */
+.follow-mark {
+  background: var(--follow-bg, rgba(37, 99, 235, 0.22));
+  color: inherit;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--follow-border, rgba(37, 99, 235, 0.35));
+}
+
+.follow-mark--origin {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* The span's row gets a hairline in the gutter so a mark deep in a long
+   frame is findable by scanning down. */
+.line-row--follow > .line-num {
+  box-shadow: inset 2px 0 0 var(--follow-border, rgba(37, 99, 235, 0.5));
+}
+
+/* Armed by `v`: the next click follows rather than expands. */
+.frame-source--follow-armed {
+  cursor: crosshair;
+}
+
+/* The pinned label naming what is being followed. Same card as the hover type
+   info, parked bottom-right where it stays out of the code. */
+.follow-label {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 40;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  max-width: 60vw;
+}
+
+.follow-label .type-card-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.follow-label-mark {
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  border-radius: 2px;
+  background: var(--follow-bg, rgba(37, 99, 235, 0.22));
+  box-shadow: 0 0 0 1px var(--follow-border, rgba(37, 99, 235, 0.35));
+  align-self: center;
+}
+
+.follow-label-count,
+.follow-label-hint {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.follow-label-close {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 0.1rem;
+}
+
+.follow-label-close:hover {
+  color: var(--accent);
 }
 
 /* On narrow viewports drop the sidebar above the content. */

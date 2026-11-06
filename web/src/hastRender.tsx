@@ -24,6 +24,10 @@ interface RenderCtx {
   renderFoldPlaceholder: (startLine: number, endLine: number) => ReactNode;
   // Extra class for a line's row (e.g. diff tinting); "" / undefined = none.
   lineClass: (idx: number) => string | undefined;
+  // Rewrite a line's hast before it is walked — how a followed value's marks
+  // are wrapped around the right characters without re-running the
+  // highlighter. Identity when there is nothing to mark.
+  decorateLine: (idx: number, line: Element) => Element;
 }
 
 export interface RenderOptions {
@@ -40,6 +44,7 @@ export interface RenderOptions {
   renderLineGutter: (idx: number) => ReactNode;
   renderFoldPlaceholder: (startLine: number, endLine: number) => ReactNode;
   lineClass?: (idx: number) => string | undefined;
+  decorateLine?: (idx: number, line: Element) => Element;
 }
 
 export function renderHast(opts: RenderOptions): ReactNode {
@@ -62,6 +67,7 @@ export function renderHast(opts: RenderOptions): ReactNode {
     renderLineGutter: opts.renderLineGutter,
     renderFoldPlaceholder: opts.renderFoldPlaceholder,
     lineClass: opts.lineClass ?? (() => undefined),
+    decorateLine: opts.decorateLine ?? ((_, line) => line),
   };
   return walk(opts.hast, ctx, "r");
 }
@@ -141,8 +147,9 @@ function walkCode(node: Element, ctx: RenderCtx, key: string): ReactNode {
       }
 
       // "render"
-      const lineProps = hastPropsToReact(child.properties ?? {});
-      const lineChildren = child.children.map((c, ci) =>
+      const line = ctx.decorateLine(lineIdx, child);
+      const lineProps = hastPropsToReact(line.properties ?? {});
+      const lineChildren = line.children.map((c, ci) =>
         walk(c, ctx, `${key}.${i}.${ci}`),
       );
       const extraClass = ctx.lineClass(lineIdx);
