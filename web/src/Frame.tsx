@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { Root as HastRoot } from "hast";
 import { fetchBodyByCall, fetchTypeInfo, openInEditor } from "./api";
+import { rememberCallFrame } from "./frameCache";
 import { highlightToHast } from "./highlight";
 import { renderHast, type LineAction } from "./hastRender";
 import type { CallID, CallSite, Frame as FrameT, Note, NoteAnchor, TargetID, TypeInfo } from "./types";
@@ -362,6 +363,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       setLoading((s) => new Set(s).add(cid));
       fetchBodyByCall(cid, want.choice)
         .then((child) => {
+          rememberCallFrame(cid, want.choice, child);
           if (!alive) return;
           // Tag with the choice and the index revision it came from, so both
           // a switched implementation and a rebuilt index are detectable.
@@ -433,6 +435,7 @@ export function Frame({ frame, path, onClose, ancestors = [], onZoomOut }: Frame
       fanoutLoading.current.add(w.key);
       fetchBodyByCall(w.callId, w.index)
         .then((child) => {
+          rememberCallFrame(w.callId, w.index, child);
           fanoutLoading.current.delete(w.key);
           if (!alive) return;
           setFanoutChildren((m) => new Map(m).set(w.key, child));

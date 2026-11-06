@@ -60,6 +60,10 @@ type Server struct {
 	// repos so a repo doesn't disappear between being added and being ready.
 	pendingMu sync.Mutex
 	pending   map[string]*pendingRepo
+
+	// city is the diff-annotated /api/city answer for the current index; see
+	// cityCache.
+	city cityCache
 }
 
 // New builds a server backed by any indexing engine (Go or TypeScript).
@@ -121,6 +125,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/dirs", s.handleDirs)
 	mux.HandleFunc("/api/resolve", s.handleResolve)
 	mux.HandleFunc("/api/platform", s.handlePlatform)
+	mux.HandleFunc("/api/city", s.handleCity)
 	mux.HandleFunc("/api/channels", s.handleChannels)
 	mux.HandleFunc("/api/index-repo", s.handleIndexRepo)
 	mux.HandleFunc("/api/notes", s.handleNotes)

@@ -15,6 +15,7 @@ import type {
   TypeInfo,
   Usage,
 } from "./types";
+import type { CityData } from "./city";
 
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -265,6 +266,15 @@ async function postRules(body: unknown): Promise<RuleReport> {
     throw new Error(b?.error ?? `rules failed: ${res.status}`);
   }
   return res.json();
+}
+
+// Every package of one repository with its functions, for the city map.
+// `repo` picks a workspace service; omitted, it's the one unfold was pointed
+// at. The layout is computed client-side (see city.ts) — the server only
+// knows facts, and where a building stands is a promise the frontend makes.
+export function fetchCity(repo?: string | null): Promise<CityData> {
+  const qs = repo ? `?repo=${encodeURIComponent(repo)}` : "";
+  return getJSON<CityData>(`/api/city${qs}`);
 }
 
 // The project's tours, and the directory an author writes them into.

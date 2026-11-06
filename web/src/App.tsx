@@ -31,8 +31,11 @@ import { ViewStoreProvider, useViewStore } from "./viewState";
 import { ReloadProvider, useReloadRevision, useToursRevision } from "./reload";
 import { setBookmarkProject, useBookmarks } from "./bookmarks";
 import { closeRules, toggleRules, useRulesPanel } from "./rules";
+import { City } from "./CityMap";
+import { useWideViewport } from "./cityMarks";
 
 const TREE_COLLAPSED_KEY = "unfold.tree.collapsed";
+const CITY_OPEN_KEY = "unfold.city.open";
 const SIDEBAR_WIDTH_KEY = "unfold.sidebar.width";
 const RIGHT_COLLAPSED_KEY = "unfold.right.collapsed";
 const RIGHT_WIDTH_KEY = "unfold.right.width";
@@ -134,6 +137,17 @@ function AppShell() {
     const v = Number(localStorage.getItem(RIGHT_WIDTH_KEY));
     return v >= SIDEBAR_MIN ? v : 280;
   });
+  // The city is a map beside the zoom ladder, not a rung on it. The ladder
+  // is reachability — which entrypoints reach this frame — and the city is
+  // containment, which packages hold which functions, drawn so that it
+  // never moves. It is useful *while* reading at any level, so it is a
+  // panel you keep open rather than a level you visit: beside the code when
+  // the viewport is wide enough, over a corner of it otherwise.
+  const [cityOpen, setCityOpen] = useState(() => localStorage.getItem(CITY_OPEN_KEY) === "1");
+  const wide = useWideViewport();
+  useEffect(() => {
+    localStorage.setItem(CITY_OPEN_KEY, cityOpen ? "1" : "0");
+  }, [cityOpen]);
 
   // What each panel actually shows: a pick if there is one, the
   // platform-dependent default otherwise.
@@ -320,6 +334,11 @@ function AppShell() {
           prevStop();
           return;
         }
+        if (matches("city.toggle", e)) {
+          e.preventDefault();
+          setCityOpen((v) => !v);
+          return;
+        }
       }
       if (matches("history.back", e)) {
         e.preventDefault();
@@ -369,6 +388,15 @@ function AppShell() {
               of the code you are reading, but something about the session you
               occasionally need to see. */}
           <WorkspaceStatus />
+          <button
+            type="button"
+            className={`app-settings${cityOpen ? " app-settings--open" : ""}`}
+            onClick={() => setCityOpen((v) => !v)}
+            title="city — the repository as a map of packages and functions (c)"
+            aria-label="toggle city"
+          >
+            ▦
+          </button>
           <button
             type="button"
             className={`app-settings${settingsOpen ? " app-settings--open" : ""}`}
@@ -709,7 +737,32 @@ function AppShell() {
             </aside>
           </>
         )}
+        {/* The city follows the frame's repo for the same reason the service
+            view does: zooming out — or looking at the map — is about the code
+            you were just reading. */}
+        {cityOpen && wide && (
+          <aside className="city-panel">
+            <City
+              mode="side"
+              repo={serviceRepo}
+              rootFrame={rootFrame}
+              onOpen={(id) => store.setSymbol(id)}
+              onClose={() => setCityOpen(false)}
+            />
+          </aside>
+        )}
       </div>
+      {cityOpen && !wide && (
+        <div className="city-overlay">
+          <City
+            mode="overlay"
+            repo={serviceRepo}
+            rootFrame={rootFrame}
+            onOpen={(id) => store.setSymbol(id)}
+            onClose={() => setCityOpen(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }

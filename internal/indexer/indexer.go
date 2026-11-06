@@ -195,6 +195,12 @@ type Indexer struct {
 	// produced frames for, so we don't re-read on every /body request.
 	fileBytesMu sync.Mutex
 	fileBytes   map[string][]byte
+
+	// city memoizes City(): the whole-repo function listing the map draws.
+	// Built on first request and kept, since the index it summarizes never
+	// changes after Load.
+	cityMu sync.Mutex
+	city   *model.CityView
 }
 
 // invokeResult memoizes the method path a function issues in its own body,
